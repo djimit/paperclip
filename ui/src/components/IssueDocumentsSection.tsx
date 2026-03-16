@@ -519,7 +519,7 @@ export function IssueDocumentsSection({
   return (
     <div className="space-y-3">
       {isEmpty && !draft?.isNew ? (
-        <div className="flex items-center justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {extraActions}
           <Button variant="outline" size="sm" onClick={beginNewDocument}>
             <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -527,9 +527,9 @@ export function IssueDocumentsSection({
           </Button>
         </div>
       ) : (
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-medium text-muted-foreground">Documents</h3>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {extraActions}
             <Button variant="outline" size="sm" onClick={beginNewDocument}>
               <Plus className="mr-1.5 h-3.5 w-3.5" />
