@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@/lib/router";
+import { Link, useNavigate } from "@/lib/router";
 import { ChevronDown, ChevronRight, MoreHorizontal, Play, Plus, Repeat } from "lucide-react";
 import { routinesApi } from "../api/routines";
 import { agentsApi } from "../api/agents";
@@ -531,9 +531,13 @@ export function Routines() {
                     >
                       <td className="px-3 py-2.5">
                         <div className="min-w-[180px]">
-                          <span className="font-medium">
+                          <Link
+                            to={`/routines/${routine.id}`}
+                            className="font-medium hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             {routine.title}
-                          </span>
+                          </Link>
                           {(isArchived || routine.status === "paused") && (
                             <div className="mt-1 text-xs text-muted-foreground">
                               {isArchived ? "archived" : "paused"}
