@@ -196,6 +196,7 @@ Agent configuration includes an **adapter** that defines how Paperclip invokes t
 | `codex_local` | Local Codex process | Codex CLI heartbeat worker |
 | `opencode_local` | Local OpenCode process | OpenCode heartbeat worker |
 | `pi_local` | Local Pi process | Pi CLI heartbeat worker |
+| `gemini_local` | Local Gemini process | Gemini CLI heartbeat worker |
 | `cursor` | Cursor API/CLI bridge | Cursor-integrated heartbeat worker |
 | `openclaw_gateway` | OpenClaw gateway API | Managed OpenClaw agent via gateway |
 | `hermes_local` | Local Hermes process | Hermes agent heartbeat worker |
@@ -434,7 +435,7 @@ The core Paperclip system must be extensible. Features like knowledge bases, ext
 - Well-defined API boundaries that plugins can hook into
 - Event system or hooks for reacting to task/Agent lifecycle events
 - **Agent Adapter plugins** — new Adapter types can be registered via the plugin system
-- Plugin-registrable UI components (future)
+- Plugin-registrable UI components (toolbar buttons, pages, slots)
 
 The plugin framework has shipped. Plugins can register new adapter types, hook into lifecycle events, and contribute UI components (e.g. global toolbar buttons). A plugin SDK and CLI commands (`paperclipai plugin`) are available for authoring and installing plugins.
 
