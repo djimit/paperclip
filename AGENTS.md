@@ -35,6 +35,8 @@ Before making changes, read in this order:
 - `docs/`: Mintlify documentation site
 - `tests/`: end-to-end and release smoke tests
 - `scripts/`: build, dev, and release scripts
+- `evals/`: promptfoo evaluation suites
+- `releases/`: release notes
 - `docker/`: Docker configuration
 
 ## 4. Dev Setup (Auto DB)
