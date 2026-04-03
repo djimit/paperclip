@@ -44,7 +44,7 @@ function loadBoardToken() {
     const auth = JSON.parse(fs.readFileSync(authPath, "utf-8"));
     const creds = auth.credentials || {};
     const entry = Object.values(creds)[0];
-    if (entry && entry.token) return { token: entry.token, apiBase: entry.apiBase };
+    if (entry && entry.token && entry.apiBase) return { token: entry.token, apiBase: entry.apiBase };
   } catch (_) {
     // ignore
   }
@@ -60,23 +60,25 @@ if (!cred) {
 // Resolve URL — if it starts with / treat as path relative to apiBase
 const url = rawUrl.startsWith("http") ? rawUrl : `${cred.apiBase}${rawUrl}`;
 
+// Validate URL before launching browser
+const origin = new URL(url).origin;
+
 // --- Screenshot ----------------------------------------------------------
 (async () => {
   const { chromium } = require("playwright");
   const browser = await chromium.launch();
-  const origin = new URL(url).origin;
-  const context = await browser.newContext({
-    viewport: { width, height },
-  });
-
-  const page = await context.newPage();
-  // Scope the auth header to the Paperclip origin only
-  await page.route(`${origin}/**`, (route) => {
-    route.continue({
-      headers: { ...route.request().headers(), Authorization: `Bearer ${cred.token}` },
-    });
-  });
   try {
+    const context = await browser.newContext({
+      viewport: { width, height },
+    });
+
+    const page = await context.newPage();
+    // Scope the auth header to the Paperclip origin only
+    await page.route(`${origin}/**`, (route) => {
+      route.continue({
+        headers: { ...route.request().headers(), Authorization: `Bearer ${cred.token}` },
+      });
+    });
     await page.goto(url, { waitUntil: "networkidle", timeout: 20000 });
     await page.waitForTimeout(waitMs);
     await page.screenshot({ path: outPath, fullPage: false });
