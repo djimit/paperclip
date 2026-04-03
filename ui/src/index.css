@@ -308,14 +308,12 @@
 }
 
 .paperclip-mdxeditor [class*="_placeholder_"] {
-  font-family: inherit;
   font-size: 0.875rem;
   line-height: 1.5;
   color: var(--muted-foreground);
 }
 
 .paperclip-mdxeditor-content {
-  font-family: inherit;
   font-size: inherit;
   line-height: inherit;
   color: inherit;
