@@ -23,7 +23,7 @@ function flag(name, fallback) {
   const i = args.indexOf(`--${name}`);
   if (i === -1) return fallback;
   const val = args.splice(i, 2)[1];
-  return Number(val) || fallback;
+  return Number.isNaN(Number(val)) ? fallback : Number(val);
 }
 const width = flag("width", 1280);
 const height = flag("height", 800);
@@ -64,14 +64,18 @@ const url = rawUrl.startsWith("http") ? rawUrl : `${cred.apiBase}${rawUrl}`;
 (async () => {
   const { chromium } = require("playwright");
   const browser = await chromium.launch();
+  const origin = new URL(url).origin;
   const context = await browser.newContext({
     viewport: { width, height },
-    extraHTTPHeaders: {
-      Authorization: `Bearer ${cred.token}`,
-    },
   });
 
   const page = await context.newPage();
+  // Scope the auth header to the Paperclip origin only
+  await page.route(`${origin}/**`, (route) => {
+    route.continue({
+      headers: { ...route.request().headers(), Authorization: `Bearer ${cred.token}` },
+    });
+  });
   try {
     await page.goto(url, { waitUntil: "networkidle", timeout: 20000 });
     await page.waitForTimeout(waitMs);
@@ -79,7 +83,7 @@ const url = rawUrl.startsWith("http") ? rawUrl : `${cred.apiBase}${rawUrl}`;
     console.log(`Saved: ${outPath}`);
   } catch (err) {
     console.error(`Screenshot failed: ${err.message}`);
-    process.exit(1);
+    process.exitCode = 1;
   } finally {
     await browser.close();
   }
