@@ -317,6 +317,41 @@ function toExecutionWorkspace(
   };
 }
 
+function usesInheritedProjectRuntimeServices(row: ExecutionWorkspaceRow) {
+  if (row.mode !== "shared_workspace" || !row.projectWorkspaceId) return false;
+  return !readExecutionWorkspaceConfig((row.metadata as Record<string, unknown> | null) ?? null)?.workspaceRuntime;
+}
+
+async function loadEffectiveRuntimeServicesByExecutionWorkspace(
+  db: Db,
+  companyId: string,
+  rows: ExecutionWorkspaceRow[],
+) {
+  const executionRuntimeServices = await listCurrentRuntimeServicesForExecutionWorkspaces(
+    db,
+    companyId,
+    rows.map((row) => row.id),
+  );
+  const projectWorkspaceIds = rows
+    .filter((row) => usesInheritedProjectRuntimeServices(row))
+    .map((row) => row.projectWorkspaceId)
+    .filter((value): value is string => Boolean(value));
+  const projectRuntimeServices = await listCurrentRuntimeServicesForProjectWorkspaces(
+    db,
+    companyId,
+    [...new Set(projectWorkspaceIds)],
+  );
+
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      usesInheritedProjectRuntimeServices(row)
+        ? (projectRuntimeServices.get(row.projectWorkspaceId!) ?? [])
+        : (executionRuntimeServices.get(row.id) ?? []),
+    ]),
+  );
+}
+
 export function executionWorkspaceService(db: Db) {
   return {
     list: async (companyId: string, filters?: {

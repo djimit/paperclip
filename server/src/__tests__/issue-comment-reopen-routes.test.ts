@@ -1,14 +1,15 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { issueRoutes } from "../routes/issues.js";
-import { errorHandler } from "../middleware/index.js";
 
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
+  assertCheckoutOwner: vi.fn(),
   update: vi.fn(),
   addComment: vi.fn(),
   findMentionedAgents: vi.fn(),
+  listWakeableBlockedDependents: vi.fn(),
+  getWakeableParentAfterChildCompletion: vi.fn(),
 }));
 
 const mockAccessService = vi.hoisted(() => ({
@@ -29,29 +30,70 @@ const mockAgentService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
-
-vi.mock("../services/index.js", () => ({
-  accessService: () => mockAccessService,
-  agentService: () => mockAgentService,
-  documentService: () => ({}),
-  executionWorkspaceService: () => ({}),
-  goalService: () => ({}),
-  heartbeatService: () => mockHeartbeatService,
-  issueApprovalService: () => ({}),
-  issueService: () => mockIssueService,
-  logActivity: mockLogActivity,
-  projectService: () => ({}),
-  routineService: () => ({
-    syncRunStatusForIssue: vi.fn(async () => undefined),
-  }),
-  workProductService: () => ({}),
+const mockTxInsertValues = vi.hoisted(() => vi.fn(async () => undefined));
+const mockTxInsert = vi.hoisted(() => vi.fn(() => ({ values: mockTxInsertValues })));
+const mockTx = vi.hoisted(() => ({
+  insert: mockTxInsert,
 }));
+const mockDb = vi.hoisted(() => ({
+  transaction: vi.fn(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)),
+}));
+
+function registerServiceMocks() {
+  vi.doMock("@paperclipai/shared/telemetry", () => ({
+    trackAgentTaskCompleted: vi.fn(),
+    trackErrorHandlerCrash: vi.fn(),
+  }));
+
+  vi.doMock("../telemetry.js", () => ({
+    getTelemetryClient: vi.fn(() => ({ track: vi.fn() })),
+  }));
+
+  vi.doMock("../services/index.js", () => ({
+    accessService: () => mockAccessService,
+    agentService: () => mockAgentService,
+    documentService: () => ({}),
+    executionWorkspaceService: () => ({}),
+    feedbackService: () => ({
+      listIssueVotesForUser: vi.fn(async () => []),
+      saveIssueVote: vi.fn(async () => ({ vote: null, consentEnabledNow: false, sharingEnabled: false })),
+    }),
+    goalService: () => ({}),
+    heartbeatService: () => mockHeartbeatService,
+    instanceSettingsService: () => ({
+      get: vi.fn(async () => ({
+        id: "instance-settings-1",
+        general: {
+          censorUsernameInLogs: false,
+          feedbackDataSharingPreference: "prompt",
+        },
+      })),
+      listCompanyIds: vi.fn(async () => ["company-1"]),
+    }),
+    issueApprovalService: () => ({}),
+    issueService: () => mockIssueService,
+    logActivity: mockLogActivity,
+    projectService: () => ({}),
+    routineService: () => ({
+      syncRunStatusForIssue: vi.fn(async () => undefined),
+    }),
+    workProductService: () => ({}),
+  }));
+}
 
 function createApp() {
   const app = express();
   app.use(express.json());
+  return app;
+}
+
+async function installActor(app: express.Express, actor?: Record<string, unknown>) {
+  const [{ issueRoutes }, { errorHandler }] = await Promise.all([
+    import("../routes/issues.js"),
+    import("../middleware/index.js"),
+  ]);
   app.use((req, _res, next) => {
-    (req as any).actor = {
+    (req as any).actor = actor ?? {
       type: "board",
       userId: "local-board",
       companyIds: ["company-1"],
@@ -60,9 +102,20 @@ function createApp() {
     };
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  app.use("/api", issueRoutes(mockDb as any, {} as any));
   app.use(errorHandler);
   return app;
+}
+
+async function normalizePolicy(input: {
+  stages: Array<{
+    id: string;
+    type: "review" | "approval";
+    participants: Array<{ type: "agent"; agentId: string } | { type: "user"; userId: string }>;
+  }>;
+}) {
+  const { normalizeIssueExecutionPolicy } = await import("../services/issue-execution-policy.js");
+  return normalizeIssueExecutionPolicy(input);
 }
 
 function makeIssue(status: "todo" | "done") {
@@ -80,7 +133,36 @@ function makeIssue(status: "todo" | "done") {
 
 describe("issue comment reopen routes", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetModules();
+    registerServiceMocks();
+    mockIssueService.getById.mockReset();
+    mockIssueService.assertCheckoutOwner.mockReset();
+    mockIssueService.update.mockReset();
+    mockIssueService.addComment.mockReset();
+    mockIssueService.findMentionedAgents.mockReset();
+    mockIssueService.listWakeableBlockedDependents.mockReset();
+    mockIssueService.getWakeableParentAfterChildCompletion.mockReset();
+    mockAccessService.canUser.mockReset();
+    mockAccessService.hasPermission.mockReset();
+    mockHeartbeatService.wakeup.mockReset();
+    mockHeartbeatService.reportRunActivity.mockReset();
+    mockHeartbeatService.getRun.mockReset();
+    mockHeartbeatService.getActiveRunForAgent.mockReset();
+    mockHeartbeatService.cancelRun.mockReset();
+    mockAgentService.getById.mockReset();
+    mockLogActivity.mockReset();
+    mockTxInsertValues.mockReset();
+    mockTxInsert.mockReset();
+    mockDb.transaction.mockReset();
+    mockTxInsertValues.mockResolvedValue(undefined);
+    mockTxInsert.mockImplementation(() => ({ values: mockTxInsertValues }));
+    mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx));
+    mockHeartbeatService.wakeup.mockResolvedValue(undefined);
+    mockHeartbeatService.reportRunActivity.mockResolvedValue(undefined);
+    mockHeartbeatService.getRun.mockResolvedValue(null);
+    mockHeartbeatService.getActiveRunForAgent.mockResolvedValue(null);
+    mockHeartbeatService.cancelRun.mockResolvedValue(null);
+    mockLogActivity.mockResolvedValue(undefined);
     mockIssueService.addComment.mockResolvedValue({
       id: "comment-1",
       issueId: "11111111-1111-4111-8111-111111111111",
@@ -92,6 +174,12 @@ describe("issue comment reopen routes", () => {
       authorUserId: "local-board",
     });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
+    mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
+    mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
+    mockAccessService.canUser.mockResolvedValue(false);
+    mockAccessService.hasPermission.mockResolvedValue(false);
+    mockAgentService.getById.mockResolvedValue(null);
   });
 
   it("treats reopen=true as a no-op when the issue is already open", async () => {
@@ -101,14 +189,12 @@ describe("issue comment reopen routes", () => {
       ...patch,
     }));
 
-    const res = await request(createApp())
+    const res = await request(await installActor(createApp()))
       .patch("/api/issues/11111111-1111-4111-8111-111111111111")
       .send({ comment: "hello", reopen: true, assigneeAgentId: "33333333-3333-4333-8333-333333333333" });
 
     expect(res.status).toBe(200);
-    expect(mockIssueService.update).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", {
-      assigneeAgentId: "33333333-3333-4333-8333-333333333333",
-    });
+    expect(res.body.assigneeAgentId).toBe("33333333-3333-4333-8333-333333333333");
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -125,15 +211,20 @@ describe("issue comment reopen routes", () => {
       ...patch,
     }));
 
-    const res = await request(createApp())
+    const res = await request(await installActor(createApp()))
       .patch("/api/issues/11111111-1111-4111-8111-111111111111")
       .send({ comment: "hello", reopen: true, assigneeAgentId: "33333333-3333-4333-8333-333333333333" });
 
     expect(res.status).toBe(200);
-    expect(mockIssueService.update).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", {
-      assigneeAgentId: "33333333-3333-4333-8333-333333333333",
-      status: "todo",
-    });
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({
+        assigneeAgentId: "33333333-3333-4333-8333-333333333333",
+        status: "todo",
+        actorAgentId: null,
+        actorUserId: "local-board",
+      }),
+    );
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

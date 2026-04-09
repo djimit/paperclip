@@ -18,6 +18,7 @@ import {
 import { eq } from "drizzle-orm";
 import {
   cleanupExecutionWorkspaceArtifacts,
+  ensureServerWorkspaceLinksCurrent,
   ensureRuntimeServicesForRun,
   normalizeAdapterManagedRuntimeServices,
   reconcilePersistedRuntimeServicesOnStartup,
@@ -28,6 +29,7 @@ import {
   stopRuntimeServicesForExecutionWorkspace,
   type RealizedExecutionWorkspace,
 } from "../services/workspace-runtime.ts";
+import { writeLocalServiceRegistryRecord } from "../services/local-service-supervisor.ts";
 import { resolvePaperclipConfigPath } from "../paths.ts";
 import type { WorkspaceOperation } from "@paperclipai/shared";
 import type { WorkspaceOperationRecorder } from "../services/workspace-operations.ts";
@@ -51,7 +53,11 @@ async function runGit(cwd: string, args: string[]) {
   await execFileAsync("git", args, { cwd });
 }
 
-async function createTempRepo() {
+async function runPnpm(cwd: string, args: string[]) {
+  await execFileAsync("pnpm", args, { cwd });
+}
+
+async function createTempRepo(defaultBranch = "main") {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-repo-"));
   await runGit(repoRoot, ["init"]);
   await runGit(repoRoot, ["config", "user.email", "paperclip@example.com"]);
@@ -59,7 +65,7 @@ async function createTempRepo() {
   await fs.writeFile(path.join(repoRoot, "README.md"), "hello\n", "utf8");
   await runGit(repoRoot, ["add", "README.md"]);
   await runGit(repoRoot, ["commit", "-m", "Initial commit"]);
-  await runGit(repoRoot, ["checkout", "-B", "main"]);
+  await runGit(repoRoot, ["checkout", "-B", defaultBranch]);
   return repoRoot;
 }
 
@@ -370,6 +376,96 @@ describe("realizeExecutionWorkspace", () => {
     await expect(fs.readFile(path.join(reused.cwd, ".paperclip-provision-created"), "utf8")).resolves.toBe("false\n");
   });
 
+  it("uses the latest repo-managed provision script when reusing an existing worktree", async () => {
+    const repoRoot = await createTempRepo();
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "provision.sh"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf 'v1\\n' > .paperclip-provision-version",
+      ].join("\n"),
+      "utf8",
+    );
+    await runGit(repoRoot, ["add", "scripts/provision.sh"]);
+    await runGit(repoRoot, ["commit", "-m", "Add initial provision script"]);
+
+    const initial = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "bash ./scripts/provision.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-449",
+        title: "Reuse latest provision script",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    await expect(fs.readFile(path.join(initial.cwd, ".paperclip-provision-version"), "utf8")).resolves.toBe("v1\n");
+
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "provision.sh"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf 'v2\\n' > .paperclip-provision-version",
+      ].join("\n"),
+      "utf8",
+    );
+    await runGit(repoRoot, ["add", "scripts/provision.sh"]);
+    await runGit(repoRoot, ["commit", "-m", "Update provision script"]);
+
+    await expect(fs.readFile(path.join(initial.cwd, "scripts", "provision.sh"), "utf8")).resolves.toContain("v1");
+
+    const reused = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "bash ./scripts/provision.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-449",
+        title: "Reuse latest provision script",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    await expect(fs.readFile(path.join(reused.cwd, ".paperclip-provision-version"), "utf8")).resolves.toBe("v2\n");
+  });
+
   it("writes an isolated repo-local Paperclip config and worktree branding when provisioning", async () => {
     const repoRoot = await createTempRepo();
     const previousCwd = process.cwd();
@@ -505,20 +601,300 @@ describe("realizeExecutionWorkspace", () => {
         path.join(expectedInstanceRoot, "secrets", "master.key"),
       );
       expect(envContents).not.toContain("DATABASE_URL=");
-      expect(envContents).toContain(`PAPERCLIP_HOME=${JSON.stringify(isolatedWorktreeHome)}`);
-      expect(envContents).toContain(`PAPERCLIP_INSTANCE_ID=${JSON.stringify(expectedInstanceId)}`);
-      expect(envContents).toContain(`PAPERCLIP_CONFIG=${JSON.stringify(configPath)}`);
-      expect(envContents).toContain("PAPERCLIP_IN_WORKTREE=true");
-      expect(envContents).toContain(
-        `PAPERCLIP_WORKTREE_NAME=${JSON.stringify("PAP-885-show-worktree-banner")}`,
-      );
+      const envVars = parseEnvContents(envContents);
+      expect(envVars.PAPERCLIP_HOME).toBe(isolatedWorktreeHome);
+      expect(envVars.PAPERCLIP_INSTANCE_ID).toBe(expectedInstanceId);
+      expect(await fs.realpath(envVars.PAPERCLIP_CONFIG!)).toBe(await fs.realpath(configPath));
+      expect(envVars.PAPERCLIP_IN_WORKTREE).toBe("true");
+      expect(envVars.PAPERCLIP_WORKTREE_NAME).toBe("PAP-885-show-worktree-banner");
 
       process.chdir(workspace.cwd);
       expect(resolvePaperclipConfigPath()).toBe(configPath);
     } finally {
       process.chdir(previousCwd);
     }
-  });
+  }, 15_000);
+
+  it(
+    "provisions worktree-local pnpm node_modules instead of reusing base-repo links",
+    async () => {
+    const repoRoot = await createTempRepo();
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.mkdir(path.join(repoRoot, "packages", "shared"), { recursive: true });
+    await fs.mkdir(path.join(repoRoot, "server"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "workspace-root",
+          private: true,
+          packageManager: "pnpm@9.15.4",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(repoRoot, "pnpm-workspace.yaml"),
+      ["packages:", "  - packages/*", "  - server", ""].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(repoRoot, "packages", "shared", "package.json"),
+      JSON.stringify(
+        {
+          name: "@repo/shared",
+          version: "1.0.0",
+          private: true,
+          type: "module",
+          exports: "./index.js",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(path.join(repoRoot, "packages", "shared", "index.js"), "export const value = 'shared';\n", "utf8");
+    await fs.writeFile(
+      path.join(repoRoot, "server", "package.json"),
+      JSON.stringify(
+        {
+          name: "server",
+          private: true,
+          type: "module",
+          dependencies: {
+            "@repo/shared": "workspace:*",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(path.join(repoRoot, "server", "index.js"), "export {};\n", "utf8");
+    await fs.copyFile(provisionWorktreeScriptPath, path.join(repoRoot, "scripts", "provision-worktree.sh"));
+    await fs.chmod(path.join(repoRoot, "scripts", "provision-worktree.sh"), 0o755);
+    await runPnpm(repoRoot, ["install"]);
+    await runGit(repoRoot, ["add", "."]);
+    await runGit(repoRoot, ["commit", "-m", "Add pnpm workspace fixture"]);
+
+    const workspace = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "bash ./scripts/provision-worktree.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-551",
+        title: "Provision local workspace dependencies",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    expect((await fs.lstat(path.join(workspace.cwd, "node_modules"))).isSymbolicLink()).toBe(false);
+    expect((await fs.lstat(path.join(workspace.cwd, "server", "node_modules"))).isSymbolicLink()).toBe(false);
+    await expect(fs.realpath(path.join(workspace.cwd, "server", "node_modules", "@repo", "shared"))).resolves.toBe(
+      await fs.realpath(path.join(workspace.cwd, "packages", "shared")),
+    );
+    await expect(fs.realpath(path.join(repoRoot, "server", "node_modules", "@repo", "shared"))).resolves.toBe(
+      await fs.realpath(path.join(repoRoot, "packages", "shared")),
+    );
+    },
+    30_000,
+  );
+
+  it("provisions successfully when install is needed but there are no symlinked node_modules to move", async () => {
+    const repoRoot = await createTempRepo();
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "workspace-root",
+          private: true,
+          packageManager: "pnpm@9.15.4",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(repoRoot, "pnpm-lock.yaml"),
+      [
+        "lockfileVersion: '9.0'",
+        "",
+        "settings:",
+        "  autoInstallPeers: true",
+        "  excludeLinksFromLockfile: false",
+        "",
+        "importers:",
+        "  .: {}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.copyFile(provisionWorktreeScriptPath, path.join(repoRoot, "scripts", "provision-worktree.sh"));
+    await fs.chmod(path.join(repoRoot, "scripts", "provision-worktree.sh"), 0o755);
+
+    await fs.mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, "node_modules", ".keep"), "", "utf8");
+
+    await runGit(repoRoot, ["add", "package.json", "pnpm-lock.yaml", "scripts/provision-worktree.sh"]);
+    await runGit(repoRoot, ["commit", "-m", "Add minimal provision fixture"]);
+
+    const workspace = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "bash ./scripts/provision-worktree.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-552",
+        title: "Install without moved symlinks",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    await expect(fs.readFile(path.join(workspace.cwd, ".paperclip", "config.json"), "utf8")).resolves.toContain(
+      "\"database\"",
+    );
+  }, 30_000);
+
+  it(
+    "provisions worktree-local pnpm node_modules instead of reusing base-repo links",
+    async () => {
+    const repoRoot = await createTempRepo();
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.mkdir(path.join(repoRoot, "packages", "shared"), { recursive: true });
+    await fs.mkdir(path.join(repoRoot, "server"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "workspace-root",
+          private: true,
+          packageManager: "pnpm@9.15.4",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(repoRoot, "pnpm-workspace.yaml"),
+      ["packages:", "  - packages/*", "  - server", ""].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(repoRoot, "packages", "shared", "package.json"),
+      JSON.stringify(
+        {
+          name: "@repo/shared",
+          version: "1.0.0",
+          private: true,
+          type: "module",
+          exports: "./index.js",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(path.join(repoRoot, "packages", "shared", "index.js"), "export const value = 'shared';\n", "utf8");
+    await fs.writeFile(
+      path.join(repoRoot, "server", "package.json"),
+      JSON.stringify(
+        {
+          name: "server",
+          private: true,
+          type: "module",
+          dependencies: {
+            "@repo/shared": "workspace:*",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(path.join(repoRoot, "server", "index.js"), "export {};\n", "utf8");
+    await fs.copyFile(provisionWorktreeScriptPath, path.join(repoRoot, "scripts", "provision-worktree.sh"));
+    await fs.chmod(path.join(repoRoot, "scripts", "provision-worktree.sh"), 0o755);
+    await runPnpm(repoRoot, ["install"]);
+    await runGit(repoRoot, ["add", "."]);
+    await runGit(repoRoot, ["commit", "-m", "Add pnpm workspace fixture"]);
+
+    const workspace = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "bash ./scripts/provision-worktree.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-551",
+        title: "Provision local workspace dependencies",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    expect((await fs.lstat(path.join(workspace.cwd, "node_modules"))).isSymbolicLink()).toBe(false);
+    expect((await fs.lstat(path.join(workspace.cwd, "server", "node_modules"))).isSymbolicLink()).toBe(false);
+    await expect(fs.realpath(path.join(workspace.cwd, "server", "node_modules", "@repo", "shared"))).resolves.toBe(
+      await fs.realpath(path.join(workspace.cwd, "packages", "shared")),
+    );
+    await expect(fs.realpath(path.join(repoRoot, "server", "node_modules", "@repo", "shared"))).resolves.toBe(
+      await fs.realpath(path.join(repoRoot, "packages", "shared")),
+    );
+    },
+    15_000,
+  );
 
   it("records worktree setup and provision operations when a recorder is provided", async () => {
     const repoRoot = await createTempRepo();
@@ -578,6 +954,57 @@ describe("realizeExecutionWorkspace", () => {
     expect(operations[1]?.command).toBe("bash ./scripts/provision.sh");
   });
 
+  it("truncates oversized provision command output before storing it in memory", async () => {
+    const repoRoot = await createTempRepo();
+    const { recorder, operations } = createWorkspaceOperationRecorderDouble();
+
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "noisy.js"),
+      'process.stdout.write("x".repeat(400000));\n',
+      "utf8",
+    );
+    await runGit(repoRoot, ["add", "scripts/noisy.js"]);
+    await runGit(repoRoot, ["commit", "-m", "Add noisy provision script"]);
+
+    await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "node ./scripts/noisy.js",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-1142",
+        title: "Limit noisy provision output",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+      recorder,
+    });
+
+    const provisionOperation = operations.find((operation) => operation.phase === "workspace_provision");
+    expect(provisionOperation?.result.metadata).toMatchObject({
+      stdoutTruncated: true,
+      stderrTruncated: false,
+    });
+    expect(provisionOperation?.result.stdout).toContain("[output truncated to last");
+    expect(provisionOperation?.result.stdout?.length ?? 0).toBeLessThan(300000);
+  });
+
   it("reuses an existing branch without resetting it when recreating a missing worktree", async () => {
     const repoRoot = await createTempRepo();
     const branchName = "PAP-450-recreate-missing-worktree";
@@ -620,6 +1047,109 @@ describe("realizeExecutionWorkspace", () => {
     await expect(fs.readFile(path.join(workspace.cwd, "feature.txt"), "utf8")).resolves.toBe("preserve me\n");
     const actualHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace.cwd })).stdout.trim();
     expect(actualHead).toBe(expectedHead);
+  });
+
+  it("auto-detects the default branch when baseRef is not configured", async () => {
+    // Create a repo with "master" as default branch (not "main")
+    const repoRoot = await createTempRepo("master");
+
+    // Set up a bare remote and push master so refs/remotes/origin/master
+    // exists locally. Note: refs/remotes/origin/HEAD is NOT set by a manual
+    // fetch — that requires git clone or git remote set-head. This test
+    // exercises the heuristic fallback path in detectDefaultBranch.
+    const bareRemote = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-bare-"));
+    await runGit(bareRemote, ["init", "--bare"]);
+    await runGit(repoRoot, ["remote", "add", "origin", bareRemote]);
+    await runGit(repoRoot, ["push", "-u", "origin", "master"]);
+    await runGit(repoRoot, ["fetch", "origin"]);
+
+    const { recorder, operations } = createWorkspaceOperationRecorderDouble();
+
+    const workspace = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: null,
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          // No baseRef configured — should auto-detect "master"
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-460",
+        title: "Auto detect default branch",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+      recorder,
+    });
+
+    expect(workspace.strategy).toBe("git_worktree");
+    expect(workspace.created).toBe(true);
+    // The worktree should have been created successfully (baseRef resolved to "master")
+    const worktreeOp = operations.find(op => op.phase === "worktree_prepare" && op.metadata?.created);
+    expect(worktreeOp).toBeDefined();
+    expect(worktreeOp!.metadata!.baseRef).toBe("master");
+  });
+
+  it("auto-detects the default branch via symbolic-ref when origin/HEAD is set", async () => {
+    // Create a repo with "master" as default branch
+    const repoRoot = await createTempRepo("master");
+
+    // Set up a bare remote and push
+    const bareRemote = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-bare-symref-"));
+    await runGit(bareRemote, ["init", "--bare"]);
+    await runGit(repoRoot, ["remote", "add", "origin", bareRemote]);
+    await runGit(repoRoot, ["push", "-u", "origin", "master"]);
+    await runGit(repoRoot, ["fetch", "origin"]);
+    // Explicitly set refs/remotes/origin/HEAD to exercise the symbolic-ref path
+    // (git remote set-head -a requires the remote to advertise HEAD, so we set it manually)
+    await runGit(repoRoot, ["remote", "set-head", "origin", "master"]);
+
+    const { recorder, operations } = createWorkspaceOperationRecorderDouble();
+
+    const workspace = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: null,
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          // No baseRef configured — should auto-detect "master" via symbolic-ref
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-461",
+        title: "Auto detect default branch via symref",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+      recorder,
+    });
+
+    expect(workspace.strategy).toBe("git_worktree");
+    expect(workspace.created).toBe(true);
+    const worktreeOp = operations.find(op => op.phase === "worktree_prepare" && op.metadata?.created);
+    expect(worktreeOp).toBeDefined();
+    expect(worktreeOp!.metadata!.baseRef).toBe("master");
   });
 
   it("removes a created git worktree and branch during cleanup", async () => {

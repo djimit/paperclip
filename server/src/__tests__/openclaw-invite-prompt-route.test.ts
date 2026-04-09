@@ -36,14 +36,16 @@ const mockBoardAuthService = vi.hoisted(() => ({
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
-vi.mock("../services/index.js", () => ({
-  accessService: () => mockAccessService,
-  agentService: () => mockAgentService,
-  boardAuthService: () => mockBoardAuthService,
-  deduplicateAgentName: vi.fn(),
-  logActivity: mockLogActivity,
-  notifyHireApproved: vi.fn(),
-}));
+function registerServiceMocks() {
+  vi.doMock("../services/index.js", () => ({
+    accessService: () => mockAccessService,
+    agentService: () => mockAgentService,
+    boardAuthService: () => mockBoardAuthService,
+    deduplicateAgentName: vi.fn(),
+    logActivity: mockLogActivity,
+    notifyHireApproved: vi.fn(),
+  }));
+}
 
 function createDbStub() {
   const createdInvite = {
@@ -84,7 +86,11 @@ function createDbStub() {
   };
 }
 
-function createApp(actor: Record<string, unknown>, db: Record<string, unknown>) {
+async function createApp(actor: Record<string, unknown>, db: Record<string, unknown>) {
+  const [{ accessRoutes }, { errorHandler }] = await Promise.all([
+    import("../routes/access.js"),
+    import("../middleware/index.js"),
+  ]);
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -106,6 +112,9 @@ function createApp(actor: Record<string, unknown>, db: Record<string, unknown>) 
 
 describe("POST /companies/:companyId/openclaw/invite-prompt", () => {
   beforeEach(() => {
+    vi.resetModules();
+    registerServiceMocks();
+    vi.clearAllMocks();
     mockAccessService.canUser.mockResolvedValue(false);
     mockAgentService.getById.mockReset();
     mockLogActivity.mockResolvedValue(undefined);
@@ -118,7 +127,7 @@ describe("POST /companies/:companyId/openclaw/invite-prompt", () => {
       companyId: "company-1",
       role: "engineer",
     });
-    const app = createApp(
+    const app = await createApp(
       {
         type: "agent",
         agentId: "agent-1",
@@ -143,7 +152,7 @@ describe("POST /companies/:companyId/openclaw/invite-prompt", () => {
       companyId: "company-1",
       role: "ceo",
     });
-    const app = createApp(
+    const app = await createApp(
       {
         type: "agent",
         agentId: "agent-1",
@@ -162,6 +171,34 @@ describe("POST /companies/:companyId/openclaw/invite-prompt", () => {
     expect(typeof res.body.token).toBe("string");
     expect(res.body.companyName).toBe("Acme AI");
     expect(res.body.onboardingTextPath).toContain("/api/invites/");
+    expect((db as any).__insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: "company-1",
+        inviteType: "company_join",
+        allowedJoinTypes: "agent",
+      }),
+    );
+  });
+
+  it("includes companyName in invite summary responses", async () => {
+    const db = createDbStub();
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "user-1",
+        companyIds: ["company-1"],
+        source: "session",
+        isInstanceAdmin: false,
+      },
+      db,
+    );
+
+    const res = await request(app).get("/api/invites/pcp_invite_test");
+
+    expect(res.status).toBe(200);
+    expect(res.body.companyName).toBe("Acme AI");
+    expect(res.body.inviteType).toBe("company_join");
+    expect(res.body.allowedJoinTypes).toBe("agent");
   });
 
   it("includes companyName in invite summary responses", async () => {
@@ -187,7 +224,7 @@ describe("POST /companies/:companyId/openclaw/invite-prompt", () => {
   it("allows board callers with invite permission", async () => {
     const db = createDbStub();
     mockAccessService.canUser.mockResolvedValue(true);
-    const app = createApp(
+    const app = await createApp(
       {
         type: "board",
         userId: "user-1",
@@ -203,13 +240,19 @@ describe("POST /companies/:companyId/openclaw/invite-prompt", () => {
       .send({});
 
     expect(res.status).toBe(201);
-    expect(res.body.allowedJoinTypes).toBe("agent");
+    expect((db as any).__insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: "company-1",
+        inviteType: "company_join",
+        allowedJoinTypes: "agent",
+      }),
+    );
   });
 
   it("rejects board callers without invite permission", async () => {
     const db = createDbStub();
     mockAccessService.canUser.mockResolvedValue(false);
-    const app = createApp(
+    const app = await createApp(
       {
         type: "board",
         userId: "user-1",

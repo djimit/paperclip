@@ -4,17 +4,30 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { INBOX_MINE_ISSUE_STATUS_FILTER } from "@paperclipai/shared";
 import { approvalsApi } from "../api/approvals";
 import { accessApi } from "../api/access";
+import { authApi } from "../api/auth";
 import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
+import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
+import { instanceSettingsApi } from "../api/instanceSettings";
+import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useGeneralSettings } from "../context/GeneralSettingsContext";
+import { useSidebar } from "../context/SidebarContext";
 import { queryKeys } from "../lib/queryKeys";
 import { createIssueDetailLocationState, createIssueDetailPath } from "../lib/issueDetailBreadcrumb";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
+import {
+  InboxIssueMetaLeading,
+  InboxIssueTrailingColumns,
+  IssueColumnPicker,
+  issueActivityText,
+  issueTrailingColumns,
+} from "../components/IssueColumns";
 import { IssueRow } from "../components/IssueRow";
 import { SwipeToArchive } from "../components/SwipeToArchive";
 
@@ -24,6 +37,14 @@ import { StatusBadge } from "../components/StatusBadge";
 import { approvalLabel, defaultTypeIcon, typeIcon } from "../components/ApprovalPayload";
 import { timeAgo } from "../lib/timeAgo";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { Tabs } from "@/components/ui/tabs";
 import {
@@ -36,15 +57,22 @@ import {
 import {
   Inbox as InboxIcon,
   AlertTriangle,
+  ChevronRight,
   XCircle,
   X,
   RotateCcw,
   UserPlus,
+  Search,
+  ListTree,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { PageTabBar } from "../components/PageTabBar";
 import type { Approval, HeartbeatRun, Issue, JoinRequest } from "@paperclipai/shared";
 import {
   ACTIONABLE_APPROVAL_STATUSES,
+  DEFAULT_INBOX_ISSUE_COLUMNS,
+  buildInboxNesting,
+  getAvailableInboxIssueColumns,
   getApprovalsForTab,
   getInboxWorkItems,
   getInboxKeyboardSelectionIndex,
@@ -53,12 +81,15 @@ import {
   isMineInboxTab,
   resolveInboxSelectionIndex,
   InboxApprovalFilter,
+  type InboxIssueColumn,
   saveLastInboxTab,
   shouldShowInboxSection,
   type InboxTab,
   type InboxWorkItem,
 } from "../lib/inbox";
-import { useDismissedInboxItems, useReadInboxItems } from "../hooks/useInboxBadge";
+import { useDismissedInboxAlerts, useInboxDismissals, useReadInboxItems } from "../hooks/useInboxBadge";
+
+export { InboxIssueMetaLeading, InboxIssueTrailingColumns } from "../components/IssueColumns";
 
 type InboxCategoryFilter =
   | "everything"
@@ -593,10 +624,18 @@ function JoinRequestInboxRow({
 export function Inbox() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { isMobile } = useSidebar();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
+  const { keyboardShortcutsEnabled } = useGeneralSettings();
+  const { data: experimentalSettings } = useQuery({
+    queryKey: queryKeys.instance.experimentalSettings,
+    queryFn: () => instanceSettingsApi.getExperimental(),
+    retry: false,
+  });
+  const [searchQuery, setSearchQuery] = useState("");
   const [allCategoryFilter, setAllCategoryFilter] = useState<InboxCategoryFilter>("everything");
   const [allApprovalFilter, setAllApprovalFilter] = useState<InboxApprovalFilter>("all");
   const { dismissed, dismiss } = useDismissedInboxItems();
@@ -618,10 +657,29 @@ export function Inbox() {
     [location.pathname, location.search, location.hash],
   );
 
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+  });
+
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
     queryFn: () => agentsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+  });
+
+  const { data: projects } = useQuery({
+    queryKey: queryKeys.projects.list(selectedCompanyId!),
+    queryFn: () => projectsApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+  const isolatedWorkspacesEnabled = experimentalSettings?.enableIsolatedWorkspaces === true;
+  const { data: executionWorkspaces = [] } = useQuery({
+    queryKey: selectedCompanyId
+      ? queryKeys.executionWorkspaces.list(selectedCompanyId)
+      : ["execution-workspaces", "__disabled__"],
+    queryFn: () => executionWorkspacesApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId && isolatedWorkspacesEnabled,
   });
 
   useEffect(() => {
@@ -731,10 +789,66 @@ export function Inbox() {
     for (const issue of issues ?? []) map.set(issue.id, issue);
     return map;
   }, [issues]);
+  const projectById = useMemo(() => {
+    const map = new Map<string, { name: string; color: string | null }>();
+    for (const project of projects ?? []) {
+      map.set(project.id, { name: project.name, color: project.color });
+    }
+    return map;
+  }, [projects]);
+  const projectWorkspaceById = useMemo(() => {
+    const map = new Map<string, { name: string }>();
+    for (const project of projects ?? []) {
+      for (const workspace of project.workspaces ?? []) {
+        map.set(workspace.id, { name: workspace.name });
+      }
+    }
+    return map;
+  }, [projects]);
+  const defaultProjectWorkspaceIdByProjectId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const project of projects ?? []) {
+      const defaultWorkspaceId =
+        project.executionWorkspacePolicy?.defaultProjectWorkspaceId
+        ?? project.primaryWorkspace?.id
+        ?? null;
+      if (defaultWorkspaceId) map.set(project.id, defaultWorkspaceId);
+    }
+    return map;
+  }, [projects]);
+  const executionWorkspaceById = useMemo(() => {
+    const map = new Map<string, {
+      name: string;
+      mode: "shared_workspace" | "isolated_workspace" | "operator_branch" | "adapter_managed" | "cloud_sandbox";
+      projectWorkspaceId: string | null;
+    }>();
+    for (const workspace of executionWorkspaces) {
+      map.set(workspace.id, {
+        name: workspace.name,
+        mode: workspace.mode,
+        projectWorkspaceId: workspace.projectWorkspaceId ?? null,
+      });
+    }
+    return map;
+  }, [executionWorkspaces]);
+  const visibleIssueColumnSet = useMemo(() => new Set(visibleIssueColumns), [visibleIssueColumns]);
+  const availableIssueColumns = useMemo(
+    () => getAvailableInboxIssueColumns(isolatedWorkspacesEnabled),
+    [isolatedWorkspacesEnabled],
+  );
+  const availableIssueColumnSet = useMemo(() => new Set(availableIssueColumns), [availableIssueColumns]);
+  const visibleTrailingIssueColumns = useMemo(
+    () => issueTrailingColumns.filter((column) => visibleIssueColumnSet.has(column) && availableIssueColumnSet.has(column)),
+    [availableIssueColumnSet, visibleIssueColumnSet],
+  );
+  const currentUserId = session?.user.id ?? session?.session.userId ?? null;
 
   const failedRuns = useMemo(
-    () => getLatestFailedRunsByAgent(heartbeatRuns ?? []).filter((r) => !dismissed.has(`run:${r.id}`)),
-    [heartbeatRuns, dismissed],
+    () =>
+      getLatestFailedRunsByAgent(heartbeatRuns ?? []).filter(
+        (r) => !isInboxEntityDismissed(dismissedAtByKey, `run:${r.id}`, r.createdAt),
+      ),
+    [heartbeatRuns, dismissedAtByKey],
   );
   const liveIssueIds = useMemo(() => {
     const ids = new Set<string>();
@@ -749,10 +863,12 @@ export function Inbox() {
   const approvalsToRender = useMemo(() => {
     let filtered = getApprovalsForTab(approvals ?? [], tab, allApprovalFilter);
     if (tab === "mine") {
-      filtered = filtered.filter((a) => !dismissed.has(`approval:${a.id}`));
+      filtered = filtered.filter(
+        (a) => !isInboxEntityDismissed(dismissedAtByKey, `approval:${a.id}`, a.updatedAt),
+      );
     }
     return filtered;
-  }, [approvals, tab, allApprovalFilter, dismissed]);
+  }, [approvals, tab, allApprovalFilter, dismissedAtByKey]);
   const showJoinRequestsCategory =
     allCategoryFilter === "everything" || allCategoryFilter === "join_requests";
   const showTouchedCategory =
@@ -769,9 +885,13 @@ export function Inbox() {
 
   const joinRequestsForTab = useMemo(() => {
     if (tab === "all" && !showJoinRequestsCategory) return [];
-    if (tab === "mine") return joinRequests.filter((jr) => !dismissed.has(`join:${jr.id}`));
+    if (tab === "mine") {
+      return joinRequests.filter(
+        (jr) => !isInboxEntityDismissed(dismissedAtByKey, `join:${jr.id}`, jr.updatedAt ?? jr.createdAt),
+      );
+    }
     return joinRequests;
-  }, [joinRequests, tab, showJoinRequestsCategory, dismissed]);
+  }, [joinRequests, tab, showJoinRequestsCategory, dismissedAtByKey]);
 
   const workItemsToRender = useMemo(
     () =>
@@ -784,10 +904,126 @@ export function Inbox() {
     [approvalsToRender, issuesToRender, showApprovalsCategory, showTouchedCategory, tab, failedRunsForTab, joinRequestsForTab],
   );
 
+  const filteredWorkItems = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return workItemsToRender;
+    return workItemsToRender.filter((item) => {
+      if (item.kind === "issue") {
+        const issue = item.issue;
+        if (issue.title.toLowerCase().includes(q)) return true;
+        if (issue.identifier?.toLowerCase().includes(q)) return true;
+        if (issue.description?.toLowerCase().includes(q)) return true;
+        if (isolatedWorkspacesEnabled) {
+          const workspaceName = resolveIssueWorkspaceName(issue, {
+            executionWorkspaceById,
+            projectWorkspaceById,
+            defaultProjectWorkspaceIdByProjectId,
+          });
+          if (workspaceName?.toLowerCase().includes(q)) return true;
+        }
+        return false;
+      }
+      if (item.kind === "approval") {
+        const a = item.approval;
+        const label = approvalLabel(a.type, a.payload as Record<string, unknown> | null);
+        if (label.toLowerCase().includes(q)) return true;
+        if (a.type.toLowerCase().includes(q)) return true;
+        return false;
+      }
+      if (item.kind === "failed_run") {
+        const run = item.run;
+        const name = agentById.get(run.agentId);
+        if (name?.toLowerCase().includes(q)) return true;
+        const msg = runFailureMessage(run);
+        if (msg.toLowerCase().includes(q)) return true;
+        const issueId = readIssueIdFromRun(run);
+        if (issueId) {
+          const issue = issueById.get(issueId);
+          if (issue?.title.toLowerCase().includes(q)) return true;
+          if (issue?.identifier?.toLowerCase().includes(q)) return true;
+        }
+        return false;
+      }
+      if (item.kind === "join_request") {
+        const jr = item.joinRequest;
+        if (jr.agentName?.toLowerCase().includes(q)) return true;
+        if (jr.capabilities?.toLowerCase().includes(q)) return true;
+        return false;
+      }
+      return false;
+    });
+  }, [
+    workItemsToRender,
+    searchQuery,
+    agentById,
+    defaultProjectWorkspaceIdByProjectId,
+    executionWorkspaceById,
+    issueById,
+    isolatedWorkspacesEnabled,
+    projectWorkspaceById,
+  ]);
+
+  // --- Parent-child nesting for inbox issues ---
+  const [nestingPreferenceEnabled, setNestingPreferenceEnabled] = useState(() => loadInboxNesting());
+  const nestingEnabled = resolveInboxNestingEnabled(nestingPreferenceEnabled, isMobile);
+  const toggleNesting = useCallback(() => {
+    setNestingPreferenceEnabled((prev) => {
+      const next = !prev;
+      saveInboxNesting(next);
+      return next;
+    });
+  }, []);
+  const [collapsedInboxParents, setCollapsedInboxParents] = useState<Set<string>>(new Set());
+  const { displayItems: nestedWorkItems, childrenByIssueId } = useMemo(
+    () => nestingEnabled
+      ? buildInboxNesting(filteredWorkItems)
+      : { displayItems: filteredWorkItems, childrenByIssueId: new Map<string, Issue[]>() },
+    [filteredWorkItems, nestingEnabled],
+  );
+  const toggleInboxParentCollapse = useCallback((parentId: string) => {
+    setCollapsedInboxParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
+      return next;
+    });
+  }, []);
+
+  // Build flat navigation list including expanded children for keyboard traversal
+  const flatNavItems = useMemo((): NavEntry[] => {
+    const entries: NavEntry[] = [];
+    for (let i = 0; i < nestedWorkItems.length; i++) {
+      const item = nestedWorkItems[i];
+      entries.push({ type: "top", index: i, item });
+      if (item.kind === "issue") {
+        const children = childrenByIssueId.get(item.issue.id);
+        const isExpanded = children?.length && !collapsedInboxParents.has(item.issue.id);
+        if (isExpanded) {
+          for (const child of children) {
+            entries.push({ type: "child", parentIndex: i, issue: child });
+          }
+        }
+      }
+    }
+    return entries;
+  }, [nestedWorkItems, childrenByIssueId, collapsedInboxParents]);
+
   const agentName = (id: string | null) => {
     if (!id) return null;
     return agentById.get(id) ?? null;
   };
+  const setIssueColumns = useCallback((next: InboxIssueColumn[]) => {
+    const normalized = normalizeInboxIssueColumns(next);
+    setVisibleIssueColumns(normalized);
+    saveInboxIssueColumns(normalized);
+  }, []);
+  const toggleIssueColumn = useCallback((column: InboxIssueColumn, enabled: boolean) => {
+    if (enabled) {
+      setIssueColumns([...visibleIssueColumns, column]);
+      return;
+    }
+    setIssueColumns(visibleIssueColumns.filter((value) => value !== column));
+  }, [setIssueColumns, visibleIssueColumns]);
 
   const approveMutation = useMutation({
     mutationFn: (id: string) => approvalsApi.approve(id),
@@ -858,7 +1094,7 @@ export function Inbox() {
         payload,
       });
       if (!("id" in result)) {
-        throw new Error("Retry was skipped because the agent is not currently invokable.");
+        throw new Error(result.message ?? "Retry was skipped.");
       }
       return { newRun: result, originalRun: run };
     },
@@ -881,6 +1117,7 @@ export function Inbox() {
   });
 
   const [fadingOutIssues, setFadingOutIssues] = useState<Set<string>>(new Set());
+  const [showMarkAllReadConfirm, setShowMarkAllReadConfirm] = useState(false);
   const [archivingIssueIds, setArchivingIssueIds] = useState<Set<string>>(new Set());
   const [fadingNonIssueItems, setFadingNonIssueItems] = useState<Set<string>>(new Set());
   const [archivingNonIssueIds, setArchivingNonIssueIds] = useState<Set<string>>(new Set());
@@ -897,30 +1134,53 @@ export function Inbox() {
 
   const archiveIssueMutation = useMutation({
     mutationFn: (id: string) => issuesApi.archiveFromInbox(id),
-    onMutate: (id) => {
+    onMutate: async (id) => {
       setActionError(null);
       setArchivingIssueIds((prev) => new Set(prev).add(id));
+
+      // Cancel in-flight refetches so they don't overwrite our optimistic update
+      const queryKeys_ = [
+        queryKeys.issues.listMineByMe(selectedCompanyId!),
+        queryKeys.issues.listTouchedByMe(selectedCompanyId!),
+        queryKeys.issues.listUnreadTouchedByMe(selectedCompanyId!),
+      ];
+      await Promise.all(queryKeys_.map((qk) => queryClient.cancelQueries({ queryKey: qk })));
+
+      // Snapshot previous data for rollback
+      const previousData = queryKeys_.map((qk) => [qk, queryClient.getQueryData(qk)] as const);
+
+      // Optimistically remove the issue from all inbox query caches
+      for (const qk of queryKeys_) {
+        queryClient.setQueryData(qk, (old: unknown) => {
+          if (!Array.isArray(old)) return old;
+          return old.filter((issue: { id: string }) => issue.id !== id);
+        });
+      }
+
+      return { previousData };
     },
-    onSuccess: () => {
-      invalidateInboxIssueQueries();
-    },
-    onError: (err, id) => {
+    onError: (err, id, context) => {
       setActionError(err instanceof Error ? err.message : "Failed to archive issue");
       setArchivingIssueIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
         return next;
       });
+      // Restore previous query data on failure
+      if (context?.previousData) {
+        for (const [qk, data] of context.previousData) {
+          queryClient.setQueryData(qk, data);
+        }
+      }
     },
     onSettled: (_data, error, id) => {
-      if (error) return;
-      window.setTimeout(() => {
-        setArchivingIssueIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      }, 500);
+      // Clean up archiving state and refetch to sync with server
+      setArchivingIssueIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      invalidateInboxIssueQueries();
     },
   });
 
@@ -990,7 +1250,11 @@ export function Inbox() {
   const handleArchiveNonIssue = useCallback((key: string) => {
     setArchivingNonIssueIds((prev) => new Set(prev).add(key));
     setTimeout(() => {
-      dismiss(key);
+      if (key.startsWith("alert:")) {
+        dismissAlert(key);
+      } else {
+        dismissInboxItem(key);
+      }
       setArchivingNonIssueIds((prev) => {
         const next = new Set(prev);
         next.delete(key);
@@ -1177,14 +1441,18 @@ export function Inbox() {
   }
 
   const hasRunFailures = failedRuns.length > 0;
-  const showAggregateAgentError = !!dashboard && dashboard.agents.error > 0 && !hasRunFailures && !dismissed.has("alert:agent-errors");
+  const showAggregateAgentError =
+    !!dashboard &&
+    dashboard.agents.error > 0 &&
+    !hasRunFailures &&
+    !dismissedAlerts.has("alert:agent-errors");
   const showBudgetAlert =
     !!dashboard &&
     dashboard.costs.monthBudgetCents > 0 &&
     dashboard.costs.monthUtilizationPercent >= 80 &&
-    !dismissed.has("alert:budget");
+    !dismissedAlerts.has("alert:budget");
   const hasAlerts = showAggregateAgentError || showBudgetAlert;
-  const showWorkItemsSection = workItemsToRender.length > 0;
+  const showWorkItemsSection = nestedWorkItems.length > 0;
   const showAlertsSection = shouldShowInboxSection({
     tab,
     hasItems: hasAlerts,
@@ -1214,7 +1482,6 @@ export function Inbox() {
   const unreadIssueIds = markAllReadIssues
     .map((issue) => issue.id);
   const canMarkAllRead = unreadIssueIds.length > 0;
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-2">
@@ -1237,16 +1504,41 @@ export function Inbox() {
 
         <div className="flex items-center gap-2">
           {canMarkAllRead && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 shrink-0"
-              onClick={() => markAllReadMutation.mutate(unreadIssueIds)}
-              disabled={markAllReadMutation.isPending}
-            >
-              {markAllReadMutation.isPending ? "Marking…" : "Mark all as read"}
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0"
+                onClick={() => setShowMarkAllReadConfirm(true)}
+                disabled={markAllReadMutation.isPending}
+              >
+                {markAllReadMutation.isPending ? "Marking…" : "Mark all as read"}
+              </Button>
+              <Dialog open={showMarkAllReadConfirm} onOpenChange={setShowMarkAllReadConfirm}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Mark all as read?</DialogTitle>
+                    <DialogDescription>
+                      This will mark {unreadIssueIds.length} unread {unreadIssueIds.length === 1 ? "item" : "items"} as read.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setShowMarkAllReadConfirm(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setShowMarkAllReadConfirm(false);
+                        markAllReadMutation.mutate(unreadIssueIds);
+                      }}
+                    >
+                      Mark all as read
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </>
           )}
         </div>
       </div>
@@ -1297,9 +1589,11 @@ export function Inbox() {
 
       {allLoaded && visibleSections.length === 0 && (
         <EmptyState
-          icon={InboxIcon}
+          icon={searchQuery.trim() ? Search : InboxIcon}
           message={
-            tab === "mine"
+            searchQuery.trim()
+              ? "No inbox items match your search."
+              : tab === "mine"
               ? "Inbox zero."
               : tab === "unread"
               ? "No new inbox items."
@@ -1392,7 +1686,7 @@ export function Inbox() {
                       issueById={issueById}
                       agentName={agentName(item.run.agentId)}
                       issueLinkState={issueLinkState}
-                      onDismiss={() => dismiss(runKey)}
+                      onDismiss={() => dismissInboxItem(runKey)}
                       onRetry={() => retryRunMutation.mutate(item.run)}
                       isRetrying={retryingRunIds.has(item.run.id)}
                       unreadState={nonIssueUnreadState(runKey)}
@@ -1506,7 +1800,7 @@ export function Inbox() {
                     disabled={isArchiving || archiveIssueMutation.isPending}
                     onArchive={() => archiveIssueMutation.mutate(issue.id)}
                   >
-                    {row}
+                    {parentRow}
                   </SwipeToArchive>
                 ) : row));
                 return elements;
@@ -1538,7 +1832,7 @@ export function Inbox() {
                   </Link>
                   <button
                     type="button"
-                    onClick={() => dismiss("alert:agent-errors")}
+                    onClick={() => dismissAlert("alert:agent-errors")}
                     className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/alert:opacity-100"
                     aria-label="Dismiss"
                   >
@@ -1561,7 +1855,7 @@ export function Inbox() {
                   </Link>
                   <button
                     type="button"
-                    onClick={() => dismiss("alert:budget")}
+                    onClick={() => dismissAlert("alert:budget")}
                     className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/alert:opacity-100"
                     aria-label="Dismiss"
                   >

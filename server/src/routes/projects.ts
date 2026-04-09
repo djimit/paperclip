@@ -7,6 +7,7 @@ import {
   updateProjectSchema,
   updateProjectWorkspaceSchema,
 } from "@paperclipai/shared";
+import { trackProjectCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
 import { projectService, logActivity, workspaceOperationService } from "../services/index.js";
 import { conflict } from "../errors.js";
@@ -80,6 +81,13 @@ export function projectRoutes(db: Db) {
     };
 
     const { workspace, ...projectData } = req.body as CreateProjectPayload;
+    if (projectData.env !== undefined) {
+      projectData.env = await secretsSvc.normalizeEnvBindingsForPersistence(
+        companyId,
+        projectData.env,
+        { strictMode: strictSecretsMode, fieldPath: "env" },
+      );
+    }
     const project = await svc.create(companyId, projectData);
     let createdWorkspaceId: string | null = null;
     if (workspace) {
@@ -105,8 +113,13 @@ export function projectRoutes(db: Db) {
       details: {
         name: project.name,
         workspaceId: createdWorkspaceId,
+        envKeys: project.env ? Object.keys(project.env).sort() : [],
       },
     });
+    const telemetryClient = getTelemetryClient();
+    if (telemetryClient) {
+      trackProjectCreated(telemetryClient);
+    }
     res.status(201).json(hydratedProject ?? project);
   });
 
@@ -121,6 +134,12 @@ export function projectRoutes(db: Db) {
     const body = { ...req.body };
     if (typeof body.archivedAt === "string") {
       body.archivedAt = new Date(body.archivedAt);
+    }
+    if (body.env !== undefined) {
+      body.env = await secretsSvc.normalizeEnvBindingsForPersistence(existing.companyId, body.env, {
+        strictMode: strictSecretsMode,
+        fieldPath: "env",
+      });
     }
     const project = await svc.update(id, body);
     if (!project) {
@@ -137,7 +156,13 @@ export function projectRoutes(db: Db) {
       action: "project.updated",
       entityType: "project",
       entityId: project.id,
-      details: req.body,
+      details: {
+        changedKeys: Object.keys(req.body).sort(),
+        envKeys:
+          body.env && typeof body.env === "object" && !Array.isArray(body.env)
+            ? Object.keys(body.env as Record<string, unknown>).sort()
+            : undefined,
+      },
     });
 
     res.json(project);
