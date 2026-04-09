@@ -1052,7 +1052,7 @@ export function IssueDetail() {
     async (runId: string) => {
       await interruptQueuedComment.mutateAsync(runId);
     },
-    [interruptQueuedComment],
+    [interruptQueuedComment.mutateAsync],
   );
 
   const handleCommentImageUpload = useCallback(
@@ -1060,14 +1060,14 @@ export function IssueDetail() {
       const attachment = await uploadAttachment.mutateAsync(file);
       return attachment.contentPath;
     },
-    [uploadAttachment],
+    [uploadAttachment.mutateAsync],
   );
 
   const handleCommentAttachImage = useCallback(
     async (file: File) => {
       await uploadAttachment.mutateAsync(file);
     },
-    [uploadAttachment],
+    [uploadAttachment.mutateAsync],
   );
 
   const handleCommentAdd = useCallback(
@@ -1078,7 +1078,7 @@ export function IssueDetail() {
       }
       await addComment.mutateAsync({ body, reopen });
     },
-    [addComment, addCommentAndReassign],
+    [addComment.mutateAsync, addCommentAndReassign.mutateAsync],
   );
 
   const handleCommentVote = useCallback(
@@ -1092,7 +1092,7 @@ export function IssueDetail() {
         sharingPreferenceAtSubmit: feedbackDataSharingPreference,
       });
     },
-    [feedbackVoteMutation, feedbackDataSharingPreference],
+    [feedbackVoteMutation.mutateAsync, feedbackDataSharingPreference],
   );
 
   useEffect(() => {

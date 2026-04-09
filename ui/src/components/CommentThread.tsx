@@ -736,6 +736,7 @@ export const CommentThread = memo(function CommentThread({
     ),
     [
       timeline, agentMap, currentUserId, companyId, projectId,
+      onApproveApproval, onRejectApproval, pendingApprovalAction,
       feedbackVoteByTargetId, feedbackDataSharingPreference,
       onVote, handleFeedbackVote, votingTargetId, highlightCommentId,
       feedbackTermsUrl,
