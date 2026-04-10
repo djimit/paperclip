@@ -12,6 +12,7 @@ import { useLocation } from "@/lib/router";
 import { ApiError } from "../api/client";
 import { issuesApi } from "../api/issues";
 import { useAutosaveIndicator } from "../hooks/useAutosaveIndicator";
+import { deriveDocumentRevisionState } from "../lib/document-revisions";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, relativeTime } from "../lib/utils";
 import { MarkdownBody } from "./MarkdownBody";
@@ -787,7 +788,9 @@ export function IssueDocumentsSection({
           const activeDraft = draft?.key === doc.key && !draft.isNew ? draft : null;
           const activeConflict = documentConflict?.key === doc.key ? documentConflict : null;
           const isFolded = foldedDocumentKeys.includes(doc.key);
-          const revisionHistory = getDocumentRevisions(doc.key);
+          const revisionState = deriveDocumentRevisionState(doc, getDocumentRevisions(doc.key));
+          const revisionHistory = revisionState.revisions;
+          const currentRevision = revisionState.currentRevision;
           const selectedRevisionId = selectedRevisionIds[doc.key] ?? null;
           const selectedHistoricalRevision = selectedRevisionId
             ? revisionHistory.find((revision) => revision.id === selectedRevisionId) ?? null
@@ -795,10 +798,10 @@ export function IssueDocumentsSection({
           const isHistoricalPreview = Boolean(selectedHistoricalRevision);
           const displayedTitle = selectedHistoricalRevision
             ? selectedHistoricalRevision.title ?? ""
-            : activeDraft?.title ?? doc.title ?? "";
-          const displayedBody = selectedHistoricalRevision?.body ?? activeDraft?.body ?? doc.body;
-          const displayedRevisionNumber = selectedHistoricalRevision?.revisionNumber ?? doc.latestRevisionNumber;
-          const displayedUpdatedAt = selectedHistoricalRevision?.createdAt ?? doc.updatedAt;
+            : activeDraft?.title ?? currentRevision.title ?? "";
+          const displayedBody = selectedHistoricalRevision?.body ?? activeDraft?.body ?? currentRevision.body;
+          const displayedRevisionNumber = selectedHistoricalRevision?.revisionNumber ?? currentRevision.revisionNumber;
+          const displayedUpdatedAt = selectedHistoricalRevision?.createdAt ?? currentRevision.createdAt;
           const showTitle = !isPlanKey(doc.key) && !!displayedTitle.trim() && !titlesMatchKey(displayedTitle, doc.key);
           const canVoteOnDocument = Boolean(doc.latestRevisionId && doc.updatedByAgentId && !doc.updatedByUserId && onVote);
 
@@ -848,9 +851,9 @@ export function IssueDocumentsSection({
                         {revisionMenuOpenKey === doc.key && isFetchingDocumentRevisions && revisionHistory.length === 0 ? (
                           <DropdownMenuItem disabled>Loading revisions...</DropdownMenuItem>
                         ) : revisionHistory.length > 0 ? (
-                          <DropdownMenuRadioGroup value={selectedRevisionId ?? doc.latestRevisionId ?? ""}>
+                          <DropdownMenuRadioGroup value={selectedRevisionId ?? currentRevision.id ?? ""}>
                             {revisionHistory.map((revision) => {
-                              const isCurrentRevision = revision.id === doc.latestRevisionId;
+                              const isCurrentRevision = revision.id === currentRevision.id;
                               return (
                                 <DropdownMenuRadioItem
                                   key={revision.id}
