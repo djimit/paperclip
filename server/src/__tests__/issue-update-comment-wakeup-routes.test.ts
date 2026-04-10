@@ -53,6 +53,10 @@ vi.mock("../services/index.js", () => ({
   issueApprovalService: () => ({}),
   issueService: () => mockIssueService,
   logActivity: vi.fn(async () => undefined),
+  memoryService: () => ({
+    captureIssueComment: vi.fn(async () => undefined),
+    captureIssueDocument: vi.fn(async () => undefined),
+  }),
   projectService: () => ({}),
   routineService: () => ({
     syncRunStatusForIssue: vi.fn(async () => undefined),

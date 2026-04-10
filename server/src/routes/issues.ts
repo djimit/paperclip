@@ -39,6 +39,7 @@ import {
   instanceSettingsService,
   issueApprovalService,
   issueService,
+  memoryService,
   documentService,
   logActivity,
   projectService,
@@ -280,6 +281,7 @@ export function issueRoutes(
   const svc = issueService(db);
   const access = accessService(db);
   const heartbeat = heartbeatService(db);
+  const memorySvc = memoryService(db);
   const feedback = feedbackService(db);
   const instanceSettings = instanceSettingsService(db);
   const agentsSvc = agentService(db);
@@ -859,6 +861,25 @@ export function issueRoutes(
       },
     });
 
+    void memorySvc.captureIssueDocument({
+      companyId: issue.companyId,
+      issueId: issue.id,
+      agentId: issue.assigneeAgentId ?? null,
+      projectId: issue.projectId ?? null,
+      key: doc.key,
+      title: doc.title ?? null,
+      body: doc.body,
+      actor: {
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId ?? null,
+        userId: actor.actorType === "user" ? actor.actorId : null,
+        runId: actor.runId ?? null,
+      },
+    }).catch((err) => {
+      logger.warn({ err, issueId: issue.id, key: doc.key }, "failed to capture issue document to memory");
+    });
+
     res.status(result.created ? 201 : 200).json(doc);
   });
 
@@ -924,6 +945,28 @@ export function issueRoutes(
           restoredFromRevisionId: result.restoredFromRevisionId,
           restoredFromRevisionNumber: result.restoredFromRevisionNumber,
         },
+      });
+
+      void memorySvc.captureIssueDocument({
+        companyId: issue.companyId,
+        issueId: issue.id,
+        agentId: issue.assigneeAgentId ?? null,
+        projectId: issue.projectId ?? null,
+        key: result.document.key,
+        title: result.document.title ?? null,
+        body: result.document.body,
+        actor: {
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId ?? null,
+          userId: actor.actorType === "user" ? actor.actorId : null,
+          runId: actor.runId ?? null,
+        },
+      }).catch((err) => {
+        logger.warn(
+          { err, issueId: issue.id, key: result.document.key },
+          "failed to capture restored issue document to memory",
+        );
       });
 
       res.json(result.document);
@@ -2256,6 +2299,24 @@ export function issueRoutes(
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
         ...(interruptedRunId ? { interruptedRunId } : {}),
       },
+    });
+
+    void memorySvc.captureIssueComment({
+      companyId: currentIssue.companyId,
+      issueId: currentIssue.id,
+      commentId: comment.id,
+      agentId: currentIssue.assigneeAgentId ?? null,
+      projectId: currentIssue.projectId ?? null,
+      body: comment.body,
+      actor: {
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId ?? null,
+        userId: actor.actorType === "user" ? actor.actorId : null,
+        runId: actor.runId ?? null,
+      },
+    }).catch((err) => {
+      logger.warn({ err, issueId: currentIssue.id, commentId: comment.id }, "failed to capture issue comment to memory");
     });
 
     // Merge all wakeups from this comment into one enqueue per agent to avoid duplicate runs.

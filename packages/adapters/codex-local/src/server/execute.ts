@@ -467,11 +467,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ];
   })();
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
+  const memoryPreamble = asString(context.paperclipMemoryPreamble, "").trim();
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
   const prompt = joinPromptSections([
     promptInstructionsPrefix,
     renderedBootstrapPrompt,
     wakePrompt,
+    memoryPreamble,
     sessionHandoffNote,
     renderedPrompt,
   ]);
@@ -480,6 +482,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     instructionsChars,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     wakePromptChars: wakePrompt.length,
+    memoryPreambleChars: memoryPreamble.length,
     sessionHandoffChars: sessionHandoffNote.length,
     heartbeatPromptChars: renderedPrompt.length,
   };

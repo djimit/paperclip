@@ -12,6 +12,7 @@ import {
   PLUGIN_LAUNCHER_RENDER_ENVIRONMENTS,
   PLUGIN_STATE_SCOPE_KINDS,
 } from "../constants.js";
+import { memoryProviderCapabilitiesSchema } from "./memory.js";
 
 // ---------------------------------------------------------------------------
 // JSON Schema placeholder – a permissive validator for JSON Schema objects
@@ -104,6 +105,16 @@ export const pluginToolDeclarationSchema = z.object({
 });
 
 export type PluginToolDeclarationInput = z.infer<typeof pluginToolDeclarationSchema>;
+
+export const pluginMemoryProviderDeclarationSchema = z.object({
+  key: z.string().min(1),
+  displayName: z.string().min(1),
+  description: z.string().optional(),
+  capabilities: memoryProviderCapabilitiesSchema.partial().optional(),
+  configSchema: jsonSchemaSchema.optional(),
+});
+
+export type PluginMemoryProviderDeclarationInput = z.infer<typeof pluginMemoryProviderDeclarationSchema>;
 
 /**
  * Validates a {@link PluginUiSlotDeclaration} — a UI extension slot the plugin
@@ -405,6 +416,7 @@ export const pluginManifestV1Schema = z.object({
   jobs: z.array(pluginJobDeclarationSchema).optional(),
   webhooks: z.array(pluginWebhookDeclarationSchema).optional(),
   tools: z.array(pluginToolDeclarationSchema).optional(),
+  memoryProviders: z.array(pluginMemoryProviderDeclarationSchema).optional(),
   launchers: z.array(pluginLauncherDeclarationSchema).optional(),
   ui: z.object({
     slots: z.array(pluginUiSlotDeclarationSchema).min(1).optional(),
@@ -447,6 +459,16 @@ export const pluginManifestV1Schema = z.object({
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Capability 'agent.tools.register' is required when tools are declared",
+        path: ["capabilities"],
+      });
+    }
+  }
+
+  if (manifest.memoryProviders && manifest.memoryProviders.length > 0) {
+    if (!manifest.capabilities.includes("memory.providers.register")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Capability 'memory.providers.register' is required when memoryProviders are declared",
         path: ["capabilities"],
       });
     }
@@ -513,6 +535,18 @@ export const pluginManifestV1Schema = z.object({
         code: z.ZodIssueCode.custom,
         message: `Duplicate tool names: ${[...new Set(duplicates)].join(", ")}`,
         path: ["tools"],
+      });
+    }
+  }
+
+  if (manifest.memoryProviders) {
+    const providerKeys = manifest.memoryProviders.map((provider) => provider.key);
+    const duplicates = providerKeys.filter((key, i) => providerKeys.indexOf(key) !== i);
+    if (duplicates.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Duplicate memory provider keys: ${[...new Set(duplicates)].join(", ")}`,
+        path: ["memoryProviders"],
       });
     }
   }

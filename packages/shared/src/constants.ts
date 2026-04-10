@@ -387,6 +387,49 @@ export const PERMISSION_KEYS = [
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
+export const MEMORY_BINDING_TARGET_TYPES = ["company", "agent"] as const;
+export type MemoryBindingTargetType = (typeof MEMORY_BINDING_TARGET_TYPES)[number];
+
+export const MEMORY_PROVIDER_KINDS = ["builtin", "plugin"] as const;
+export type MemoryProviderKind = (typeof MEMORY_PROVIDER_KINDS)[number];
+
+export const MEMORY_OPERATION_TYPES = ["query", "capture", "upsert", "list", "get", "forget"] as const;
+export type MemoryOperationType = (typeof MEMORY_OPERATION_TYPES)[number];
+
+export const MEMORY_OPERATION_STATUSES = ["succeeded", "failed"] as const;
+export type MemoryOperationStatus = (typeof MEMORY_OPERATION_STATUSES)[number];
+
+export const MEMORY_TRIGGER_KINDS = ["manual", "hook"] as const;
+export type MemoryTriggerKind = (typeof MEMORY_TRIGGER_KINDS)[number];
+
+export const MEMORY_HOOK_KINDS = [
+  "pre_run_hydrate",
+  "post_run_capture",
+  "issue_comment_capture",
+  "issue_document_capture",
+] as const;
+export type MemoryHookKind = (typeof MEMORY_HOOK_KINDS)[number];
+
+export const MEMORY_SOURCE_KINDS = [
+  "issue_comment",
+  "issue_document",
+  "issue",
+  "run",
+  "activity",
+  "manual_note",
+  "external_document",
+] as const;
+export type MemorySourceKind = (typeof MEMORY_SOURCE_KINDS)[number];
+
+export const MEMORY_EXTRACTION_JOB_STATUSES = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+] as const;
+export type MemoryExtractionJobStatus = (typeof MEMORY_EXTRACTION_JOB_STATUSES)[number];
+
 // ---------------------------------------------------------------------------
 // Plugin System — see doc/plugins/PLUGIN_SPEC.md for the full specification
 // ---------------------------------------------------------------------------
@@ -474,6 +517,7 @@ export const PLUGIN_CAPABILITIES = [
   "activity.log.write",
   "metrics.write",
   "telemetry.track",
+  "memory.providers.register",
   // Plugin State
   "plugin.state.read",
   "plugin.state.write",

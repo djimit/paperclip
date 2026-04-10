@@ -309,10 +309,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession: canResumeSession });
   const shouldUseResumeDeltaPrompt = canResumeSession && wakePrompt.length > 0;
   const renderedHeartbeatPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
+  const memoryPreamble = asString(context.paperclipMemoryPreamble, "").trim();
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
   const userPrompt = joinPromptSections([
     renderedBootstrapPrompt,
     wakePrompt,
+    memoryPreamble,
     sessionHandoffNote,
     renderedHeartbeatPrompt,
   ]);
@@ -321,6 +323,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     promptChars: userPrompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     wakePromptChars: wakePrompt.length,
+    memoryPreambleChars: memoryPreamble.length,
     sessionHandoffChars: sessionHandoffNote.length,
     heartbeatPromptChars: renderedHeartbeatPrompt.length,
   };

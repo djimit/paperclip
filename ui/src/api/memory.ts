@@ -1,0 +1,52 @@
+import type {
+  CreateMemoryBinding,
+  MemoryBinding,
+  MemoryBindingTarget,
+  MemoryListOperationsQuery,
+  MemoryListRecordsQuery,
+  MemoryOperation,
+  MemoryProviderDescriptor,
+  MemoryRecord,
+  MemoryResolvedBinding,
+  SetAgentMemoryBinding,
+  SetCompanyMemoryBinding,
+  UpdateMemoryBinding,
+} from "@paperclipai/shared";
+import { api } from "./client";
+
+function buildQueryString(filters?: Record<string, string | number | boolean | undefined>) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters ?? {})) {
+    if (value === undefined) continue;
+    params.set(key, String(value));
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export const memoryApi = {
+  providers: (companyId: string) =>
+    api.get<MemoryProviderDescriptor[]>(`/companies/${encodeURIComponent(companyId)}/memory/providers`),
+  listBindings: (companyId: string) =>
+    api.get<MemoryBinding[]>(`/companies/${encodeURIComponent(companyId)}/memory/bindings`),
+  listTargets: (companyId: string) =>
+    api.get<MemoryBindingTarget[]>(`/companies/${encodeURIComponent(companyId)}/memory/targets`),
+  createBinding: (companyId: string, data: CreateMemoryBinding) =>
+    api.post<MemoryBinding>(`/companies/${encodeURIComponent(companyId)}/memory/bindings`, data),
+  updateBinding: (bindingId: string, data: UpdateMemoryBinding) =>
+    api.patch<MemoryBinding>(`/memory/bindings/${encodeURIComponent(bindingId)}`, data),
+  setCompanyDefault: (companyId: string, bindingId: SetCompanyMemoryBinding["bindingId"]) =>
+    api.put<MemoryBindingTarget>(`/companies/${encodeURIComponent(companyId)}/memory/default-binding`, { bindingId }),
+  getAgentBinding: (agentId: string) =>
+    api.get<MemoryResolvedBinding>(`/agents/${encodeURIComponent(agentId)}/memory-binding`),
+  setAgentBinding: (agentId: string, bindingId: SetAgentMemoryBinding["bindingId"]) =>
+    api.put<MemoryBindingTarget | null>(`/agents/${encodeURIComponent(agentId)}/memory-binding`, { bindingId }),
+  listRecords: (companyId: string, filters?: MemoryListRecordsQuery) =>
+    api.get<MemoryRecord[]>(
+      `/companies/${encodeURIComponent(companyId)}/memory/records${buildQueryString(filters)}`,
+    ),
+  listOperations: (companyId: string, filters?: MemoryListOperationsQuery) =>
+    api.get<MemoryOperation[]>(
+      `/companies/${encodeURIComponent(companyId)}/memory/operations${buildQueryString(filters)}`,
+    ),
+};

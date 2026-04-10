@@ -28,6 +28,18 @@ export const queryKeys = {
     detectModel: (companyId: string, adapterType: string) =>
       ["agents", companyId, "detect-model", adapterType] as const,
   },
+  memory: {
+    all: ["memory"] as const,
+    company: (companyId: string) => ["memory", companyId] as const,
+    providers: (companyId: string) => ["memory", companyId, "providers"] as const,
+    bindings: (companyId: string) => ["memory", companyId, "bindings"] as const,
+    targets: (companyId: string) => ["memory", companyId, "targets"] as const,
+    agentBinding: (agentId: string) => ["memory", "agent-binding", agentId] as const,
+    records: (companyId: string, filters?: Record<string, string | number | boolean | undefined>) =>
+      ["memory", companyId, "records", filters ?? {}] as const,
+    operations: (companyId: string, filters?: Record<string, string | number | boolean | undefined>) =>
+      ["memory", companyId, "operations", filters ?? {}] as const,
+  },
   issues: {
     list: (companyId: string) => ["issues", companyId] as const,
     search: (companyId: string, q: string, projectId?: string, limit?: number) =>

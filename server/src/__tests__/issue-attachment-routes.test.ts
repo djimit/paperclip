@@ -58,6 +58,10 @@ function registerRouteMocks() {
     issueApprovalService: () => ({}),
     issueService: () => mockIssueService,
     logActivity: mockLogActivity,
+    memoryService: () => ({
+      captureIssueComment: vi.fn(async () => undefined),
+      captureIssueDocument: vi.fn(async () => undefined),
+    }),
     projectService: () => ({}),
     routineService: () => ({
       syncRunStatusForIssue: vi.fn(async () => undefined),

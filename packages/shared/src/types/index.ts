@@ -120,6 +120,23 @@ export type {
 export type { Goal } from "./goal.js";
 export type { Approval, ApprovalComment } from "./approval.js";
 export type {
+  MemoryProviderCapabilities,
+  MemoryProviderDescriptor,
+  MemoryUsage,
+  MemoryScope,
+  MemorySourceRef,
+  MemoryBinding,
+  MemoryBindingTarget,
+  MemoryResolvedBinding,
+  MemoryRecordHandle,
+  MemoryRecord,
+  MemoryOperation,
+  MemoryExtractionJob,
+  MemoryQueryResult,
+  MemoryCaptureResult,
+  MemoryForgetResult,
+} from "./memory.js";
+export type {
   BudgetPolicy,
   BudgetPolicySummary,
   BudgetIncident,
@@ -210,6 +227,7 @@ export type {
   PluginJobDeclaration,
   PluginWebhookDeclaration,
   PluginToolDeclaration,
+  PluginMemoryProviderDeclaration,
   PluginUiSlotDeclaration,
   PluginLauncherActionDeclaration,
   PluginLauncherRenderDeclaration,

@@ -235,6 +235,35 @@ export {
 } from "./cost.js";
 
 export {
+  memoryScopeSchema,
+  memorySourceRefSchema,
+  memoryProviderCapabilitiesSchema,
+  createMemoryBindingSchema,
+  updateMemoryBindingSchema,
+  setCompanyMemoryBindingSchema,
+  setAgentMemoryBindingSchema,
+  memoryQuerySchema,
+  memoryCaptureSchema,
+  memoryForgetSchema,
+  memoryListRecordsQuerySchema,
+  memoryListOperationsQuerySchema,
+  memoryListExtractionJobsQuerySchema,
+  memoryBindingTargetTypeSchema,
+  type MemoryScopeInput,
+  type MemorySourceRefInput,
+  type CreateMemoryBinding,
+  type UpdateMemoryBinding,
+  type SetCompanyMemoryBinding,
+  type SetAgentMemoryBinding,
+  type MemoryQuery,
+  type MemoryCapture,
+  type MemoryForget,
+  type MemoryListRecordsQuery,
+  type MemoryListOperationsQuery,
+  type MemoryListExtractionJobsQuery,
+} from "./memory.js";
+
+export {
   createFinanceEventSchema,
   type CreateFinanceEvent,
 } from "./finance.js";
@@ -272,6 +301,7 @@ export {
   pluginJobDeclarationSchema,
   pluginWebhookDeclarationSchema,
   pluginToolDeclarationSchema,
+  pluginMemoryProviderDeclarationSchema,
   pluginUiSlotDeclarationSchema,
   pluginLauncherActionDeclarationSchema,
   pluginLauncherRenderDeclarationSchema,
@@ -288,6 +318,7 @@ export {
   type PluginJobDeclarationInput,
   type PluginWebhookDeclarationInput,
   type PluginToolDeclarationInput,
+  type PluginMemoryProviderDeclarationInput,
   type PluginUiSlotDeclarationInput,
   type PluginLauncherActionDeclarationInput,
   type PluginLauncherRenderDeclarationInput,

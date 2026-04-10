@@ -17,6 +17,7 @@ import {
   ToggleField,
   HintIcon
 } from "../components/agent-config-primitives";
+import { CompanyMemorySettings } from "../components/CompanyMemorySettings";
 
 type AgentSnippetInput = {
   onboardingTextUrl: string;
@@ -416,6 +417,8 @@ export function CompanySettings() {
           />
         </div>
       </div>
+
+      <CompanyMemorySettings companyId={selectedCompanyId!} />
 
       <div className="space-y-4">
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">

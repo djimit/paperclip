@@ -31,6 +31,7 @@ import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
+import { memoryService } from "./memory.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
 import {
   buildHeartbeatRunIssueComment,
@@ -1190,6 +1191,7 @@ export function heartbeatService(db: Db) {
 
   const runLogStore = getRunLogStore();
   const secretsSvc = secretService(db);
+  const memorySvc = memoryService(db);
   const companySkills = companySkillService(db);
   const issuesSvc = issueService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
@@ -3213,6 +3215,35 @@ export function heartbeatService(db: Db) {
           );
         }
       }
+      if (issueRef) {
+        try {
+          const memoryPreamble = await memorySvc.preRunHydrate({
+            companyId: agent.companyId,
+            agentId: agent.id,
+            projectId: issueRef.projectId ?? null,
+            issueId: issueRef.id,
+            runId: run.id,
+            query: [issueRef.identifier ?? null, issueRef.title]
+              .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+              .join("\n"),
+          });
+          if (memoryPreamble) {
+            context.paperclipMemoryPreamble = memoryPreamble;
+            await db
+              .update(heartbeatRuns)
+              .set({
+                contextSnapshot: context,
+                updatedAt: new Date(),
+              })
+              .where(eq(heartbeatRuns.id, run.id));
+          }
+        } catch (err) {
+          await onLog(
+            "stderr",
+            `[paperclip] Failed to hydrate memory: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        }
+      }
       const onAdapterMeta = async (meta: AdapterInvocationMeta) => {
         if (meta.env && secretKeys.size > 0) {
           for (const key of secretKeys) {
@@ -3440,6 +3471,27 @@ export function heartbeatService(db: Db) {
             await onLog(
               "stderr",
               `[paperclip] Failed to post run summary comment: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          }
+        }
+        const memorySummary =
+          buildHeartbeatRunIssueComment(adapterResult.resultJson ?? null)
+          ?? (typeof adapterResult.summary === "string" ? adapterResult.summary.trim() || null : null);
+        if (memorySummary) {
+          try {
+            await memorySvc.captureRunSummary({
+              companyId: agent.companyId,
+              agentId: agent.id,
+              projectId: issueRef?.projectId ?? null,
+              issueId: issueRef?.id ?? null,
+              runId: finalizedRun.id,
+              title: issueRef?.title ? `Run summary: ${issueRef.title}` : "Run summary",
+              summary: memorySummary,
+            });
+          } catch (err) {
+            await onLog(
+              "stderr",
+              `[paperclip] Failed to capture run summary to memory: ${err instanceof Error ? err.message : String(err)}\n`,
             );
           }
         }

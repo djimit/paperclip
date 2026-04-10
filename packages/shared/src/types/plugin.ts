@@ -10,6 +10,7 @@ import type {
   PluginLauncherBounds,
   PluginLauncherRenderEnvironment,
 } from "../constants.js";
+import type { MemoryProviderCapabilities } from "./memory.js";
 
 // ---------------------------------------------------------------------------
 // JSON Schema placeholder – plugins declare config schemas as JSON Schema
@@ -190,6 +191,19 @@ export interface PluginUiDeclaration {
   launchers?: PluginLauncherDeclaration[];
 }
 
+export interface PluginMemoryProviderDeclaration {
+  /** Stable provider key unique within the plugin manifest. */
+  key: string;
+  /** Human-readable name shown in the operator UI. */
+  displayName: string;
+  /** Optional description of what the provider does. */
+  description?: string;
+  /** Capability flags surfaced in the host provider catalog. */
+  capabilities?: Partial<MemoryProviderCapabilities>;
+  /** Optional JSON Schema for provider-specific binding config. */
+  configSchema?: JsonSchema;
+}
+
 // ---------------------------------------------------------------------------
 // Plugin Manifest V1
 // ---------------------------------------------------------------------------
@@ -240,6 +254,8 @@ export interface PaperclipPluginManifestV1 {
   webhooks?: PluginWebhookDeclaration[];
   /** Agent tools this plugin contributes. Requires `agent.tools.register` capability. */
   tools?: PluginToolDeclaration[];
+  /** Memory providers this plugin contributes. Requires `memory.providers.register` capability. */
+  memoryProviders?: PluginMemoryProviderDeclaration[];
   /**
    * Legacy top-level launcher declarations.
    * Prefer `ui.launchers` for new manifests.

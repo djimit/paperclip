@@ -45,6 +45,10 @@ vi.mock("../services/index.js", () => ({
   issueApprovalService: () => ({}),
   issueService: () => mockIssueService,
   logActivity: mockLogActivity,
+  memoryService: () => ({
+    captureIssueComment: vi.fn(async () => undefined),
+    captureIssueDocument: vi.fn(async () => undefined),
+  }),
   projectService: () => ({}),
   routineService: () => ({
     syncRunStatusForIssue: vi.fn(async () => undefined),
@@ -169,7 +173,7 @@ describe("issue document revision routes", () => {
 
   it("rejects invalid document keys before attempting restore", async () => {
     const res = await request(createApp())
-      .post(`/api/issues/${issueId}/documents/INVALID KEY/revisions/revision-1/restore`)
+      .post(`/api/issues/${issueId}/documents/INVALID.KEY/revisions/revision-1/restore`)
       .send({});
 
     expect(res.status).toBe(400);

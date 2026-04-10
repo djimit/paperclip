@@ -14,8 +14,21 @@ import type {
   PluginStateScopeKind,
   PluginEventType,
   PluginToolDeclaration,
+  MemoryBinding,
+  MemoryBindingTarget,
+  MemoryCaptureResult,
   PluginLauncherDeclaration,
   Company,
+  MemoryForgetResult,
+  MemoryOperation,
+  MemoryProviderCapabilities,
+  MemoryProviderDescriptor,
+  MemoryQueryResult,
+  MemoryRecord,
+  MemoryResolvedBinding,
+  MemoryScope,
+  MemorySourceRef,
+  MemoryUsage,
   Project,
   Issue,
   IssueComment,
@@ -34,6 +47,7 @@ export type {
   PluginJobDeclaration,
   PluginWebhookDeclaration,
   PluginToolDeclaration,
+  PluginMemoryProviderDeclaration,
   PluginUiSlotDeclaration,
   PluginUiDeclaration,
   PluginLauncherActionDeclaration,
@@ -60,6 +74,19 @@ export type {
   PluginEventType,
   PluginBridgeErrorCode,
   Company,
+  MemoryBinding,
+  MemoryBindingTarget,
+  MemoryCaptureResult,
+  MemoryForgetResult,
+  MemoryOperation,
+  MemoryProviderCapabilities,
+  MemoryProviderDescriptor,
+  MemoryQueryResult,
+  MemoryRecord,
+  MemoryResolvedBinding,
+  MemoryScope,
+  MemorySourceRef,
+  MemoryUsage,
   Project,
   Issue,
   IssueComment,
@@ -143,6 +170,30 @@ export interface PluginEvent<TPayload = unknown> {
   companyId: string;
   /** Typed event payload. */
   payload: TPayload;
+}
+
+export interface PluginMemoryProvider {
+  key: string;
+  displayName: string;
+  description?: string;
+  capabilities?: Partial<MemoryProviderCapabilities>;
+  query?(input: {
+    scope: MemoryScope;
+    query: string;
+    topK?: number;
+    metadataFilter?: Record<string, unknown>;
+  }): Promise<MemoryQueryResult>;
+  capture?(input: {
+    scope: MemoryScope;
+    source: MemorySourceRef;
+    title?: string | null;
+    content: string;
+    summary?: string | null;
+    metadata?: Record<string, unknown>;
+  }): Promise<MemoryCaptureResult>;
+  list?(input: { scope: MemoryScope; limit?: number }): Promise<MemoryRecord[]>;
+  get?(input: { scope: MemoryScope; recordId: string }): Promise<MemoryRecord | null>;
+  forget?(input: { scope: MemoryScope; recordIds: string[] }): Promise<MemoryForgetResult>;
 }
 
 // ---------------------------------------------------------------------------
