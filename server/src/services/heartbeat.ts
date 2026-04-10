@@ -2062,6 +2062,9 @@ export function heartbeatService(db: Db) {
   ) {
     const contextSnapshot = parseObject(run.contextSnapshot);
     const issueId = readNonEmptyString(contextSnapshot.issueId);
+    const isPromotedDeferredCommentWake =
+      readNonEmptyString(contextSnapshot.wakeReason) === "issue_execution_promoted" &&
+      extractWakeCommentIds(contextSnapshot).length > 0;
     if (!issueId) {
       if (run.issueCommentStatus !== "not_applicable") {
         await patchRunIssueCommentStatus(run.id, {
@@ -2070,6 +2073,15 @@ export function heartbeatService(db: Db) {
           issueCommentRetryQueuedAt: null,
         });
       }
+      return { outcome: "not_applicable" as const, queuedRun: null };
+    }
+
+    if (isPromotedDeferredCommentWake) {
+      await patchRunIssueCommentStatus(run.id, {
+        issueCommentStatus: "not_applicable",
+        issueCommentSatisfiedByCommentId: null,
+        issueCommentRetryQueuedAt: null,
+      });
       return { outcome: "not_applicable" as const, queuedRun: null };
     }
 
