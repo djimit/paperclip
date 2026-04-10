@@ -537,13 +537,13 @@ export function IssueDocumentsSection({
   }, []);
 
   const previewRevision = useCallback((doc: IssueDocument, revisionId: string) => {
-    const revisions = getDocumentRevisions(doc.key);
-    const selectedRevision = revisions.find((revision) => revision.id === revisionId);
-    if (!selectedRevision) return;
-    if (selectedRevision.id === doc.latestRevisionId) {
+    if (revisionId === doc.latestRevisionId) {
       returnToLatestRevision(doc.key);
       return;
     }
+    const revisions = getDocumentRevisions(doc.key);
+    const selectedRevision = revisions.find((revision) => revision.id === revisionId);
+    if (!selectedRevision) return;
     if (documentConflict?.key === doc.key || documentHasUnsavedChanges(doc, draft)) {
       setError("Save or cancel your local changes before viewing an older revision.");
       return;
