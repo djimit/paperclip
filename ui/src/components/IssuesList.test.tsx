@@ -297,7 +297,10 @@ describe("IssuesList", () => {
     );
 
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("Columns");
+      const columnsButton = Array.from(document.body.querySelectorAll("button")).find(
+        (button) => button.getAttribute("title") === "Columns",
+      );
+      expect(columnsButton).toBeDefined();
       expect(container.textContent).toContain("PAP-9");
       expect(container.textContent).toContain("Agent One");
       expect(container.textContent).not.toContain("Updated");
@@ -341,7 +344,7 @@ describe("IssuesList", () => {
 
     await act(async () => {
       const filterButton = Array.from(document.body.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("Filter"),
+        (button) => button.getAttribute("title") === "Filter",
       );
       filterButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
@@ -365,6 +368,77 @@ describe("IssuesList", () => {
     await waitForAssertion(() => {
       expect(container.textContent).toContain("Routine issue");
     });
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("blurs the search input on Enter without clearing the query", async () => {
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[createIssue()]}
+        agents={[]}
+        projects={[]}
+        viewStateKey="paperclip:test-issues"
+        initialSearch="bug"
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+
+    await waitForAssertion(() => {
+      const input = container.querySelector('input[aria-label="Search issues"]') as HTMLInputElement | null;
+      expect(input).not.toBeNull();
+      input?.focus();
+      expect(document.activeElement).toBe(input);
+    });
+
+    const input = container.querySelector('input[aria-label="Search issues"]') as HTMLInputElement;
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+      }));
+    });
+
+    expect(document.activeElement).not.toBe(input);
+    expect(input.value).toBe("bug");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("blurs the search input on Escape once the field is empty", async () => {
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[createIssue()]}
+        agents={[]}
+        projects={[]}
+        viewStateKey="paperclip:test-issues"
+        initialSearch=""
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+
+    await waitForAssertion(() => {
+      const input = container.querySelector('input[aria-label="Search issues"]') as HTMLInputElement | null;
+      expect(input).not.toBeNull();
+      input?.focus();
+      expect(document.activeElement).toBe(input);
+    });
+
+    const input = container.querySelector('input[aria-label="Search issues"]') as HTMLInputElement;
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+      }));
+    });
+
+    expect(document.activeElement).not.toBe(input);
 
     act(() => {
       root.unmount();

@@ -4,11 +4,15 @@ import remarkGfm from "remark-gfm";
 import { cn } from "../lib/utils";
 import { useTheme } from "../context/ThemeContext";
 import { mentionChipInlineStyle, parseMentionChipHref } from "../lib/mention-chips";
+import { Link } from "@/lib/router";
+import { parseIssueReferenceFromHref, remarkLinkIssueReferences } from "../lib/issue-reference";
+import { remarkSoftBreaks } from "../lib/remark-soft-breaks";
 
 interface MarkdownBodyProps {
   children: string;
   className?: string;
   style?: React.CSSProperties;
+  softBreaks?: boolean;
   /** Optional resolver for relative image paths (e.g. within export packages) */
   resolveImageSrc?: (src: string) => string | null;
   /** Called when a user clicks an inline image */
@@ -94,8 +98,11 @@ function MermaidDiagramBlock({ source, darkMode }: { source: string; darkMode: b
   );
 }
 
-export function MarkdownBody({ children, className, style, resolveImageSrc, onImageClick }: MarkdownBodyProps) {
+export function MarkdownBody({ children, className, style, softBreaks = true, resolveImageSrc, onImageClick }: MarkdownBodyProps) {
   const { theme } = useTheme();
+  const remarkPlugins = softBreaks
+    ? [remarkGfm, remarkLinkIssueReferences, remarkSoftBreaks]
+    : [remarkGfm, remarkLinkIssueReferences];
   const components: Components = {
     pre: ({ node: _node, children: preChildren, ...preProps }) => {
       const mermaidSource = extractMermaidSource(preChildren);
@@ -105,6 +112,15 @@ export function MarkdownBody({ children, className, style, resolveImageSrc, onIm
       return <pre {...preProps}>{preChildren}</pre>;
     },
     a: ({ href, children: linkChildren }) => {
+      const issueRef = parseIssueReferenceFromHref(href);
+      if (issueRef) {
+        return (
+          <Link to={issueRef.href}>
+            {linkChildren}
+          </Link>
+        );
+      }
+
       const parsed = href ? parseMentionChipHref(href) : null;
       if (parsed) {
         const targetHref = parsed.kind === "project"
@@ -159,7 +175,7 @@ export function MarkdownBody({ children, className, style, resolveImageSrc, onIm
       )}
       style={style}
     >
-      <Markdown remarkPlugins={[remarkGfm]} components={components} urlTransform={(url) => url}>
+      <Markdown remarkPlugins={remarkPlugins} components={components} urlTransform={(url) => url}>
         {children}
       </Markdown>
     </div>

@@ -7,6 +7,10 @@ import { issuesApi } from "../api/issues";
 import { authApi } from "../api/auth";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
+import {
+  shouldBlurPageSearchOnEnter,
+  shouldBlurPageSearchOnEscape,
+} from "../lib/keyboardShortcuts";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import { groupBy } from "../lib/groupBy";
 import {
@@ -170,9 +174,27 @@ function IssueSearchInput({
         onChange={(e) => {
           setDraftValue(e.target.value);
         }}
+        onKeyDown={(e) => {
+          if (shouldBlurPageSearchOnEnter({
+            key: e.key,
+            isComposing: e.nativeEvent.isComposing,
+          })) {
+            e.currentTarget.blur();
+            return;
+          }
+
+          if (shouldBlurPageSearchOnEscape({
+            key: e.key,
+            isComposing: e.nativeEvent.isComposing,
+            currentValue: e.currentTarget.value,
+          })) {
+            e.currentTarget.blur();
+          }
+        }}
         placeholder="Search issues..."
         className="pl-7 text-xs sm:text-sm"
         aria-label="Search issues"
+        data-page-search-target="true"
       />
     </div>
   );
@@ -531,6 +553,7 @@ export function IssuesList({
             onToggleColumn={toggleIssueColumn}
             onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
             title="Choose which issue columns stay visible"
+            iconOnly
           />
 
           <IssueFiltersPopover
@@ -542,15 +565,16 @@ export function IssuesList({
             labels={labels?.map((label) => ({ id: label.id, name: label.name, color: label.color }))}
             currentUserId={currentUserId}
             enableRoutineVisibilityFilter={enableRoutineVisibilityFilter}
+            iconOnly
+            workspaces={isolatedWorkspacesEnabled ? executionWorkspaces.filter((w) => w.mode === "isolated_workspace" && w.status === "active").map((w) => ({ id: w.id, name: w.name })) : undefined}
           />
 
           {/* Sort (list view only) */}
           {viewState.viewMode === "list" && (
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="ghost" size="sm" className="text-xs">
-                  <ArrowUpDown className="h-3.5 w-3.5 sm:h-3 sm:w-3 sm:mr-1" />
-                  <span className="hidden sm:inline">Sort</span>
+                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Sort">
+                  <ArrowUpDown className="h-3.5 w-3.5" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent align="end" className="w-48 p-0">
@@ -592,9 +616,8 @@ export function IssuesList({
           {viewState.viewMode === "list" && (
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="ghost" size="sm" className="text-xs">
-                  <Layers className="h-3.5 w-3.5 sm:h-3 sm:w-3 sm:mr-1" />
-                  <span className="hidden sm:inline">Group</span>
+                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Group">
+                  <Layers className="h-3.5 w-3.5" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent align="end" className="w-44 p-0">

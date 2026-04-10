@@ -167,6 +167,8 @@ export function IssueProperties({
   const [projectSearch, setProjectSearch] = useState("");
   const [blockedByOpen, setBlockedByOpen] = useState(false);
   const [blockedBySearch, setBlockedBySearch] = useState("");
+  const [parentOpen, setParentOpen] = useState(false);
+  const [parentSearch, setParentSearch] = useState("");
   const [reviewersOpen, setReviewersOpen] = useState(false);
   const [reviewerSearch, setReviewerSearch] = useState("");
   const [approversOpen, setApproversOpen] = useState(false);
@@ -212,7 +214,7 @@ export function IssueProperties({
   const { data: allIssues } = useQuery({
     queryKey: queryKeys.issues.list(companyId!),
     queryFn: () => issuesApi.list(companyId!),
-    enabled: !!companyId && blockedByOpen,
+    enabled: !!companyId && (blockedByOpen || parentOpen),
   });
 
   const createLabel = useMutation({
@@ -685,6 +687,100 @@ export function IssueProperties({
   );
 
   const blockedByIds = issue.blockedBy?.map((relation) => relation.id) ?? [];
+  const descendantIssueIds = useMemo(() => {
+    if (!allIssues?.length) return new Set<string>();
+    const childrenByParentId = new Map<string, string[]>();
+    for (const candidate of allIssues) {
+      if (!candidate.parentId) continue;
+      const children = childrenByParentId.get(candidate.parentId) ?? [];
+      children.push(candidate.id);
+      childrenByParentId.set(candidate.parentId, children);
+    }
+
+    const descendants = new Set<string>();
+    const stack = [...(childrenByParentId.get(issue.id) ?? [])];
+    while (stack.length > 0) {
+      const candidateId = stack.pop();
+      if (!candidateId || descendants.has(candidateId)) continue;
+      descendants.add(candidateId);
+      stack.push(...(childrenByParentId.get(candidateId) ?? []));
+    }
+    return descendants;
+  }, [allIssues, issue.id]);
+  const currentParentIssue = useMemo(() => {
+    if (!issue.parentId) return null;
+    return allIssues?.find((candidate) => candidate.id === issue.parentId) ?? null;
+  }, [allIssues, issue.parentId]);
+  const parentTrigger = issue.parentId ? (
+    <span className="text-sm truncate">
+      {issue.ancestors?.[0]?.identifier ?? currentParentIssue?.identifier
+        ? `${issue.ancestors?.[0]?.identifier ?? currentParentIssue?.identifier} `
+        : ""}
+      {issue.ancestors?.[0]?.title ?? currentParentIssue?.title ?? issue.parentId.slice(0, 8)}
+    </span>
+  ) : (
+    <span className="text-sm text-muted-foreground">No parent</span>
+  );
+  const parentOptions = (allIssues ?? [])
+    .filter((candidate) => candidate.id !== issue.id)
+    .filter((candidate) => !descendantIssueIds.has(candidate.id))
+    .filter((candidate) => {
+      if (!parentSearch.trim()) return true;
+      const query = parentSearch.toLowerCase();
+      return (
+        (candidate.identifier ?? "").toLowerCase().includes(query) ||
+        candidate.title.toLowerCase().includes(query)
+      );
+    })
+    .sort((a, b) => {
+      const aLabel = `${a.identifier ?? ""} ${a.title}`.trim();
+      const bLabel = `${b.identifier ?? ""} ${b.title}`.trim();
+      return aLabel.localeCompare(bLabel);
+    });
+  const parentContent = (
+    <>
+      <input
+        className="w-full px-2 py-1.5 text-xs bg-transparent outline-none border-b border-border mb-1 placeholder:text-muted-foreground/50"
+        placeholder="Search issues..."
+        value={parentSearch}
+        onChange={(e) => setParentSearch(e.target.value)}
+        autoFocus={!inline}
+      />
+      <div className="max-h-48 overflow-y-auto overscroll-contain">
+        <button
+          className={cn(
+            "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
+            !issue.parentId && "bg-accent",
+          )}
+          onClick={() => {
+            onUpdate({ parentId: null });
+            setParentOpen(false);
+          }}
+        >
+          No parent
+        </button>
+        {parentOptions.map((candidate) => (
+          <button
+            key={candidate.id}
+            className={cn(
+              "flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs rounded hover:bg-accent/50",
+              candidate.id === issue.parentId && "bg-accent",
+            )}
+            onClick={() => {
+              onUpdate({ parentId: candidate.id });
+              setParentOpen(false);
+            }}
+          >
+            <StatusIcon status={candidate.status} />
+            <span className="truncate">
+              {candidate.identifier ? `${candidate.identifier} ` : ""}
+              {candidate.title}
+            </span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
   const blockedByTrigger = blockedByIds.length > 0 ? (
     <div className="flex items-center gap-1 flex-wrap min-w-0">
       {(issue.blockedBy ?? []).slice(0, 2).map((relation) => (
@@ -840,6 +936,30 @@ export function IssueProperties({
 
         <PropertyPicker
           inline={inline}
+          label="Parent"
+          open={parentOpen}
+          onOpenChange={(open) => {
+            setParentOpen(open);
+            if (!open) setParentSearch("");
+          }}
+          triggerContent={parentTrigger}
+          triggerClassName="min-w-0 max-w-full"
+          popoverClassName="w-72"
+          extra={issue.parentId ? (
+            <Link
+              to={`/issues/${issue.ancestors?.[0]?.identifier ?? currentParentIssue?.identifier ?? issue.parentId}`}
+              className="inline-flex items-center justify-center h-5 w-5 rounded hover:bg-accent/50 transition-colors text-muted-foreground hover:text-foreground"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ArrowUpRight className="h-3 w-3" />
+            </Link>
+          ) : undefined}
+        >
+          {parentContent}
+        </PropertyPicker>
+
+        <PropertyPicker
+          inline={inline}
           label="Blocked by"
           open={blockedByOpen}
           onOpenChange={(open) => {
@@ -939,16 +1059,6 @@ export function IssueProperties({
           </PropertyRow>
         )}
 
-        {issue.parentId && (
-          <PropertyRow label="Parent">
-            <Link
-              to={`/issues/${issue.ancestors?.[0]?.identifier ?? issue.parentId}`}
-              className="text-sm hover:underline"
-            >
-              {issue.ancestors?.[0]?.title ?? issue.parentId.slice(0, 8)}
-            </Link>
-          </PropertyRow>
-        )}
         {issue.requestDepth > 0 && (
           <PropertyRow label="Depth">
             <span className="text-sm font-mono">{issue.requestDepth}</span>
