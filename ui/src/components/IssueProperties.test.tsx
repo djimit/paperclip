@@ -416,6 +416,23 @@ describe("IssueProperties", () => {
     act(() => root.unmount());
   });
 
+  it("shows referenced task ids when the issue points at other tasks", async () => {
+    const root = renderProperties(container, {
+      issue: createIssue({
+        referencedIssueIdentifiers: ["PAP-22", "PAP-44"],
+      }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+    });
+    await flush();
+
+    expect(container.textContent).toContain("Task ids");
+    expect(container.textContent).toContain("PAP-22");
+    expect(container.textContent).toContain("PAP-44");
+
+    act(() => root.unmount());
+  });
+
   it("shows an add-label button when labels already exist and opens the picker", async () => {
     const root = renderProperties(container, {
       issue: createIssue({
@@ -531,7 +548,6 @@ describe("IssueProperties", () => {
 
     act(() => rerenderedRoot.unmount());
   });
-
   it("shows a run review action after reviewers are configured and starts execution explicitly when clicked", async () => {
     const onUpdate = vi.fn();
     const root = renderProperties(container, {

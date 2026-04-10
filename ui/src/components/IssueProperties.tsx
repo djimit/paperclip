@@ -26,6 +26,7 @@ import { buildExecutionPolicy, stageParticipantValues } from "../lib/issue-execu
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon } from "./PriorityIcon";
 import { Identity } from "./Identity";
+import { IssueReferencePill } from "./IssueReferencePill";
 import { formatDate, cn, projectUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Separator } from "@/components/ui/separator";
@@ -295,6 +296,7 @@ export function IssueProperties({
     if (isMainIssueWorkspace({ issue, project: issueProject })) return null;
     return runningRuntimeServiceWithUrl(issue.currentExecutionWorkspace?.runtimeServices);
   }, [issue, issueProject]);
+  const referencedIssueIdentifiers = issue.referencedIssueIdentifiers ?? [];
   const projectLink = (id: string | null) => {
     if (!id) return null;
     const project = projects?.find((p) => p.id === id) ?? null;
@@ -1091,6 +1093,21 @@ export function IssueProperties({
               ))}
             </div>
           ) : null}
+        </PropertyRow>
+
+        <PropertyRow label="Task ids">
+          {referencedIssueIdentifiers.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {referencedIssueIdentifiers.map((identifier) => (
+                <IssueReferencePill
+                  key={identifier}
+                  issue={{ id: identifier, identifier, title: identifier }}
+                />
+              ))}
+            </div>
+          ) : (
+            <span className="text-sm text-muted-foreground">None</span>
+          )}
         </PropertyRow>
 
         <PropertyRow label="Sub-issues">

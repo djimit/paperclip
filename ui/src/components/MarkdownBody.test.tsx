@@ -4,7 +4,13 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { buildAgentMentionHref, buildProjectMentionHref, buildSkillMentionHref, buildUserMentionHref } from "@paperclipai/shared";
+import {
+  buildAgentMentionHref,
+  buildIssueReferenceHref,
+  buildProjectMentionHref,
+  buildSkillMentionHref,
+  buildUserMentionHref,
+} from "@paperclipai/shared";
 import { ThemeProvider } from "../context/ThemeContext";
 import { MarkdownBody } from "./MarkdownBody";
 import { queryKeys } from "../lib/queryKeys";
@@ -216,5 +222,16 @@ describe("MarkdownBody", () => {
 
     expect(html).toContain("<pre");
     expect(html).toContain('style="max-width:100%;overflow-x:auto"');
+  });
+
+  it("renders internal issue links and bare identifiers as issue chips", () => {
+    const html = renderMarkdown(`See PAP-42 and [linked task](${buildIssueReferenceHref("PAP-77")}) for follow-up.`, [
+      { identifier: "PAP-42", status: "done" },
+      { identifier: "PAP-77", status: "blocked" },
+    ]);
+
+    expect(html).toContain('href="/issues/PAP-42"');
+    expect(html).toContain('href="/issues/PAP-77"');
+    expect(html).toContain('data-mention-kind="issue"');
   });
 });
