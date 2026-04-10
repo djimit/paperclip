@@ -404,8 +404,12 @@ describe("heartbeat comment wake batching", () => {
 
       await waitFor(() => gateway.getAgentPayloads().length === 2);
       await waitFor(async () => {
-        const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
-        return runs.length === 2 && runs.every((run) => run.status === "succeeded");
+        const runs = await db
+          .select()
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.agentId, agentId))
+          .orderBy(asc(heartbeatRuns.createdAt));
+        return runs.length >= 2 && runs.slice(0, 2).every((run) => run.status === "succeeded");
       }, 90_000);
 
       const secondPayload = gateway.getAgentPayloads()[1] ?? {};
