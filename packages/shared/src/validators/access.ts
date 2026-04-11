@@ -50,6 +50,12 @@ export const listJoinRequestsQuerySchema = z.object({
 
 export type ListJoinRequestsQuery = z.infer<typeof listJoinRequestsQuerySchema>;
 
+export const listCompanyInvitesQuerySchema = z.object({
+  state: z.enum(["active", "revoked", "accepted", "expired"]).optional(),
+});
+
+export type ListCompanyInvitesQuery = z.infer<typeof listCompanyInvitesQuerySchema>;
+
 export const claimJoinRequestApiKeySchema = z.object({
   claimSecret: z.string().min(16).max(256),
 });
@@ -103,3 +109,58 @@ export const updateUserCompanyAccessSchema = z.object({
 });
 
 export type UpdateUserCompanyAccess = z.infer<typeof updateUserCompanyAccessSchema>;
+
+export const searchAdminUsersQuerySchema = z.object({
+  query: z.string().trim().max(120).optional().default(""),
+});
+
+export type SearchAdminUsersQuery = z.infer<typeof searchAdminUsersQuerySchema>;
+
+const profileImageAssetPathPattern = /^\/api\/assets\/[^/?#]+\/content(?:\?[^#]*)?(?:#.*)?$/;
+
+function isValidProfileImage(value: string): boolean {
+  if (profileImageAssetPathPattern.test(value)) return true;
+
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const profileImageSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4000)
+  .refine(isValidProfileImage, { message: "Invalid profile image URL" });
+
+export const currentUserProfileSchema = z.object({
+  id: z.string().min(1),
+  email: z.string().email().nullable(),
+  name: z.string().min(1).max(120).nullable(),
+  image: profileImageSchema.nullable(),
+});
+
+export type CurrentUserProfile = z.infer<typeof currentUserProfileSchema>;
+
+export const authSessionSchema = z.object({
+  session: z.object({
+    id: z.string().min(1),
+    userId: z.string().min(1),
+  }),
+  user: currentUserProfileSchema,
+});
+
+export type AuthSession = z.infer<typeof authSessionSchema>;
+
+export const updateCurrentUserProfileSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  image: z
+    .union([profileImageSchema, z.literal(""), z.null()])
+    .optional()
+    .transform((value) => value === "" ? null : value),
+});
+
+export type UpdateCurrentUserProfile = z.infer<typeof updateCurrentUserProfileSchema>;

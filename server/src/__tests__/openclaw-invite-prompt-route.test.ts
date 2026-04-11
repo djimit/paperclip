@@ -76,7 +76,8 @@ function createDbStub() {
     "feedbackDataSharingEnabled" in table;
   const select = vi.fn((selection?: unknown) => ({
     from(table: unknown) {
-      return {
+      const query = {
+        leftJoin: vi.fn().mockReturnThis(),
         where: vi.fn().mockImplementation(() => {
           if (isInvitesTable(table)) {
             return Promise.resolve([createdInvite]);
@@ -85,11 +86,16 @@ function createDbStub() {
             (selection && typeof selection === "object" && "name" in selection) ||
             isCompaniesTable(table)
           ) {
-            return Promise.resolve([{ name: "Acme AI" }]);
+            return Promise.resolve([{
+              name: "Acme AI",
+              brandColor: "#225577",
+              logoAssetId: "logo-1",
+            }]);
           }
           return Promise.resolve([]);
         }),
       };
+      return query;
     },
   }));
   return {
@@ -208,6 +214,8 @@ describe("POST /companies/:companyId/openclaw/invite-prompt", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.companyName).toBe("Acme AI");
+    expect(res.body.companyBrandColor).toBe("#225577");
+    expect(res.body.companyLogoUrl).toBe("/api/assets/logo-1/content");
     expect(res.body.inviteType).toBe("company_join");
     expect(res.body.allowedJoinTypes).toBe("agent");
   });

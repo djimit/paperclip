@@ -34,7 +34,7 @@ function createDbStub() {
     allowedJoinTypes: "human",
     tokenHash: "hash",
     defaultsPayload: { humanRole: "viewer" },
-    expiresAt: new Date("2027-03-07T00:10:00.000Z"),
+    expiresAt: new Date("2027-03-10T00:00:00.000Z"),
     invitedByUserId: null,
     revokedAt: null,
     acceptedAt: null,

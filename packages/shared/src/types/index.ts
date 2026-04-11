@@ -166,11 +166,20 @@ export type { ActivityEvent } from "./activity.js";
 export type { SidebarBadges } from "./sidebar-badges.js";
 export type { InboxDismissal } from "./inbox-dismissal.js";
 export type {
+  AccessUserProfile,
+  CompanyMemberRecord,
+  CompanyMembersResponse,
   CompanyMembership,
+  CompanyInviteRecord,
   PrincipalPermissionGrant,
   Invite,
   JoinRequest,
+  JoinRequestInviteSummary,
+  JoinRequestRecord,
   InstanceUserRoleGrant,
+  AdminUserDirectoryEntry,
+  UserCompanyAccessEntry,
+  UserCompanyAccessResponse,
 } from "./access.js";
 export type { QuotaWindow, ProviderQuotaResult } from "./quota.js";
 export type {

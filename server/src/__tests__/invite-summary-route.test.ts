@@ -5,13 +5,17 @@ import { accessRoutes } from "../routes/access.js";
 import { errorHandler } from "../middleware/index.js";
 
 function createSelectChain(rows: unknown[]) {
+  const query = {
+    leftJoin() {
+      return query;
+    },
+    where() {
+      return Promise.resolve(rows);
+    },
+  };
   return {
     from() {
-      return {
-        where() {
-          return Promise.resolve(rows);
-        },
-      };
+      return query;
     },
   };
 }
@@ -48,7 +52,7 @@ function createApp(db: Record<string, unknown>) {
 }
 
 describe("GET /invites/:token", () => {
-  it("returns companyName in the invite summary response", async () => {
+  it("returns company branding in the invite summary response", async () => {
     const invite = {
       id: "invite-1",
       companyId: "company-1",
@@ -64,7 +68,11 @@ describe("GET /invites/:token", () => {
       updatedAt: new Date("2026-03-07T00:00:00.000Z"),
     };
     const app = createApp(
-      createDbStub([invite], [{ name: "Acme Robotics" }]),
+      createDbStub([invite], [{
+        name: "Acme Robotics",
+        brandColor: "#114488",
+        logoAssetId: "logo-1",
+      }]),
     );
 
     const res = await request(app).get("/api/invites/pcp_invite_test");
@@ -72,6 +80,8 @@ describe("GET /invites/:token", () => {
     expect(res.status).toBe(200);
     expect(res.body.companyId).toBe("company-1");
     expect(res.body.companyName).toBe("Acme Robotics");
+    expect(res.body.companyBrandColor).toBe("#114488");
+    expect(res.body.companyLogoUrl).toBe("/api/assets/logo-1/content");
     expect(res.body.inviteType).toBe("company_join");
   });
 });
