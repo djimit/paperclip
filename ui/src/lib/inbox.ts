@@ -555,12 +555,20 @@ export function getApprovalsForTab(
   approvals: Approval[],
   tab: InboxTab,
   filter: InboxApprovalFilter,
+  currentUserId?: string | null,
 ): Approval[] {
   const sortedApprovals = [...approvals].sort(
     (a, b) => normalizeTimestamp(b.updatedAt) - normalizeTimestamp(a.updatedAt),
   );
 
-  if (tab === "mine" || tab === "recent") return sortedApprovals;
+  if (tab === "mine") {
+    if (!currentUserId) return [];
+    return sortedApprovals.filter(
+      (approval) =>
+        approval.requestedByUserId === currentUserId || approval.decidedByUserId === currentUserId,
+    );
+  }
+  if (tab === "recent") return sortedApprovals;
   if (tab === "unread") {
     return sortedApprovals.filter((approval) => ACTIONABLE_APPROVAL_STATUSES.has(approval.status));
   }
@@ -759,6 +767,7 @@ export function computeInboxBadgeData({
   mineIssues,
   dismissedAlerts,
   dismissedAtByKey,
+  currentUserId,
 }: {
   approvals: Approval[];
   joinRequests: JoinRequest[];
@@ -767,9 +776,12 @@ export function computeInboxBadgeData({
   mineIssues: Issue[];
   dismissedAlerts: Set<string>;
   dismissedAtByKey: ReadonlyMap<string, number>;
+  currentUserId?: string | null;
 }): InboxBadgeData {
   const actionableApprovals = approvals.filter(
     (approval) =>
+      !!currentUserId &&
+      (approval.requestedByUserId === currentUserId || approval.decidedByUserId === currentUserId) &&
       ACTIONABLE_APPROVAL_STATUSES.has(approval.status) &&
       !isInboxEntityDismissed(dismissedAtByKey, `approval:${approval.id}`, approval.updatedAt),
   ).length;
