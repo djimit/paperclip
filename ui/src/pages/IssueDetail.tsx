@@ -15,6 +15,7 @@ import { useDialog } from "../context/DialogContext";
 import { usePanel } from "../context/PanelContext";
 import { useToast } from "../context/ToastContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useSidebar } from "../context/SidebarContext";
 import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../lib/assignees";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
@@ -78,6 +79,8 @@ import { formatIssueActivityAction } from "@/lib/activity-format";
 import { resolveIssueChatTranscriptRuns } from "../lib/issueChatTranscriptRuns";
 import {
   Activity as ActivityIcon,
+  Archive,
+  ArrowLeft,
   Check,
   ChevronRight,
   Copy,
@@ -86,6 +89,7 @@ import {
   ListTree,
   MessageSquare,
   MoreHorizontal,
+  MoreVertical,
   Paperclip,
   Repeat,
   SlidersHorizontal,
@@ -371,12 +375,14 @@ export function IssueDetail() {
   const { selectedCompanyId } = useCompany();
   const { openNewIssue } = useDialog();
   const { openPanel, closePanel, panelVisible, setPanelVisible } = usePanel();
-  const { setBreadcrumbs } = useBreadcrumbs();
+  const { setBreadcrumbs, setMobileToolbar } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
   const { pushToast } = useToast();
+  const { isMobile } = useSidebar();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [inboxMoreOpen, setInboxMoreOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [mobilePropsOpen, setMobilePropsOpen] = useState(false);
   const [detailTab, setDetailTab] = useState("chat");
@@ -1441,6 +1447,8 @@ export function IssueDetail() {
     ]);
   }, [setBreadcrumbs, sourceBreadcrumb, issue, issueId, hasLiveRuns]);
 
+  const isFromInbox = resolvedIssueDetailState?.issueDetailSource === "inbox";
+
   // Redirect to identifier-based URL if navigated via UUID
   useEffect(() => {
     const nextState = resolvedIssueDetailState ?? location.state;
@@ -1653,6 +1661,95 @@ export function IssueDetail() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Gmail-style mobile toolbar when viewing an issue from inbox
+  useEffect(() => {
+    if (!isMobile || !isFromInbox) {
+      setMobileToolbar(null);
+      return;
+    }
+
+    setMobileToolbar(
+      <div className="flex items-center w-full">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => navigate(sourceBreadcrumb.href ?? "/inbox")}
+          aria-label="Back to inbox"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+
+        <div className="ml-auto flex items-center gap-0.5">
+          {issue?.id && !issue.hiddenAt && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => {
+                if (!archiveFromInbox.isPending && issue?.id) {
+                  archiveFromInbox.mutate(issue.id);
+                }
+              }}
+              disabled={archiveFromInbox.isPending}
+              aria-label="Archive from inbox"
+            >
+              <Archive className="h-5 w-5" />
+            </Button>
+          )}
+
+          <Popover open={inboxMoreOpen} onOpenChange={setInboxMoreOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="More actions">
+                <MoreVertical className="h-5 w-5" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-44 p-1" align="end">
+              <button
+                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+                onClick={() => {
+                  copyIssueToClipboard();
+                  setInboxMoreOpen(false);
+                }}
+              >
+                <Copy className="h-3 w-3" />
+                Copy as markdown
+              </button>
+              <button
+                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+                onClick={() => {
+                  setMobilePropsOpen(true);
+                  setInboxMoreOpen(false);
+                }}
+              >
+                <SlidersHorizontal className="h-3 w-3" />
+                Properties
+              </button>
+              {issue?.id && (
+                <button
+                  className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-destructive"
+                  onClick={() => {
+                    updateIssue.mutate(
+                      { hiddenAt: new Date().toISOString() },
+                      { onSuccess: () => navigate("/issues/all") },
+                    );
+                    setInboxMoreOpen(false);
+                  }}
+                >
+                  <EyeOff className="h-3 w-3" />
+                  Hide this issue
+                </button>
+              )}
+            </PopoverContent>
+          </Popover>
+        </div>
+      </div>,
+    );
+
+    return () => setMobileToolbar(null);
+  }, [
+    isMobile, isFromInbox, issue, sourceBreadcrumb, navigate, archiveFromInbox,
+    copyIssueToClipboard, updateIssue, setMobileToolbar, inboxMoreOpen, setMobilePropsOpen,
+  ]);
+
   const issueChatCoreInitialLoading =
     (commentsLoading && commentPages === undefined)
     || (activityLoading && activity === undefined)
@@ -1842,24 +1939,26 @@ export function IssueDetail() {
             </div>
           )}
 
-          <div className="ml-auto flex items-center gap-0.5 md:hidden shrink-0">
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={copyIssueToClipboard}
-              title="Copy issue as markdown"
-            >
-              {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => setMobilePropsOpen(true)}
-              title="Properties"
-            >
-              <SlidersHorizontal className="h-4 w-4" />
-            </Button>
-          </div>
+          {!(isMobile && isFromInbox) && (
+            <div className="ml-auto flex items-center gap-0.5 md:hidden shrink-0">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={copyIssueToClipboard}
+                title="Copy issue as markdown"
+              >
+                {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => setMobilePropsOpen(true)}
+                title="Properties"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
 
           <div className="hidden md:flex items-center md:ml-auto shrink-0">
             <Button
