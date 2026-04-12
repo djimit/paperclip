@@ -3486,9 +3486,12 @@ export function heartbeatService(db: Db) {
         });
         if (issueId && outcome === "succeeded") {
           try {
-            const issueComment = buildHeartbeatRunIssueComment(persistedResultJson);
-            if (issueComment) {
-              await issuesSvc.addComment(issueId, issueComment, { agentId: agent.id, runId: finalizedRun.id });
+            const existingRunComment = await findRunIssueComment(finalizedRun.id, finalizedRun.companyId, issueId);
+            if (!existingRunComment) {
+              const issueComment = buildHeartbeatRunIssueComment(persistedResultJson);
+              if (issueComment) {
+                await issuesSvc.addComment(issueId, issueComment, { agentId: agent.id, runId: finalizedRun.id });
+              }
             }
           } catch (err) {
             await onLog(
