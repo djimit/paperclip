@@ -16,7 +16,7 @@ import { projectsApi } from "../api/projects";
 import { IssuesList } from "../components/IssuesList";
 import { PageTabBar } from "../components/PageTabBar";
 import {
-  buildWorkspaceRuntimeControlItems,
+  buildWorkspaceRuntimeControlSections,
   WorkspaceRuntimeControls,
   type WorkspaceRuntimeControlRequest,
 } from "../components/WorkspaceRuntimeControls";
@@ -90,7 +90,7 @@ function parseWorkspaceRuntimeJson(value: string) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         ok: false as const,
-        error: "Workspace runtime JSON must be a JSON object.",
+        error: "Workspace commands JSON must be a JSON object.",
       };
     }
     return { ok: true as const, value: parsed as Record<string, unknown> };
@@ -423,23 +423,25 @@ export function ExecutionWorkspaceDetail() {
   });
   const controlRuntimeServices = useMutation({
     mutationFn: (request: WorkspaceRuntimeControlRequest) =>
-      executionWorkspacesApi.controlRuntimeServices(workspace!.id, request.action, request),
+      executionWorkspacesApi.controlRuntimeCommands(workspace!.id, request.action, request),
     onSuccess: (result, request) => {
       queryClient.setQueryData(queryKeys.executionWorkspaces.detail(result.workspace.id), result.workspace);
       queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.workspaceOperations(result.workspace.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(result.workspace.projectId) });
       setErrorMessage(null);
       setRuntimeActionMessage(
-        request.action === "stop"
-          ? "Runtime service stopped."
-          : request.action === "restart"
-            ? "Runtime service restarted."
-            : "Runtime service started.",
+        request.action === "run"
+          ? "Workspace job completed."
+          : request.action === "stop"
+            ? "Workspace service stopped."
+            : request.action === "restart"
+              ? "Workspace service restarted."
+              : "Workspace service started.",
       );
     },
     onError: (error) => {
       setRuntimeActionMessage(null);
-      setErrorMessage(error instanceof Error ? error.message : "Failed to control runtime services.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to control workspace commands.");
     },
   });
 
@@ -453,11 +455,13 @@ export function ExecutionWorkspaceDetail() {
   }
   if (!workspace || !form || !initialState) return null;
 
-  const canStartRuntimeServices = Boolean(effectiveRuntimeConfig) && Boolean(workspace.cwd);
-  const runtimeControlItems = buildWorkspaceRuntimeControlItems({
+  const canRunWorkspaceCommands = Boolean(workspace.cwd);
+  const canStartRuntimeServices = Boolean(effectiveRuntimeConfig) && canRunWorkspaceCommands;
+  const runtimeControlSections = buildWorkspaceRuntimeControlSections({
     runtimeConfig: effectiveRuntimeConfig,
     runtimeServices: workspace.runtimeServices ?? [],
     canStartServices: canStartRuntimeServices,
+    canRunJobs: canRunWorkspaceCommands,
   });
   const pendingRuntimeAction = controlRuntimeServices.isPending ? controlRuntimeServices.variables ?? null : null;
 
@@ -529,8 +533,8 @@ export function ExecutionWorkspaceDetail() {
         <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="space-y-1">
-              <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime services</div>
-              <h2 className="text-lg font-semibold">Attached services</h2>
+              <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Workspace commands</div>
+              <h2 className="text-lg font-semibold">Services and jobs</h2>
               <p className="text-sm text-muted-foreground">
                 Source: {runtimeConfigSource === "execution_workspace"
                   ? "execution workspace override"
@@ -542,15 +546,16 @@ export function ExecutionWorkspaceDetail() {
           </div>
           <WorkspaceRuntimeControls
             className="mt-4"
-            items={runtimeControlItems}
+            sections={runtimeControlSections}
             isPending={controlRuntimeServices.isPending}
             pendingRequest={pendingRuntimeAction}
-            emptyMessage={
+            serviceEmptyMessage={
               effectiveRuntimeConfig
-                ? "No runtime services have been started for this execution workspace yet."
-                : "No runtime config is defined for this execution workspace yet."
+                ? "No services have been started for this execution workspace yet."
+                : "No workspace command config is defined for this execution workspace yet."
             }
-            disabledHint="Execution workspaces need both a working directory and runtime config before services can be started."
+            jobEmptyMessage="No one-shot jobs are configured for this execution workspace yet."
+            disabledHint="Execution workspaces need a working directory before local commands can run, and services also need runtime config."
             onAction={(request) => controlRuntimeServices.mutate(request)}
           />
           {!errorMessage && runtimeActionMessage ? <p className="mt-4 text-sm text-muted-foreground">{runtimeActionMessage}</p> : null}
@@ -708,33 +713,41 @@ export function ExecutionWorkspaceDetail() {
                   </div>
                 </div>
 
-                <Field label="Runtime services JSON" hint="Concrete workspace runtime settings for this execution workspace. Leave this inheriting unless you need a one-off override. If you are missing the right commands, ask your CEO to set them up for you.">
-                  <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-                    <input
-                      id="inherit-runtime-config"
-                      type="checkbox"
-                      checked={form.inheritRuntime}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        setForm((current) => {
-                          if (!current) return current;
-                          if (!checked && !current.workspaceRuntime.trim() && inheritedRuntimeConfig) {
-                            return { ...current, inheritRuntime: checked, workspaceRuntime: formatJson(inheritedRuntimeConfig) };
-                          }
-                          return { ...current, inheritRuntime: checked };
-                        });
-                      }}
-                    />
-                    <label htmlFor="inherit-runtime-config">Inherit project workspace runtime config</label>
+                <details className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-3 py-3">
+                  <summary className="cursor-pointer text-sm font-medium">Advanced runtime JSON</summary>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Override the inherited workspace command model only when this execution workspace truly needs different service or job behavior.
+                  </p>
+                  <div className="mt-3">
+                    <Field label="Workspace commands JSON" hint="Legacy `services` arrays still work, but `commands` supports both services and jobs.">
+                      <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                        <input
+                          id="inherit-runtime-config"
+                          type="checkbox"
+                          checked={form.inheritRuntime}
+                          onChange={(event) => {
+                            const checked = event.target.checked;
+                            setForm((current) => {
+                              if (!current) return current;
+                              if (!checked && !current.workspaceRuntime.trim() && inheritedRuntimeConfig) {
+                                return { ...current, inheritRuntime: checked, workspaceRuntime: formatJson(inheritedRuntimeConfig) };
+                              }
+                              return { ...current, inheritRuntime: checked };
+                            });
+                          }}
+                        />
+                        <label htmlFor="inherit-runtime-config">Inherit project workspace runtime config</label>
+                      </div>
+                      <textarea
+                        className="min-h-64 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-96"
+                        value={form.workspaceRuntime}
+                        onChange={(event) => setForm((current) => current ? { ...current, workspaceRuntime: event.target.value } : current)}
+                        disabled={form.inheritRuntime}
+                        placeholder={'{\n  "commands": [\n    {\n      "id": "web",\n      "name": "web",\n      "kind": "service",\n      "command": "pnpm dev",\n      "cwd": ".",\n      "port": { "type": "auto" }\n    },\n    {\n      "id": "db-migrate",\n      "name": "db:migrate",\n      "kind": "job",\n      "command": "pnpm db:migrate",\n      "cwd": "."\n    }\n  ]\n}'}
+                      />
+                    </Field>
                   </div>
-                  <textarea
-                    className="min-h-64 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-96"
-                    value={form.workspaceRuntime}
-                    onChange={(event) => setForm((current) => current ? { ...current, workspaceRuntime: event.target.value } : current)}
-                    disabled={form.inheritRuntime}
-                    placeholder={'{\n  "services": [\n    {\n      "name": "web",\n      "command": "pnpm dev",\n      "port": 3100\n    }\n  ]\n}'}
-                  />
-                </Field>
+                </details>
               </div>
 
               <div className="mt-5 flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center">

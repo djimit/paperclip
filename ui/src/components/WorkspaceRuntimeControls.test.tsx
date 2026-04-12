@@ -2,11 +2,80 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import type { WorkspaceRuntimeService } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WorkspaceRuntimeControls } from "./WorkspaceRuntimeControls";
+import {
+  buildWorkspaceRuntimeControlSections,
+  WorkspaceRuntimeControls,
+} from "./WorkspaceRuntimeControls";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+function createRuntimeService(overrides: Partial<WorkspaceRuntimeService> = {}): WorkspaceRuntimeService {
+  return {
+    id: overrides.id ?? "service-1",
+    companyId: overrides.companyId ?? "company-1",
+    projectId: overrides.projectId ?? "project-1",
+    projectWorkspaceId: overrides.projectWorkspaceId ?? "workspace-1",
+    executionWorkspaceId: overrides.executionWorkspaceId ?? null,
+    issueId: overrides.issueId ?? null,
+    scopeType: overrides.scopeType ?? "project_workspace",
+    scopeId: overrides.scopeId ?? "workspace-1",
+    serviceName: overrides.serviceName ?? "web",
+    status: overrides.status ?? "stopped",
+    lifecycle: overrides.lifecycle ?? "shared",
+    reuseKey: overrides.reuseKey ?? null,
+    command: overrides.command ?? "pnpm dev",
+    cwd: overrides.cwd ?? "/repo",
+    port: overrides.port ?? null,
+    url: overrides.url ?? null,
+    provider: overrides.provider ?? "local_process",
+    providerRef: overrides.providerRef ?? null,
+    ownerAgentId: overrides.ownerAgentId ?? null,
+    startedByRunId: overrides.startedByRunId ?? null,
+    lastUsedAt: overrides.lastUsedAt ?? new Date("2026-04-12T00:00:00.000Z"),
+    startedAt: overrides.startedAt ?? new Date("2026-04-12T00:00:00.000Z"),
+    stoppedAt: overrides.stoppedAt ?? null,
+    stopPolicy: overrides.stopPolicy ?? null,
+    healthStatus: overrides.healthStatus ?? "unknown",
+    configIndex: overrides.configIndex ?? null,
+    createdAt: overrides.createdAt ?? new Date("2026-04-12T00:00:00.000Z"),
+    updatedAt: overrides.updatedAt ?? new Date("2026-04-12T00:00:00.000Z"),
+  };
+}
+
+describe("buildWorkspaceRuntimeControlSections", () => {
+  it("separates service and job commands while matching running services", () => {
+    const sections = buildWorkspaceRuntimeControlSections({
+      runtimeConfig: {
+        commands: [
+          { id: "web", name: "web", kind: "service", command: "pnpm dev" },
+          { id: "db-migrate", name: "db:migrate", kind: "job", command: "pnpm db:migrate" },
+        ],
+      },
+      runtimeServices: [
+        createRuntimeService({ id: "service-web", serviceName: "web", status: "running" }),
+      ],
+      canStartServices: true,
+      canRunJobs: true,
+    });
+
+    expect(sections.services).toHaveLength(1);
+    expect(sections.jobs).toHaveLength(1);
+    expect(sections.services[0]).toMatchObject({
+      title: "web",
+      statusLabel: "running",
+      workspaceCommandId: "web",
+      runtimeServiceId: "service-web",
+    });
+    expect(sections.jobs[0]).toMatchObject({
+      title: "db:migrate",
+      statusLabel: "run once",
+      workspaceCommandId: "db-migrate",
+    });
+  });
+});
 
 describe("WorkspaceRuntimeControls", () => {
   let container: HTMLDivElement;
@@ -20,45 +89,67 @@ describe("WorkspaceRuntimeControls", () => {
     document.body.innerHTML = "";
   });
 
-  it("only shows start when services are not running", () => {
-    const root = createRoot(container);
-
-    act(() => {
-      root.render(<WorkspaceRuntimeControls isRunning={false} canStart onAction={vi.fn()} />);
+  it("renders service and job actions distinctly", () => {
+    const sections = buildWorkspaceRuntimeControlSections({
+      runtimeConfig: {
+        commands: [
+          { id: "web", name: "web", kind: "service", command: "pnpm dev" },
+          { id: "db-migrate", name: "db:migrate", kind: "job", command: "pnpm db:migrate" },
+        ],
+      },
+      runtimeServices: [
+        createRuntimeService({ id: "service-web", serviceName: "web", status: "running" }),
+      ],
+      canStartServices: true,
+      canRunJobs: true,
     });
 
-    const buttons = Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim());
-    expect(buttons).toEqual(["Start"]);
-  });
-
-  it("shows stop and restart when services are already running", () => {
     const root = createRoot(container);
-
-    act(() => {
-      root.render(<WorkspaceRuntimeControls isRunning canStart onAction={vi.fn()} />);
-    });
-
-    const buttons = Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim());
-    expect(buttons).toEqual(["Stop", "Restart"]);
-  });
-
-  it("keeps start visible but disabled when runtime prerequisites are missing", () => {
-    const root = createRoot(container);
-
     act(() => {
       root.render(
         <WorkspaceRuntimeControls
-          isRunning={false}
-          canStart={false}
-          disabledHint="Add runtime settings first."
+          sections={sections}
           onAction={vi.fn()}
         />,
       );
     });
 
-    const startButton = container.querySelector("button");
-    expect(startButton?.textContent?.trim()).toBe("Start");
-    expect(startButton?.hasAttribute("disabled")).toBe(true);
-    expect(container.textContent).toContain("Add runtime settings first.");
+    const buttons = Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim());
+    expect(buttons).toEqual(["Stop", "Restart", "Run"]);
+    expect(container.textContent).toContain("Services");
+    expect(container.textContent).toContain("Jobs");
+
+    act(() => root.unmount());
+  });
+
+  it("shows disabled actions when local command prerequisites are missing", () => {
+    const sections = buildWorkspaceRuntimeControlSections({
+      runtimeConfig: {
+        commands: [
+          { id: "web", name: "web", kind: "service", command: "pnpm dev" },
+          { id: "db-migrate", name: "db:migrate", kind: "job", command: "pnpm db:migrate" },
+        ],
+      },
+      runtimeServices: [],
+      canStartServices: false,
+      canRunJobs: false,
+    });
+
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <WorkspaceRuntimeControls
+          sections={sections}
+          disabledHint="Add a workspace path first."
+          onAction={vi.fn()}
+        />,
+      );
+    });
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(true);
+    expect(container.textContent).toContain("Add a workspace path first.");
+
+    act(() => root.unmount());
   });
 });

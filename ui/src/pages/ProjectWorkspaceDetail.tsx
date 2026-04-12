@@ -8,7 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { ChoosePathButton } from "../components/PathInstructionsModal";
 import { projectsApi } from "../api/projects";
 import {
-  buildWorkspaceRuntimeControlItems,
+  buildWorkspaceRuntimeControlSections,
   WorkspaceRuntimeControls,
   type WorkspaceRuntimeControlRequest,
 } from "../components/WorkspaceRuntimeControls";
@@ -103,7 +103,7 @@ function parseRuntimeConfigJson(value: string) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         ok: false as const,
-        error: "Runtime services JSON must be a JSON object.",
+        error: "Workspace commands JSON must be a JSON object.",
       };
     }
     return { ok: true as const, value: parsed as Record<string, unknown> };
@@ -309,21 +309,23 @@ export function ProjectWorkspaceDetail() {
 
   const controlRuntimeServices = useMutation({
     mutationFn: (request: WorkspaceRuntimeControlRequest) =>
-      projectsApi.controlWorkspaceRuntimeServices(project!.id, routeWorkspaceId, request.action, lookupCompanyId, request),
+      projectsApi.controlWorkspaceCommands(project!.id, routeWorkspaceId, request.action, lookupCompanyId, request),
     onSuccess: (result, request) => {
       invalidateProject();
       setErrorMessage(null);
       setRuntimeActionMessage(
-        request.action === "stop"
-          ? "Runtime service stopped."
-          : request.action === "restart"
-            ? "Runtime service restarted."
-            : "Runtime service started.",
+        request.action === "run"
+          ? "Workspace job completed."
+          : request.action === "stop"
+            ? "Workspace service stopped."
+            : request.action === "restart"
+              ? "Workspace service restarted."
+              : "Workspace service started.",
       );
     },
     onError: (error) => {
       setRuntimeActionMessage(null);
-      setErrorMessage(error instanceof Error ? error.message : "Failed to control runtime services.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to control workspace commands.");
     },
   });
 
@@ -339,11 +341,13 @@ export function ProjectWorkspaceDetail() {
     return <p className="text-sm text-muted-foreground">Workspace not found for this project.</p>;
   }
 
-  const canStartRuntimeServices = Boolean(workspace.runtimeConfig?.workspaceRuntime) && Boolean(workspace.cwd);
-  const runtimeControlItems = buildWorkspaceRuntimeControlItems({
+  const canRunWorkspaceCommands = Boolean(workspace.cwd);
+  const canStartRuntimeServices = Boolean(workspace.runtimeConfig?.workspaceRuntime) && canRunWorkspaceCommands;
+  const runtimeControlSections = buildWorkspaceRuntimeControlSections({
     runtimeConfig: workspace.runtimeConfig?.workspaceRuntime ?? null,
     runtimeServices: workspace.runtimeServices ?? [],
     canStartServices: canStartRuntimeServices,
+    canRunJobs: canRunWorkspaceCommands,
   });
   const pendingRuntimeAction = controlRuntimeServices.isPending ? controlRuntimeServices.variables ?? null : null;
 
@@ -541,14 +545,22 @@ export function ProjectWorkspaceDetail() {
                 </Field>
               </div>
 
-              <Field label="Runtime services JSON" hint="Default runtime services for this workspace. Execution workspaces inherit this config unless they set an override. If you do not know the commands yet, ask your CEO to configure them for you.">
-                <textarea
-                  className="min-h-96 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
-                  value={form.runtimeConfig}
-                  onChange={(event) => setForm((current) => current ? { ...current, runtimeConfig: event.target.value } : current)}
-                  placeholder={"{\n  \"services\": [\n    {\n      \"name\": \"web\",\n      \"command\": \"pnpm dev\",\n      \"cwd\": \".\",\n      \"port\": { \"type\": \"auto\" },\n      \"readiness\": {\n        \"type\": \"http\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"expose\": {\n        \"type\": \"url\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"lifecycle\": \"shared\",\n      \"reuseScope\": \"project_workspace\"\n    }\n  ]\n}"}
-                />
-              </Field>
+              <details className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-3 py-3">
+                <summary className="cursor-pointer text-sm font-medium">Advanced runtime JSON</summary>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Paperclip derives Services and Jobs from this JSON. Prefer editing named commands first; use raw JSON for advanced lifecycle, port, readiness, or environment settings.
+                </p>
+                <div className="mt-3">
+                  <Field label="Workspace commands JSON" hint="Execution workspaces inherit this config unless they override it. Legacy `services` arrays still work, but `commands` supports both services and jobs.">
+                    <textarea
+                      className="min-h-96 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
+                      value={form.runtimeConfig}
+                      onChange={(event) => setForm((current) => current ? { ...current, runtimeConfig: event.target.value } : current)}
+                      placeholder={"{\n  \"commands\": [\n    {\n      \"id\": \"web\",\n      \"name\": \"web\",\n      \"kind\": \"service\",\n      \"command\": \"pnpm dev\",\n      \"cwd\": \".\",\n      \"port\": { \"type\": \"auto\" },\n      \"readiness\": {\n        \"type\": \"http\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"expose\": {\n        \"type\": \"url\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"lifecycle\": \"shared\",\n      \"reuseScope\": \"project_workspace\"\n    },\n    {\n      \"id\": \"db-migrate\",\n      \"name\": \"db:migrate\",\n      \"kind\": \"job\",\n      \"command\": \"pnpm db:migrate\",\n      \"cwd\": \".\"\n    }\n  ]\n}"}
+                    />
+                  </Field>
+                </div>
+              </details>
             </div>
 
             <div className="mt-5 flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -607,24 +619,25 @@ export function ProjectWorkspaceDetail() {
           <div className="rounded-2xl border border-border bg-card p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="space-y-1">
-                <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime services</div>
-                <h2 className="text-lg font-semibold">Attached services</h2>
+                <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Workspace commands</div>
+                <h2 className="text-lg font-semibold">Services and jobs</h2>
                 <p className="text-sm text-muted-foreground">
-                  Shared services for this project workspace. Execution workspaces inherit this config unless they override it.
+                  Long-running services stay supervised here, while one-shot jobs run on demand against this workspace. Execution workspaces inherit this config unless they override it.
                 </p>
               </div>
             </div>
             <WorkspaceRuntimeControls
               className="mt-4"
-              items={runtimeControlItems}
+              sections={runtimeControlSections}
               isPending={controlRuntimeServices.isPending}
               pendingRequest={pendingRuntimeAction}
-              emptyMessage={
+              serviceEmptyMessage={
                 workspace.runtimeConfig?.workspaceRuntime
-                  ? "No runtime services have been started for this workspace yet."
-                  : "No runtime-service default is configured for this workspace yet."
+                  ? "No services have been started for this workspace yet."
+                  : "No workspace command config is defined for this workspace yet."
               }
-              disabledHint="Project workspaces need both a working directory and runtime config before services can be started."
+              jobEmptyMessage="No one-shot jobs are configured for this workspace yet."
+              disabledHint="Project workspaces need a working directory before local commands can run, and services also need runtime config."
               onAction={(request) => controlRuntimeServices.mutate(request)}
             />
           </div>

@@ -1,4 +1,9 @@
-import type { Project, ProjectWorkspace, WorkspaceOperation } from "@paperclipai/shared";
+import type {
+  Project,
+  ProjectWorkspace,
+  WorkspaceOperation,
+  WorkspaceRuntimeControlTarget,
+} from "@paperclipai/shared";
 import { api } from "./client";
 
 function withCompanyScope(path: string, companyId?: string) {
@@ -32,10 +37,22 @@ export const projectsApi = {
     workspaceId: string,
     action: "start" | "stop" | "restart",
     companyId?: string,
+    target: WorkspaceRuntimeControlTarget = {},
   ) =>
     api.post<{ workspace: ProjectWorkspace; operation: WorkspaceOperation }>(
       projectPath(projectId, companyId, `/workspaces/${encodeURIComponent(workspaceId)}/runtime-services/${action}`),
-      {},
+      target,
+    ),
+  controlWorkspaceCommands: (
+    projectId: string,
+    workspaceId: string,
+    action: "start" | "stop" | "restart" | "run",
+    companyId?: string,
+    target: WorkspaceRuntimeControlTarget = {},
+  ) =>
+    api.post<{ workspace: ProjectWorkspace; operation: WorkspaceOperation }>(
+      projectPath(projectId, companyId, `/workspaces/${encodeURIComponent(workspaceId)}/runtime-commands/${action}`),
+      target,
     ),
   removeWorkspace: (projectId: string, workspaceId: string, companyId?: string) =>
     api.delete<ProjectWorkspace>(projectPath(projectId, companyId, `/workspaces/${encodeURIComponent(workspaceId)}`)),

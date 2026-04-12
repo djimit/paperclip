@@ -232,7 +232,11 @@ export type {
   ExecutionWorkspaceCloseReadiness,
   ExecutionWorkspaceCloseReadinessState,
   ProjectWorkspaceRuntimeConfig,
+  WorkspaceCommandDefinition,
+  WorkspaceCommandKind,
+  WorkspaceRuntimeControlTarget,
   WorkspaceRuntimeService,
+  WorkspaceRuntimeServiceStateMap,
   WorkspaceOperation,
   WorkspaceOperationPhase,
   WorkspaceOperationStatus,
@@ -373,6 +377,15 @@ export type {
   QuotaWindow,
   ProviderQuotaResult,
 } from "./types/index.js";
+
+export { workspaceRuntimeControlTargetSchema } from "./validators/execution-workspace.js";
+export {
+  findWorkspaceCommandDefinition,
+  listWorkspaceCommandDefinitions,
+  listWorkspaceServiceCommandDefinitions,
+  matchWorkspaceRuntimeServiceToCommand,
+  scoreWorkspaceRuntimeServiceMatch,
+} from "./workspace-commands.js";
 
 export {
   DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,

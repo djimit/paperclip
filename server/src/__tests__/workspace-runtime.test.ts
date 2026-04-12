@@ -19,9 +19,11 @@ import {
 } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
 import {
+  buildWorkspaceRuntimeDesiredStatePatch,
   cleanupExecutionWorkspaceArtifacts,
   ensureServerWorkspaceLinksCurrent,
   ensureRuntimeServicesForRun,
+  listConfiguredRuntimeServiceEntries,
   normalizeAdapterManagedRuntimeServices,
   reconcilePersistedRuntimeServicesOnStartup,
   realizeExecutionWorkspace,
@@ -29,6 +31,7 @@ import {
   resetRuntimeServicesForTests,
   resolveShell,
   sanitizeRuntimeServiceBaseEnv,
+  startRuntimeServicesForWorkspaceControl,
   stopRuntimeServicesForExecutionWorkspace,
   type RealizedExecutionWorkspace,
 } from "../services/workspace-runtime.ts";
@@ -2074,6 +2077,189 @@ describe("ensureRuntimeServicesForRun", () => {
 
     await releaseRuntimeServicesForRun(runId);
     leasedRunIds.delete(runId);
+  });
+
+  it("starts only the selected workspace-controlled runtime service", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-control-start-"));
+    const workspace = buildWorkspace(workspaceRoot);
+
+    const services = await startRuntimeServicesForWorkspaceControl({
+      actor: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+      issue: null,
+      workspace,
+      executionWorkspaceId: "execution-workspace-control-start",
+      config: {
+        workspaceRuntime: {
+          services: [
+            {
+              name: "web",
+              command:
+                "node -e \"require('node:http').createServer((req,res)=>res.end('web')).listen(Number(process.env.PORT), '127.0.0.1')\"",
+              port: { type: "auto" },
+              readiness: {
+                type: "http",
+                urlTemplate: "http://127.0.0.1:{{port}}",
+                timeoutSec: 10,
+                intervalMs: 100,
+              },
+              lifecycle: "shared",
+              reuseScope: "execution_workspace",
+            },
+            {
+              name: "worker",
+              command:
+                "node -e \"require('node:http').createServer((req,res)=>res.end('worker')).listen(Number(process.env.PORT), '127.0.0.1')\"",
+              port: { type: "auto" },
+              readiness: {
+                type: "http",
+                urlTemplate: "http://127.0.0.1:{{port}}",
+                timeoutSec: 10,
+                intervalMs: 100,
+              },
+              lifecycle: "shared",
+              reuseScope: "execution_workspace",
+            },
+          ],
+        },
+      },
+      adapterEnv: {},
+      serviceIndex: 1,
+    });
+
+    expect(services).toHaveLength(1);
+    expect(services[0]?.serviceName).toBe("worker");
+    await expect(fetch(services[0]!.url!)).resolves.toMatchObject({ ok: true });
+
+    await stopRuntimeServicesForExecutionWorkspace({
+      executionWorkspaceId: "execution-workspace-control-start",
+      workspaceCwd: workspace.cwd,
+    });
+  });
+
+  it("stops only the selected execution workspace runtime service", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-control-stop-"));
+    const workspace = buildWorkspace(workspaceRoot);
+
+    const services = await startRuntimeServicesForWorkspaceControl({
+      actor: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+      issue: null,
+      workspace,
+      executionWorkspaceId: "execution-workspace-control-stop",
+      config: {
+        workspaceRuntime: {
+          services: [
+            {
+              name: "web",
+              command:
+                "node -e \"require('node:http').createServer((req,res)=>res.end('web')).listen(Number(process.env.PORT), '127.0.0.1')\"",
+              port: { type: "auto" },
+              readiness: {
+                type: "http",
+                urlTemplate: "http://127.0.0.1:{{port}}",
+                timeoutSec: 10,
+                intervalMs: 100,
+              },
+              lifecycle: "shared",
+              reuseScope: "execution_workspace",
+              stopPolicy: {
+                type: "manual",
+              },
+            },
+            {
+              name: "worker",
+              command:
+                "node -e \"require('node:http').createServer((req,res)=>res.end('worker')).listen(Number(process.env.PORT), '127.0.0.1')\"",
+              port: { type: "auto" },
+              readiness: {
+                type: "http",
+                urlTemplate: "http://127.0.0.1:{{port}}",
+                timeoutSec: 10,
+                intervalMs: 100,
+              },
+              lifecycle: "shared",
+              reuseScope: "execution_workspace",
+              stopPolicy: {
+                type: "manual",
+              },
+            },
+          ],
+        },
+      },
+      adapterEnv: {},
+    });
+
+    expect(services).toHaveLength(2);
+    const web = services.find((service) => service.serviceName === "web");
+    const worker = services.find((service) => service.serviceName === "worker");
+
+    await stopRuntimeServicesForExecutionWorkspace({
+      executionWorkspaceId: "execution-workspace-control-stop",
+      workspaceCwd: workspace.cwd,
+      runtimeServiceId: web?.id ?? null,
+    });
+
+    await expect(fetch(web!.url!)).rejects.toThrow();
+    await expect(fetch(worker!.url!)).resolves.toMatchObject({ ok: true });
+
+    await stopRuntimeServicesForExecutionWorkspace({
+      executionWorkspaceId: "execution-workspace-control-stop",
+      workspaceCwd: workspace.cwd,
+      runtimeServiceId: worker?.id ?? null,
+    });
+  });
+});
+
+describe("buildWorkspaceRuntimeDesiredStatePatch", () => {
+  it("derives service entries from command-first runtime config", () => {
+    const services = listConfiguredRuntimeServiceEntries({
+      workspaceRuntime: {
+        commands: [
+          { id: "web", name: "web", kind: "service", command: "pnpm dev" },
+          { id: "db-migrate", name: "db:migrate", kind: "job", command: "pnpm db:migrate" },
+        ],
+      },
+    });
+
+    expect(services).toEqual([
+      expect.objectContaining({
+        id: "web",
+        kind: "service",
+        command: "pnpm dev",
+      }),
+    ]);
+  });
+
+  it("preserves sibling service state when updating a single configured runtime service", () => {
+    const patch = buildWorkspaceRuntimeDesiredStatePatch({
+      config: {
+        workspaceRuntime: {
+          services: [
+            { name: "web", command: "pnpm dev" },
+            { name: "worker", command: "pnpm worker" },
+          ],
+        },
+      },
+      currentDesiredState: "running",
+      currentServiceStates: null,
+      action: "stop",
+      serviceIndex: 1,
+    });
+
+    expect(patch).toEqual({
+      desiredState: "running",
+      serviceStates: {
+        "0": "running",
+        "1": "stopped",
+      },
+    });
   });
 });
 
