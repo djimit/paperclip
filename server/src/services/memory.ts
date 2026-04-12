@@ -787,6 +787,10 @@ export function memoryService(db: Db) {
       if (recordIds.length === 0) {
         throw notFound("Memory records not found");
       }
+      const bindingIds = new Set(rows.map((row) => row.bindingId));
+      if (bindingIds.size > 1) {
+        throw unprocessable("Memory records must belong to the same binding");
+      }
       const binding = await getBindingOrThrow(rows[0].bindingId);
       await db
         .update(memoryLocalRecords)
