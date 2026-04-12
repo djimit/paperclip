@@ -1134,6 +1134,62 @@ describe("realizeExecutionWorkspace", () => {
     );
   }, 30_000);
 
+  it("fails instead of writing an unseeded fallback config when worktree init errors after CLI detection succeeds", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-provision-fail-"));
+    const baseRoot = path.join(tempRoot, "base");
+    const worktreeRoot = path.join(tempRoot, "worktree");
+    const fakeBin = path.join(tempRoot, "bin");
+    const fakePnpmPath = path.join(fakeBin, "pnpm");
+    const scriptPath = path.join(worktreeRoot, "provision-worktree.sh");
+
+    try {
+      await fs.mkdir(baseRoot, { recursive: true });
+      await fs.mkdir(worktreeRoot, { recursive: true });
+      await fs.mkdir(fakeBin, { recursive: true });
+      await fs.copyFile(provisionWorktreeScriptPath, scriptPath);
+      await fs.chmod(scriptPath, 0o755);
+      await fs.writeFile(
+        fakePnpmPath,
+        [
+          "#!/bin/sh",
+          "if [ \"$1\" = \"paperclipai\" ] && [ \"$2\" = \"--help\" ]; then",
+          "  exit 0",
+          "fi",
+          "if [ \"$1\" = \"paperclipai\" ] && [ \"$2\" = \"worktree\" ] && [ \"$3\" = \"init\" ]; then",
+          "  echo \"simulated init failure\" >&2",
+          "  exit 42",
+          "fi",
+          "exit 0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await fs.chmod(fakePnpmPath, 0o755);
+
+      let caught: Error | null = null;
+      try {
+        await execFileAsync(scriptPath, [], {
+          cwd: worktreeRoot,
+          env: {
+            ...process.env,
+            PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+            PAPERCLIP_WORKSPACE_BASE_CWD: baseRoot,
+            PAPERCLIP_WORKSPACE_CWD: worktreeRoot,
+          },
+        });
+      } catch (error) {
+        caught = error as Error;
+      }
+
+      expect(caught).toBeTruthy();
+      expect(String(caught)).toContain("simulated init failure");
+      await expect(fs.stat(path.join(worktreeRoot, ".paperclip", "config.json"))).rejects.toThrow();
+      await expect(fs.stat(path.join(worktreeRoot, ".paperclip", ".env"))).rejects.toThrow();
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it(
     "provisions worktree-local pnpm node_modules instead of reusing base-repo links",
     async () => {

@@ -53,6 +53,24 @@ run_paperclipai_command() {
   return 1
 }
 
+paperclipai_command_available() {
+  if command -v pnpm >/dev/null 2>&1 && pnpm paperclipai --help >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local base_cli_tsx_path="$base_cwd/cli/node_modules/tsx/dist/cli.mjs"
+  local base_cli_entry_path="$base_cwd/cli/src/index.ts"
+  if command -v node >/dev/null 2>&1 && [[ -f "$base_cli_tsx_path" ]] && [[ -f "$base_cli_entry_path" ]]; then
+    return 0
+  fi
+
+  if command -v paperclipai >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
 run_isolated_worktree_init() {
   run_paperclipai_command \
     worktree \
@@ -318,7 +336,9 @@ main().catch((error) => {
 EOF
 }
 
-if ! run_isolated_worktree_init; then
+if paperclipai_command_available; then
+  run_isolated_worktree_init
+else
   echo "paperclipai CLI not available in this workspace; writing isolated fallback config without DB seeding." >&2
   write_fallback_worktree_config
 fi
