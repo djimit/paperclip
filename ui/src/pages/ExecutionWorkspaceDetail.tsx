@@ -15,7 +15,11 @@ import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
 import { IssuesList } from "../components/IssuesList";
 import { PageTabBar } from "../components/PageTabBar";
-import { hasRunningRuntimeServices, WorkspaceRuntimeControls } from "../components/WorkspaceRuntimeControls";
+import {
+  buildWorkspaceRuntimeControlItems,
+  WorkspaceRuntimeControls,
+  type WorkspaceRuntimeControlRequest,
+} from "../components/WorkspaceRuntimeControls";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -418,19 +422,19 @@ export function ExecutionWorkspaceDetail() {
     enabled: Boolean(workspaceId),
   });
   const controlRuntimeServices = useMutation({
-    mutationFn: (action: "start" | "stop" | "restart") =>
-      executionWorkspacesApi.controlRuntimeServices(workspace!.id, action),
-    onSuccess: (result, action) => {
+    mutationFn: (request: WorkspaceRuntimeControlRequest) =>
+      executionWorkspacesApi.controlRuntimeServices(workspace!.id, request.action, request),
+    onSuccess: (result, request) => {
       queryClient.setQueryData(queryKeys.executionWorkspaces.detail(result.workspace.id), result.workspace);
       queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.workspaceOperations(result.workspace.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(result.workspace.projectId) });
       setErrorMessage(null);
       setRuntimeActionMessage(
-        action === "stop"
-          ? "Runtime services stopped."
-          : action === "restart"
-            ? "Runtime services restarted."
-            : "Runtime services started.",
+        request.action === "stop"
+          ? "Runtime service stopped."
+          : request.action === "restart"
+            ? "Runtime service restarted."
+            : "Runtime service started.",
       );
     },
     onError: (error) => {
@@ -450,7 +454,11 @@ export function ExecutionWorkspaceDetail() {
   if (!workspace || !form || !initialState) return null;
 
   const canStartRuntimeServices = Boolean(effectiveRuntimeConfig) && Boolean(workspace.cwd);
-  const runtimeServicesRunning = hasRunningRuntimeServices(workspace.runtimeServices);
+  const runtimeControlItems = buildWorkspaceRuntimeControlItems({
+    runtimeConfig: effectiveRuntimeConfig,
+    runtimeServices: workspace.runtimeServices ?? [],
+    canStartServices: canStartRuntimeServices,
+  });
   const pendingRuntimeAction = controlRuntimeServices.isPending ? controlRuntimeServices.variables ?? null : null;
 
   if (workspaceId && activeTab === null) {
@@ -534,46 +542,17 @@ export function ExecutionWorkspaceDetail() {
           </div>
           <WorkspaceRuntimeControls
             className="mt-4"
-            isRunning={runtimeServicesRunning}
-            canStart={canStartRuntimeServices}
+            items={runtimeControlItems}
             isPending={controlRuntimeServices.isPending}
-            pendingAction={pendingRuntimeAction}
+            pendingRequest={pendingRuntimeAction}
+            emptyMessage={
+              effectiveRuntimeConfig
+                ? "No runtime services have been started for this execution workspace yet."
+                : "No runtime config is defined for this execution workspace yet."
+            }
             disabledHint="Execution workspaces need both a working directory and runtime config before services can be started."
-            onAction={(action) => controlRuntimeServices.mutate(action)}
+            onAction={(request) => controlRuntimeServices.mutate(request)}
           />
-          <Separator className="my-4" />
-          {workspace.runtimeServices && workspace.runtimeServices.length > 0 ? (
-            <div className="space-y-3">
-              {workspace.runtimeServices.map((service) => (
-                <div key={service.id} className="rounded-xl border border-border/80 bg-background px-3 py-2">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="space-y-1">
-                      <div className="text-sm font-medium">{service.serviceName}</div>
-                      <div className="text-xs text-muted-foreground">{service.status} · {service.lifecycle}</div>
-                      <div className="space-y-1 text-xs text-muted-foreground">
-                        {service.url ? (
-                          <a href={service.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
-                            {service.url}
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </a>
-                        ) : null}
-                        {service.port ? <div>Port {service.port}</div> : null}
-                        {service.command ? <MonoValue value={service.command} copy /> : null}
-                        {service.cwd ? <MonoValue value={service.cwd} copy /> : null}
-                      </div>
-                    </div>
-                    <StatusPill className="self-start">{service.healthStatus}</StatusPill>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {effectiveRuntimeConfig
-                ? "No runtime services are currently running for this execution workspace."
-                : "No runtime config is defined for this execution workspace yet."}
-            </p>
-          )}
           {!errorMessage && runtimeActionMessage ? <p className="mt-4 text-sm text-muted-foreground">{runtimeActionMessage}</p> : null}
         </div>
 
@@ -749,7 +728,7 @@ export function ExecutionWorkspaceDetail() {
                     <label htmlFor="inherit-runtime-config">Inherit project workspace runtime config</label>
                   </div>
                   <textarea
-                    className="min-h-32 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-48"
+                    className="min-h-64 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-96"
                     value={form.workspaceRuntime}
                     onChange={(event) => setForm((current) => current ? { ...current, workspaceRuntime: event.target.value } : current)}
                     disabled={form.inheritRuntime}

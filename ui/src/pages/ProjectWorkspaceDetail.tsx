@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ChoosePathButton } from "../components/PathInstructionsModal";
 import { projectsApi } from "../api/projects";
-import { hasRunningRuntimeServices, WorkspaceRuntimeControls } from "../components/WorkspaceRuntimeControls";
+import {
+  buildWorkspaceRuntimeControlItems,
+  WorkspaceRuntimeControls,
+  type WorkspaceRuntimeControlRequest,
+} from "../components/WorkspaceRuntimeControls";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -304,17 +308,17 @@ export function ProjectWorkspaceDetail() {
   });
 
   const controlRuntimeServices = useMutation({
-    mutationFn: (action: "start" | "stop" | "restart") =>
-      projectsApi.controlWorkspaceRuntimeServices(project!.id, routeWorkspaceId, action, lookupCompanyId),
-    onSuccess: (result, action) => {
+    mutationFn: (request: WorkspaceRuntimeControlRequest) =>
+      projectsApi.controlWorkspaceRuntimeServices(project!.id, routeWorkspaceId, request.action, lookupCompanyId, request),
+    onSuccess: (result, request) => {
       invalidateProject();
       setErrorMessage(null);
       setRuntimeActionMessage(
-        action === "stop"
-          ? "Runtime services stopped."
-          : action === "restart"
-            ? "Runtime services restarted."
-            : "Runtime services started.",
+        request.action === "stop"
+          ? "Runtime service stopped."
+          : request.action === "restart"
+            ? "Runtime service restarted."
+            : "Runtime service started.",
       );
     },
     onError: (error) => {
@@ -336,7 +340,11 @@ export function ProjectWorkspaceDetail() {
   }
 
   const canStartRuntimeServices = Boolean(workspace.runtimeConfig?.workspaceRuntime) && Boolean(workspace.cwd);
-  const runtimeServicesRunning = hasRunningRuntimeServices(workspace.runtimeServices);
+  const runtimeControlItems = buildWorkspaceRuntimeControlItems({
+    runtimeConfig: workspace.runtimeConfig?.workspaceRuntime ?? null,
+    runtimeServices: workspace.runtimeServices ?? [],
+    canStartServices: canStartRuntimeServices,
+  });
   const pendingRuntimeAction = controlRuntimeServices.isPending ? controlRuntimeServices.variables ?? null : null;
 
   const saveChanges = () => {
@@ -535,7 +543,7 @@ export function ProjectWorkspaceDetail() {
 
               <Field label="Runtime services JSON" hint="Default runtime services for this workspace. Execution workspaces inherit this config unless they set an override. If you do not know the commands yet, ask your CEO to configure them for you.">
                 <textarea
-                  className="min-h-36 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
+                  className="min-h-96 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
                   value={form.runtimeConfig}
                   onChange={(event) => setForm((current) => current ? { ...current, runtimeConfig: event.target.value } : current)}
                   placeholder={"{\n  \"services\": [\n    {\n      \"name\": \"web\",\n      \"command\": \"pnpm dev\",\n      \"cwd\": \".\",\n      \"port\": { \"type\": \"auto\" },\n      \"readiness\": {\n        \"type\": \"http\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"expose\": {\n        \"type\": \"url\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"lifecycle\": \"shared\",\n      \"reuseScope\": \"project_workspace\"\n    }\n  ]\n}"}
@@ -608,47 +616,17 @@ export function ProjectWorkspaceDetail() {
             </div>
             <WorkspaceRuntimeControls
               className="mt-4"
-              isRunning={runtimeServicesRunning}
-              canStart={canStartRuntimeServices}
+              items={runtimeControlItems}
               isPending={controlRuntimeServices.isPending}
-              pendingAction={pendingRuntimeAction}
+              pendingRequest={pendingRuntimeAction}
+              emptyMessage={
+                workspace.runtimeConfig?.workspaceRuntime
+                  ? "No runtime services have been started for this workspace yet."
+                  : "No runtime-service default is configured for this workspace yet."
+              }
               disabledHint="Project workspaces need both a working directory and runtime config before services can be started."
-              onAction={(action) => controlRuntimeServices.mutate(action)}
+              onAction={(request) => controlRuntimeServices.mutate(request)}
             />
-            <Separator className="my-4" />
-            {workspace.runtimeServices && workspace.runtimeServices.length > 0 ? (
-              <div className="space-y-3">
-                {workspace.runtimeServices.map((service) => (
-                  <div key={service.id} className="rounded-xl border border-border/80 bg-background px-3 py-2">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="space-y-1">
-                        <div className="text-sm font-medium">{service.serviceName}</div>
-                        <div className="space-y-1 text-xs text-muted-foreground">
-                          {service.url ? (
-                            <a href={service.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
-                              {service.url}
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          ) : null}
-                          {service.port ? <div>Port {service.port}</div> : null}
-                          <div>{service.command ?? "No command recorded"}</div>
-                          {service.cwd ? <div className="break-all font-mono">{service.cwd}</div> : null}
-                        </div>
-                      </div>
-                      <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground sm:text-right">
-                        {service.status} · {service.healthStatus}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {workspace.runtimeConfig?.workspaceRuntime
-                  ? "No runtime services are currently running for this workspace."
-                  : "No runtime-service default is configured for this workspace yet."}
-              </p>
-            )}
           </div>
         </div>
       </div>
