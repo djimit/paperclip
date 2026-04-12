@@ -317,6 +317,7 @@ export function ExecutionWorkspaceDetail() {
   const [form, setForm] = useState<WorkspaceFormState | null>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [runtimeActionErrorMessage, setRuntimeActionErrorMessage] = useState<string | null>(null);
   const [runtimeActionMessage, setRuntimeActionMessage] = useState<string | null>(null);
   const activeTab = workspaceId ? resolveExecutionWorkspaceTab(location.pathname, workspaceId) : null;
 
@@ -384,6 +385,7 @@ export function ExecutionWorkspaceDetail() {
     if (!workspace) return;
     setForm(formStateFromWorkspace(workspace));
     setErrorMessage(null);
+    setRuntimeActionErrorMessage(null);
   }, [workspace]);
 
   useEffect(() => {
@@ -428,7 +430,7 @@ export function ExecutionWorkspaceDetail() {
       queryClient.setQueryData(queryKeys.executionWorkspaces.detail(result.workspace.id), result.workspace);
       queryClient.invalidateQueries({ queryKey: queryKeys.executionWorkspaces.workspaceOperations(result.workspace.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(result.workspace.projectId) });
-      setErrorMessage(null);
+      setRuntimeActionErrorMessage(null);
       setRuntimeActionMessage(
         request.action === "run"
           ? "Workspace job completed."
@@ -441,7 +443,7 @@ export function ExecutionWorkspaceDetail() {
     },
     onError: (error) => {
       setRuntimeActionMessage(null);
-      setErrorMessage(error instanceof Error ? error.message : "Failed to control workspace commands.");
+      setRuntimeActionErrorMessage(error instanceof Error ? error.message : "Failed to control workspace commands.");
     },
   });
 
@@ -555,10 +557,15 @@ export function ExecutionWorkspaceDetail() {
                 : "No workspace command config is defined for this execution workspace yet."
             }
             jobEmptyMessage="No one-shot jobs are configured for this execution workspace yet."
-            disabledHint="Execution workspaces need a working directory before local commands can run, and services also need runtime config."
+            disabledHint={
+              canStartRuntimeServices
+                ? null
+                : "Execution workspaces need a working directory before local commands can run, and services also need runtime config."
+            }
             onAction={(request) => controlRuntimeServices.mutate(request)}
           />
-          {!errorMessage && runtimeActionMessage ? <p className="mt-4 text-sm text-muted-foreground">{runtimeActionMessage}</p> : null}
+          {runtimeActionErrorMessage ? <p className="mt-4 text-sm text-destructive">{runtimeActionErrorMessage}</p> : null}
+          {!runtimeActionErrorMessage && runtimeActionMessage ? <p className="mt-4 text-sm text-muted-foreground">{runtimeActionMessage}</p> : null}
         </div>
 
         <Tabs value={activeTab ?? "configuration"} onValueChange={(value) => handleTabChange(value as ExecutionWorkspaceTab)}>
@@ -762,6 +769,7 @@ export function ExecutionWorkspaceDetail() {
                   onClick={() => {
                     setForm(initialState);
                     setErrorMessage(null);
+                    setRuntimeActionErrorMessage(null);
                     setRuntimeActionMessage(null);
                   }}
                 >

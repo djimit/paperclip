@@ -5,6 +5,7 @@ import type {
   WorkspaceRuntimeControlTarget,
 } from "@paperclipai/shared";
 import { api } from "./client";
+import { sanitizeWorkspaceRuntimeControlTarget } from "./workspace-runtime-control";
 
 export const executionWorkspacesApi = {
   list: (
@@ -38,7 +39,7 @@ export const executionWorkspacesApi = {
   ) =>
     api.post<{ workspace: ExecutionWorkspace; operation: WorkspaceOperation }>(
       `/execution-workspaces/${id}/runtime-services/${action}`,
-      target,
+      sanitizeWorkspaceRuntimeControlTarget(target),
     ),
   controlRuntimeCommands: (
     id: string,
@@ -47,7 +48,7 @@ export const executionWorkspacesApi = {
   ) =>
     api.post<{ workspace: ExecutionWorkspace; operation: WorkspaceOperation }>(
       `/execution-workspaces/${id}/runtime-commands/${action}`,
-      target,
+      sanitizeWorkspaceRuntimeControlTarget(target),
     ),
   update: (id: string, data: Record<string, unknown>) => api.patch<ExecutionWorkspace>(`/execution-workspaces/${id}`, data),
 };

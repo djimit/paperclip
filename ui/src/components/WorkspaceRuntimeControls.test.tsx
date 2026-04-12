@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import type { WorkspaceRuntimeService } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildWorkspaceRuntimeControlItems,
   buildWorkspaceRuntimeControlSections,
   WorkspaceRuntimeControls,
 } from "./WorkspaceRuntimeControls";
@@ -73,6 +74,32 @@ describe("buildWorkspaceRuntimeControlSections", () => {
       title: "db:migrate",
       statusLabel: "run once",
       workspaceCommandId: "db-migrate",
+    });
+  });
+});
+
+describe("buildWorkspaceRuntimeControlItems", () => {
+  it("keeps the legacy flat export shape for stale importers", () => {
+    const items = buildWorkspaceRuntimeControlItems({
+      runtimeConfig: {
+        commands: [
+          { id: "web", name: "web", kind: "service", command: "pnpm dev" },
+          { id: "db-migrate", name: "db:migrate", kind: "job", command: "pnpm db:migrate" },
+        ],
+      },
+      runtimeServices: [
+        createRuntimeService({ id: "service-web", serviceName: "web", status: "running" }),
+      ],
+      canStartServices: true,
+      canRunJobs: true,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      title: "web",
+      status: "running",
+      statusLabel: "running",
+      runtimeServiceId: "service-web",
     });
   });
 });
@@ -149,6 +176,93 @@ describe("WorkspaceRuntimeControls", () => {
     const buttons = Array.from(container.querySelectorAll("button"));
     expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(true);
     expect(container.textContent).toContain("Add a workspace path first.");
+
+    act(() => root.unmount());
+  });
+
+  it("hides the disabled hint once services can already run", () => {
+    const sections = buildWorkspaceRuntimeControlSections({
+      runtimeConfig: {
+        commands: [
+          { id: "web", name: "web", kind: "service", command: "pnpm dev" },
+        ],
+      },
+      runtimeServices: [
+        createRuntimeService({ id: "service-web", serviceName: "web", status: "running" }),
+      ],
+      canStartServices: true,
+    });
+
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <WorkspaceRuntimeControls
+          sections={sections}
+          disabledHint="Add runtime settings first."
+          onAction={vi.fn()}
+        />,
+      );
+    });
+
+    expect(container.textContent).not.toContain("Add runtime settings first.");
+
+    act(() => root.unmount());
+  });
+
+  it("hides the health badge for stopped services", () => {
+    const sections = buildWorkspaceRuntimeControlSections({
+      runtimeConfig: {
+        commands: [
+          { id: "web", name: "web", kind: "service", command: "pnpm dev" },
+        ],
+      },
+      runtimeServices: [
+        createRuntimeService({ id: "service-web", serviceName: "web", status: "stopped", healthStatus: "unknown" }),
+      ],
+      canStartServices: true,
+    });
+
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <WorkspaceRuntimeControls
+          sections={sections}
+          onAction={vi.fn()}
+        />,
+      );
+    });
+
+    expect(container.textContent).not.toContain("unknown");
+
+    act(() => root.unmount());
+  });
+
+  it("accepts the legacy items prop without crashing", () => {
+    const items = buildWorkspaceRuntimeControlItems({
+      runtimeConfig: {
+        commands: [
+          { id: "web", name: "web", kind: "service", command: "pnpm dev" },
+        ],
+      },
+      runtimeServices: [],
+      canStartServices: false,
+    });
+
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <WorkspaceRuntimeControls
+          items={items}
+          emptyMessage="No runtime services have been started yet."
+          disabledHint="Add runtime settings first."
+          onAction={vi.fn()}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain("Services");
+    expect(container.textContent).toContain("Add runtime settings first.");
+    expect(Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim())).toEqual(["Start"]);
 
     act(() => root.unmount());
   });

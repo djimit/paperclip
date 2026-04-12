@@ -326,9 +326,16 @@ function CommandSection({
                   {item.cwd ? <div className="break-all font-mono">{item.cwd}</div> : null}
                   {item.disabledReason ? <div>{item.disabledReason}</div> : null}
                 </div>
-                {item.healthStatus ? (
+                {item.healthStatus && item.statusLabel !== "stopped" ? (
                   <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground">
+                    <span className={cn(
+                      "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px]",
+                      item.healthStatus === "healthy"
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                        : item.healthStatus === "unhealthy"
+                          ? "border-destructive/30 bg-destructive/10 text-destructive"
+                          : "border-border text-muted-foreground",
+                    )}>
                       {item.healthStatus}
                     </span>
                   </div>
@@ -366,6 +373,7 @@ export function WorkspaceRuntimeControls({
   const runningCount = resolvedSections.services.filter(
     (item) => item.statusLabel === "running" || item.statusLabel === "starting",
   ).length;
+  const visibleDisabledHint = runningCount > 0 || disabledHint === null ? null : disabledHint;
 
   return (
     <div className={cn("space-y-4", className)}>
@@ -390,7 +398,7 @@ export function WorkspaceRuntimeControls({
                 : "Each command can be controlled independently."}
             </span>
           </div>
-          {disabledHint ? <p className="text-xs text-muted-foreground">{disabledHint}</p> : null}
+          {visibleDisabledHint ? <p className="text-xs text-muted-foreground">{visibleDisabledHint}</p> : null}
         </div>
       </div>
 
@@ -399,7 +407,7 @@ export function WorkspaceRuntimeControls({
         description="Long-running commands that Paperclip can supervise for this workspace."
         items={resolvedSections.services}
         emptyMessage={resolvedServiceEmptyMessage}
-        disabledHint={disabledHint}
+        disabledHint={visibleDisabledHint}
         isPending={isPending}
         pendingRequest={pendingRequest}
         onAction={onAction}
