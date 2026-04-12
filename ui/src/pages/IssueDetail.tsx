@@ -371,6 +371,91 @@ function IssueDetailLoadingState({
   );
 }
 
+interface InboxMobileToolbarProps {
+  backHref: string;
+  issueId: string | undefined;
+  issueHidden: boolean;
+  onArchive: () => void;
+  archivePending: boolean;
+  onCopy: () => void;
+  onProperties: () => void;
+  onHide: () => void;
+}
+
+function InboxMobileToolbar({
+  backHref,
+  issueId: issueIdProp,
+  issueHidden,
+  onArchive,
+  archivePending,
+  onCopy,
+  onProperties,
+  onHide,
+}: InboxMobileToolbarProps) {
+  const navigate = useNavigate();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  return (
+    <div className="flex items-center w-full">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={() => navigate(backHref)}
+        aria-label="Back to inbox"
+      >
+        <ArrowLeft className="h-5 w-5" />
+      </Button>
+
+      <div className="ml-auto flex items-center gap-0.5">
+        {issueIdProp && !issueHidden && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onArchive}
+            disabled={archivePending}
+            aria-label="Archive from inbox"
+          >
+            <Archive className="h-5 w-5" />
+          </Button>
+        )}
+
+        <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label="More actions">
+              <MoreVertical className="h-5 w-5" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-44 p-1" align="end">
+            <button
+              className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+              onClick={() => { onCopy(); setMenuOpen(false); }}
+            >
+              <Copy className="h-3 w-3" />
+              Copy as markdown
+            </button>
+            <button
+              className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+              onClick={() => { onProperties(); setMenuOpen(false); }}
+            >
+              <SlidersHorizontal className="h-3 w-3" />
+              Properties
+            </button>
+            {issueIdProp && (
+              <button
+                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-destructive"
+                onClick={() => { onHide(); setMenuOpen(false); }}
+              >
+                <EyeOff className="h-3 w-3" />
+                Hide this issue
+              </button>
+            )}
+          </PopoverContent>
+        </Popover>
+      </div>
+    </div>
+  );
+}
+
 export function IssueDetail() {
   const { issueId } = useParams<{ issueId: string }>();
   const { selectedCompanyId } = useCompany();
@@ -383,7 +468,6 @@ export function IssueDetail() {
   const { pushToast } = useToast();
   const { isMobile } = useSidebar();
   const [moreOpen, setMoreOpen] = useState(false);
-  const [inboxMoreOpen, setInboxMoreOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [mobilePropsOpen, setMobilePropsOpen] = useState(false);
   const [detailTab, setDetailTab] = useState("chat");
@@ -1655,94 +1739,63 @@ export function IssueDetail() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Gmail-style mobile toolbar when viewing an issue from inbox
+  // Gmail-style mobile toolbar when viewing an issue from inbox.
+  // Callbacks are stored in a ref so the effect deps stay stable and
+  // don't trigger an infinite render loop (useMutation results and
+  // non-memoized functions change identity every render).
+  const inboxToolbarCallbacksRef = useRef({
+    onArchive: () => {
+      if (!archiveFromInbox.isPending && issue?.id) archiveFromInbox.mutate(issue.id);
+    },
+    onCopy: () => copyIssueToClipboard(),
+    onProperties: () => setMobilePropsOpen(true),
+    onHide: () => {
+      updateIssue.mutate(
+        { hiddenAt: new Date().toISOString() },
+        { onSuccess: () => navigate("/issues/all") },
+      );
+    },
+  });
+  inboxToolbarCallbacksRef.current = {
+    onArchive: () => {
+      if (!archiveFromInbox.isPending && issue?.id) archiveFromInbox.mutate(issue.id);
+    },
+    onCopy: () => copyIssueToClipboard(),
+    onProperties: () => setMobilePropsOpen(true),
+    onHide: () => {
+      updateIssue.mutate(
+        { hiddenAt: new Date().toISOString() },
+        { onSuccess: () => navigate("/issues/all") },
+      );
+    },
+  };
+
+  const backHref = sourceBreadcrumb.href ?? "/inbox";
+  const showInboxToolbar = isMobile && isFromInbox;
+  const archivePending = archiveFromInbox.isPending;
+  const issueHidden = !!issue?.hiddenAt;
+
   useEffect(() => {
-    if (!isMobile || !isFromInbox) {
+    if (!showInboxToolbar) {
       setMobileToolbar(null);
       return;
     }
 
     setMobileToolbar(
-      <div className="flex items-center w-full">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => navigate(sourceBreadcrumb.href ?? "/inbox")}
-          aria-label="Back to inbox"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-
-        <div className="ml-auto flex items-center gap-0.5">
-          {issue?.id && !issue.hiddenAt && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => {
-                if (!archiveFromInbox.isPending && issue?.id) {
-                  archiveFromInbox.mutate(issue.id);
-                }
-              }}
-              disabled={archiveFromInbox.isPending}
-              aria-label="Archive from inbox"
-            >
-              <Archive className="h-5 w-5" />
-            </Button>
-          )}
-
-          <Popover open={inboxMoreOpen} onOpenChange={setInboxMoreOpen}>
-            <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="More actions">
-                <MoreVertical className="h-5 w-5" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-44 p-1" align="end">
-              <button
-                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
-                onClick={() => {
-                  copyIssueToClipboard();
-                  setInboxMoreOpen(false);
-                }}
-              >
-                <Copy className="h-3 w-3" />
-                Copy as markdown
-              </button>
-              <button
-                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
-                onClick={() => {
-                  setMobilePropsOpen(true);
-                  setInboxMoreOpen(false);
-                }}
-              >
-                <SlidersHorizontal className="h-3 w-3" />
-                Properties
-              </button>
-              {issue?.id && (
-                <button
-                  className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-destructive"
-                  onClick={() => {
-                    updateIssue.mutate(
-                      { hiddenAt: new Date().toISOString() },
-                      { onSuccess: () => navigate("/issues/all") },
-                    );
-                    setInboxMoreOpen(false);
-                  }}
-                >
-                  <EyeOff className="h-3 w-3" />
-                  Hide this issue
-                </button>
-              )}
-            </PopoverContent>
-          </Popover>
-        </div>
-      </div>,
+      <InboxMobileToolbar
+        backHref={backHref}
+        issueId={issue?.id}
+        issueHidden={issueHidden}
+        archivePending={archivePending}
+        onArchive={() => inboxToolbarCallbacksRef.current.onArchive()}
+        onCopy={() => inboxToolbarCallbacksRef.current.onCopy()}
+        onProperties={() => inboxToolbarCallbacksRef.current.onProperties()}
+        onHide={() => inboxToolbarCallbacksRef.current.onHide()}
+      />,
     );
 
     return () => setMobileToolbar(null);
-  }, [
-    isMobile, isFromInbox, issue, sourceBreadcrumb, navigate, archiveFromInbox,
-    copyIssueToClipboard, updateIssue, setMobileToolbar, inboxMoreOpen, setMobilePropsOpen,
-  ]);
+  }, [showInboxToolbar, backHref, issue?.id, issueHidden, archivePending, setMobileToolbar]);
 
   const issueChatCoreInitialLoading =
     (commentsLoading && commentPages === undefined)
