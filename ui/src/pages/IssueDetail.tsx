@@ -78,7 +78,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatIssueActivityAction } from "@/lib/activity-format";
 import { buildIssuePropertiesPanelKey } from "../lib/issue-properties-panel-key";
 import { resolveIssueChatTranscriptRuns } from "../lib/issueChatTranscriptRuns";
-import { buildSubIssueDefaults } from "../lib/subIssueDefaults";
+import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
 import {
   Activity as ActivityIcon,
   Archive,
@@ -750,8 +750,9 @@ export function IssueDetail() {
   );
   const openNewSubIssue = useCallback(() => {
     if (!issue) return;
-    openNewIssue(buildSubIssueDefaults(issue));
+    openNewIssue(buildSubIssueDefaultsForViewer(issue, currentUserId));
   }, [
+    currentUserId,
     issue,
     openNewIssue,
   ]);

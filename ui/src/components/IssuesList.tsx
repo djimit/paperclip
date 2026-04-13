@@ -53,7 +53,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, Columns3, User, Search } from "lucide-react";
 import { KanbanBoard } from "./KanbanBoard";
 import { buildIssueTree, countDescendants } from "../lib/issue-tree";
-import { buildSubIssueDefaults } from "../lib/subIssueDefaults";
+import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
 import type { Issue, Project } from "@paperclipai/shared";
 const ISSUE_SEARCH_DEBOUNCE_MS = 150;
 
@@ -496,12 +496,12 @@ export function IssuesList({
       }
       else if (viewState.groupBy === "parent" && groupKey !== "__no_parent") {
         const parentIssue = issueById.get(groupKey);
-        if (parentIssue) Object.assign(defaults, buildSubIssueDefaults(parentIssue));
+        if (parentIssue) Object.assign(defaults, buildSubIssueDefaultsForViewer(parentIssue, currentUserId));
         else defaults.parentId = groupKey;
       }
     }
     return defaults;
-  }, [issueById, projectId, viewState.groupBy]);
+  }, [currentUserId, issueById, projectId, viewState.groupBy]);
 
   const filterToWorkspace = useCallback((workspaceId: string) => {
     updateView({ workspaces: [workspaceId] });

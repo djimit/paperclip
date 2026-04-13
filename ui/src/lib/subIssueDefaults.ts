@@ -16,12 +16,21 @@ type SubIssueDefaultSource = Pick<
 >;
 
 export function buildSubIssueDefaults(issue: SubIssueDefaultSource) {
+  return buildSubIssueDefaultsForViewer(issue);
+}
+
+export function buildSubIssueDefaultsForViewer(
+  issue: SubIssueDefaultSource,
+  currentUserId?: string | null,
+) {
   const parentExecutionWorkspaceLabel =
     issue.currentExecutionWorkspace?.name
     ?? issue.currentExecutionWorkspace?.branchName
     ?? issue.currentExecutionWorkspace?.cwd
     ?? issue.executionWorkspaceId
     ?? null;
+  const shouldInheritUserAssignee = Boolean(issue.assigneeUserId && issue.assigneeUserId !== currentUserId);
+  const inheritedAssigneeUserId = shouldInheritUserAssignee ? issue.assigneeUserId ?? undefined : undefined;
 
   return {
     parentId: issue.id,
@@ -38,6 +47,6 @@ export function buildSubIssueDefaults(issue: SubIssueDefaultSource) {
         : {}),
     ...(parentExecutionWorkspaceLabel ? { parentExecutionWorkspaceLabel } : {}),
     ...(issue.assigneeAgentId ? { assigneeAgentId: issue.assigneeAgentId } : {}),
-    ...(issue.assigneeUserId ? { assigneeUserId: issue.assigneeUserId } : {}),
+    ...(inheritedAssigneeUserId ? { assigneeUserId: inheritedAssigneeUserId } : {}),
   };
 }

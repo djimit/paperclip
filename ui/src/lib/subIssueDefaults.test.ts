@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionWorkspace, Issue } from "@paperclipai/shared";
-import { buildSubIssueDefaults } from "./subIssueDefaults";
+import { buildSubIssueDefaults, buildSubIssueDefaultsForViewer } from "./subIssueDefaults";
 
 function makeExecutionWorkspace(overrides: Partial<ExecutionWorkspace> = {}): ExecutionWorkspace {
   return {
@@ -112,6 +112,25 @@ describe("buildSubIssueDefaults", () => {
       goalId: "goal-1",
       executionWorkspaceMode: "shared_workspace",
       assigneeUserId: "user-1",
+    });
+  });
+
+  it("leaves the sub-issue unassigned when the parent assignee is the current user", () => {
+    const defaults = buildSubIssueDefaultsForViewer(
+      makeIssue({
+        assigneeUserId: "user-1",
+      }),
+      "user-1",
+    );
+
+    expect(defaults).toEqual({
+      parentId: "issue-1",
+      parentIdentifier: "PAP-1",
+      parentTitle: "Parent issue",
+      projectId: "project-1",
+      projectWorkspaceId: "project-workspace-1",
+      goalId: "goal-1",
+      executionWorkspaceMode: "shared_workspace",
     });
   });
 });
