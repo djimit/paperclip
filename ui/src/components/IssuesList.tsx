@@ -227,8 +227,8 @@ export function IssuesList({
     queryFn: () => authApi.getSession(),
   });
   const { data: companyMembers } = useQuery({
-    queryKey: queryKeys.access.companyMembers(selectedCompanyId!),
-    queryFn: () => accessApi.listMembers(selectedCompanyId!),
+    queryKey: queryKeys.access.companyUserDirectory(selectedCompanyId!),
+    queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
   const { data: experimentalSettings } = useQuery({
@@ -320,12 +320,12 @@ export function IssuesList({
   }, [agents]);
 
   const companyUserLabelMap = useMemo(
-    () => buildCompanyUserLabelMap(companyMembers?.members),
-    [companyMembers?.members],
+    () => buildCompanyUserLabelMap(companyMembers?.users),
+    [companyMembers?.users],
   );
   const companyUserProfileMap = useMemo(
-    () => buildCompanyUserProfileMap(companyMembers?.members),
-    [companyMembers?.members],
+    () => buildCompanyUserProfileMap(companyMembers?.users),
+    [companyMembers?.users],
   );
 
   const projectById = useMemo(() => {
@@ -836,16 +836,17 @@ export function IssuesList({
                                 >
                                   <PopoverTrigger asChild>
                                     <button
-                                      className="flex w-[180px] shrink-0 items-center rounded-md px-2 py-1 transition-colors hover:bg-accent/50"
+                                      className="flex w-[180px] shrink-0 items-center overflow-hidden rounded-md px-2 py-1 transition-colors hover:bg-accent/50"
                                       onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                                     >
                                       {issue.assigneeAgentId && agentName(issue.assigneeAgentId) ? (
-                                        <Identity name={agentName(issue.assigneeAgentId)!} size="sm" />
+                                        <Identity name={agentName(issue.assigneeAgentId)!} size="sm" className="min-w-0" />
                                       ) : issue.assigneeUserId ? (
                                         <Identity
                                           name={assigneeUserLabel ?? "User"}
                                           avatarUrl={assigneeUserProfile?.image ?? null}
                                           size="sm"
+                                          className="min-w-0"
                                         />
                                       ) : (
                                         <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
