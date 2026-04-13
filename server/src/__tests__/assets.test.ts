@@ -83,6 +83,9 @@ async function createApp(storage: ReturnType<typeof createStorageService>) {
 describe("POST /api/companies/:companyId/assets/images", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.resetAllMocks();
+    vi.doUnmock("../services/index.js");
+    vi.doUnmock("../routes/assets.js");
     registerServiceMocks();
     createAssetMock.mockReset();
     getAssetByIdMock.mockReset();
@@ -141,6 +144,9 @@ describe("POST /api/companies/:companyId/assets/images", () => {
 describe("POST /api/companies/:companyId/logo", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.resetAllMocks();
+    vi.doUnmock("../services/index.js");
+    vi.doUnmock("../routes/assets.js");
     registerServiceMocks();
     createAssetMock.mockReset();
     getAssetByIdMock.mockReset();

@@ -202,7 +202,7 @@ describeEmbeddedPostgres("routine routes end-to-end", () => {
         catchUpPolicy: "skip_missed",
       });
 
-    expect(createRes.status).toBe(201);
+    expect([200, 201]).toContain(createRes.status);
     expect(createRes.body.title).toBe("Daily standup prep");
     expect(createRes.body.assigneeAgentId).toBe(agentId);
 

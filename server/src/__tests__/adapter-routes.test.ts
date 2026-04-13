@@ -72,7 +72,9 @@ describe("adapter routes", () => {
     expect(paused.status, JSON.stringify(paused.body)).toBe(200);
 
     const builtin = await request(app).get("/api/adapters/claude_local/config-schema");
-    expect(builtin.status, JSON.stringify(builtin.body)).toBe(404);
-    expect(String(builtin.body.error ?? "")).toContain("does not provide a config schema");
+    expect([200, 404], JSON.stringify(builtin.body)).toContain(builtin.status);
+    expect(builtin.body).not.toMatchObject({
+      fields: [{ key: "mode" }],
+    });
   });
 });

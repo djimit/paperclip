@@ -7,6 +7,10 @@ import { serverVersion } from "../version.js";
 describe("GET /health", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.resetAllMocks();
+    vi.doUnmock("../dev-server-status.js");
+    vi.doUnmock("../routes/health.js");
+    vi.doUnmock("../services/instance-settings.js");
   });
 
   afterEach(() => {

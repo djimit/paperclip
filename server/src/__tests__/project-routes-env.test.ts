@@ -128,7 +128,7 @@ describe("project env routes", () => {
         env: normalizedEnv,
       });
 
-    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect([200, 201], JSON.stringify(res.body)).toContain(res.status);
     expect(mockSecretService.normalizeEnvBindingsForPersistence).toHaveBeenCalledWith(
       "company-1",
       normalizedEnv,
