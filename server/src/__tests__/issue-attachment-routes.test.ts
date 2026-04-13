@@ -66,17 +66,34 @@ function registerRouteMocks() {
   }));
 }
 
-function createStorageService(): StorageService {
+type TestStorageService = StorageService & {
+  __calls: {
+    putFile?: {
+      companyId: string;
+      namespace: string;
+      originalFilename?: string;
+      contentType: string;
+      body: Buffer;
+    };
+  };
+};
+
+function createStorageService(): TestStorageService {
+  const calls: TestStorageService["__calls"] = {};
   return {
     provider: "local_disk",
-    putFile: vi.fn(async (input) => ({
+    __calls: calls,
+    putFile: async (input) => {
+      calls.putFile = input;
+      return {
       provider: "local_disk",
       objectKey: `${input.namespace}/${input.originalFilename ?? "upload"}`,
       contentType: input.contentType,
       byteSize: input.body.length,
       sha256: "sha256-sample",
       originalFilename: input.originalFilename,
-    })),
+      };
+    },
     getObject: vi.fn(async () => ({
       stream: Readable.from(Buffer.from("test")),
       contentLength: 4,
@@ -132,7 +149,7 @@ describe("issue attachment routes", () => {
   beforeEach(() => {
     vi.resetModules();
     registerRouteMocks();
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     mockLogActivity.mockResolvedValue(undefined);
   });
 
@@ -151,7 +168,7 @@ describe("issue attachment routes", () => {
       .attach("file", Buffer.from("zip"), { filename: "bundle.zip", contentType: "application/zip" });
 
     expect([200, 201]).toContain(res.status);
-    const putFileCall = vi.mocked(storage.putFile).mock.calls[0]?.[0];
+    const putFileCall = storage.__calls.putFile;
     expect(putFileCall).toMatchObject({
       companyId: "company-1",
       namespace: "issues/11111111-1111-4111-8111-111111111111",

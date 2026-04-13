@@ -1,8 +1,6 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { errorHandler } from "../middleware/index.js";
-import { issueRoutes } from "../routes/issues.js";
 
 const ASSIGNEE_AGENT_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -60,7 +58,11 @@ vi.mock("../services/index.js", () => ({
   workProductService: () => ({}),
 }));
 
-function createApp() {
+async function createApp() {
+  const [{ errorHandler }, { issueRoutes }] = await Promise.all([
+    import("../middleware/index.js"),
+    import("../routes/issues.js"),
+  ]);
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -101,6 +103,7 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
 
 describe("issue update comment wakeups", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
     mockIssueService.getRelationSummaries.mockResolvedValue({ blockedBy: [], blocks: [] });
@@ -123,7 +126,7 @@ describe("issue update comment wakeups", () => {
       body: "write the whole thing",
     });
 
-    const res = await request(createApp())
+    const res = await request(await createApp())
       .patch(`/api/issues/${existing.id}`)
       .send({
         assigneeAgentId: ASSIGNEE_AGENT_ID,
@@ -170,7 +173,7 @@ describe("issue update comment wakeups", () => {
       body: "please revise this",
     });
 
-    const res = await request(createApp())
+    const res = await request(await createApp())
       .patch(`/api/issues/${existing.id}`)
       .send({
         comment: "please revise this",

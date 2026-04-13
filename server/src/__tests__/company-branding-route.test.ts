@@ -88,7 +88,7 @@ async function createApp(actor: Record<string, unknown>) {
 describe("PATCH /api/companies/:companyId/branding", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.resetAllMocks();
+    vi.clearAllMocks();
   });
 
   it("rejects non-CEO agent callers", async () => {

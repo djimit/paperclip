@@ -1,8 +1,6 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { errorHandler } from "../middleware/index.js";
-import { activityRoutes } from "../routes/activity.js";
 
 const mockActivityService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -30,7 +28,11 @@ vi.mock("../services/index.js", () => ({
   heartbeatService: () => mockHeartbeatService,
 }));
 
-function createApp() {
+async function createApp() {
+  const [{ errorHandler }, { activityRoutes }] = await Promise.all([
+    import("../middleware/index.js"),
+    import("../routes/activity.js"),
+  ]);
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -50,7 +52,8 @@ function createApp() {
 
 describe("activity routes", () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.resetModules();
+    vi.clearAllMocks();
   });
 
   it("resolves issue identifiers before loading runs", async () => {
@@ -65,7 +68,7 @@ describe("activity routes", () => {
       },
     ]);
 
-    const app = createApp();
+    const app = await createApp();
     const res = await request(app).get("/api/issues/PAP-475/runs");
 
     expect(res.status).toBe(200);
@@ -76,7 +79,7 @@ describe("activity routes", () => {
   });
 
   it("requires company access before creating activity events", async () => {
-    const app = createApp();
+    const app = await createApp();
     const res = await request(app)
       .post("/api/companies/company-2/activity")
       .send({
@@ -96,7 +99,7 @@ describe("activity routes", () => {
       companyId: "company-2",
     });
 
-    const app = createApp();
+    const app = await createApp();
     const res = await request(app).get("/api/heartbeat-runs/run-2/issues");
 
     expect(res.status).toBe(403);

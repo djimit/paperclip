@@ -1,7 +1,6 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { issueRoutes } from "../routes/issues.js";
 
 const mockWakeup = vi.hoisted(() => vi.fn(async () => undefined));
 const mockIssueService = vi.hoisted(() => ({
@@ -17,49 +16,52 @@ const mockIssueService = vi.hoisted(() => ({
   findMentionedAgents: vi.fn(async () => []),
 }));
 
-vi.mock("../services/index.js", () => ({
-  accessService: () => ({
-    canUser: vi.fn(),
-    hasPermission: vi.fn(),
-  }),
-  agentService: () => ({
-    getById: vi.fn(),
-  }),
-  documentService: () => ({
-    getIssueDocumentPayload: vi.fn(async () => ({})),
-  }),
-  executionWorkspaceService: () => ({
-    getById: vi.fn(),
-  }),
-  feedbackService: () => ({}),
-  goalService: () => ({
-    getById: vi.fn(),
-    getDefaultCompanyGoal: vi.fn(),
-  }),
-  heartbeatService: () => ({
-    wakeup: mockWakeup,
-    reportRunActivity: vi.fn(async () => undefined),
-  }),
-  instanceSettingsService: () => ({
-    get: vi.fn(),
-    listCompanyIds: vi.fn(),
-  }),
-  issueApprovalService: () => ({}),
-  issueService: () => mockIssueService,
-  logActivity: vi.fn(async () => undefined),
-  projectService: () => ({
-    getById: vi.fn(),
-    listByIds: vi.fn(async () => []),
-  }),
-  routineService: () => ({
-    syncRunStatusForIssue: vi.fn(async () => undefined),
-  }),
-  workProductService: () => ({
-    listForIssue: vi.fn(async () => []),
-  }),
-}));
+function registerModuleMocks() {
+  vi.doMock("../services/index.js", () => ({
+    accessService: () => ({
+      canUser: vi.fn(),
+      hasPermission: vi.fn(),
+    }),
+    agentService: () => ({
+      getById: vi.fn(),
+    }),
+    documentService: () => ({
+      getIssueDocumentPayload: vi.fn(async () => ({})),
+    }),
+    executionWorkspaceService: () => ({
+      getById: vi.fn(),
+    }),
+    feedbackService: () => ({}),
+    goalService: () => ({
+      getById: vi.fn(),
+      getDefaultCompanyGoal: vi.fn(),
+    }),
+    heartbeatService: () => ({
+      wakeup: mockWakeup,
+      reportRunActivity: vi.fn(async () => undefined),
+    }),
+    instanceSettingsService: () => ({
+      get: vi.fn(),
+      listCompanyIds: vi.fn(),
+    }),
+    issueApprovalService: () => ({}),
+    issueService: () => mockIssueService,
+    logActivity: vi.fn(async () => undefined),
+    projectService: () => ({
+      getById: vi.fn(),
+      listByIds: vi.fn(async () => []),
+    }),
+    routineService: () => ({
+      syncRunStatusForIssue: vi.fn(async () => undefined),
+    }),
+    workProductService: () => ({
+      listForIssue: vi.fn(async () => []),
+    }),
+  }));
+}
 
-function createApp() {
+async function createApp() {
+  const { issueRoutes } = await import("../routes/issues.js");
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -81,6 +83,10 @@ function createApp() {
 
 describe("issue dependency wakeups in issue routes", () => {
   beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../services/index.js");
+    vi.doUnmock("../routes/issues.js");
+    registerModuleMocks();
     vi.clearAllMocks();
     mockIssueService.getAncestors.mockResolvedValue([]);
     mockIssueService.getComment.mockResolvedValue(null);
@@ -137,20 +143,20 @@ describe("issue dependency wakeups in issue routes", () => {
       },
     ]);
 
-    const res = await request(createApp()).patch("/api/issues/issue-1").send({ status: "done" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
+    const res = await request(await createApp()).patch("/api/issues/issue-1").send({ status: "done" });
     expect(res.status).toBe(200);
-    expect(mockWakeup).toHaveBeenCalledWith(
-      "agent-2",
-      expect.objectContaining({
-        reason: "issue_blockers_resolved",
-        payload: expect.objectContaining({
-          issueId: "issue-2",
-          resolvedBlockerIssueId: "issue-1",
+    await vi.waitFor(() => {
+      expect(mockWakeup).toHaveBeenCalledWith(
+        "agent-2",
+        expect.objectContaining({
+          reason: "issue_blockers_resolved",
+          payload: expect.objectContaining({
+            issueId: "issue-2",
+            resolvedBlockerIssueId: "issue-1",
+          }),
         }),
-      }),
-    );
+      );
+    });
   });
 
   it("wakes the parent when all direct children become terminal", async () => {
@@ -194,19 +200,19 @@ describe("issue dependency wakeups in issue routes", () => {
       childIssueIds: ["child-0", "child-1"],
     });
 
-    const res = await request(createApp()).patch("/api/issues/child-1").send({ status: "done" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
+    const res = await request(await createApp()).patch("/api/issues/child-1").send({ status: "done" });
     expect(res.status).toBe(200);
-    expect(mockWakeup).toHaveBeenCalledWith(
-      "agent-9",
-      expect.objectContaining({
-        reason: "issue_children_completed",
-        payload: expect.objectContaining({
-          issueId: "parent-1",
-          completedChildIssueId: "child-1",
+    await vi.waitFor(() => {
+      expect(mockWakeup).toHaveBeenCalledWith(
+        "agent-9",
+        expect.objectContaining({
+          reason: "issue_children_completed",
+          payload: expect.objectContaining({
+            issueId: "parent-1",
+            completedChildIssueId: "child-1",
+          }),
         }),
-      }),
-    );
+      );
+    });
   });
 });

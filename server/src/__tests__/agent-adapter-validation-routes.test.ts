@@ -122,7 +122,7 @@ async function unregisterTestAdapter(type: string) {
 describe("agent routes adapter validation", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     vi.doUnmock("../services/index.js");
     vi.doUnmock("../services/instance-settings.js");
     vi.doUnmock("../routes/agents.js");

@@ -33,16 +33,14 @@ const mockBoardAuthService = vi.hoisted(() => ({
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
-function registerRouteMocks() {
-  vi.doMock("../services/index.js", () => ({
-    accessService: () => mockAccessService,
-    agentService: () => mockAgentService,
-    boardAuthService: () => mockBoardAuthService,
-    deduplicateAgentName: vi.fn(),
-    logActivity: mockLogActivity,
-    notifyHireApproved: vi.fn(),
-  }));
-}
+vi.mock("../services/index.js", () => ({
+  accessService: () => mockAccessService,
+  agentService: () => mockAgentService,
+  boardAuthService: () => mockBoardAuthService,
+  deduplicateAgentName: vi.fn(),
+  logActivity: mockLogActivity,
+  notifyHireApproved: vi.fn(),
+}));
 
 function createDbStub() {
   const createdInvite = {
@@ -124,11 +122,7 @@ async function createApp(actor: Record<string, unknown>, db: Record<string, unkn
 describe("POST /companies/:companyId/openclaw/invite-prompt", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.resetAllMocks();
-    vi.doUnmock("../services/index.js");
-    vi.doUnmock("../routes/access.js");
-    vi.doUnmock("../middleware/index.js");
-    registerRouteMocks();
+    vi.clearAllMocks();
     mockAccessService.canUser.mockResolvedValue(false);
     mockAgentService.getById.mockReset();
     mockLogActivity.mockResolvedValue(undefined);
