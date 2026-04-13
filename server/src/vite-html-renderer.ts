@@ -18,13 +18,25 @@ export interface CachedViteHtmlRenderer {
 const WATCHER_EVENTS: ViteWatcherEvent[] = ["add", "change", "unlink"];
 const MAIN_ENTRY_TAG = '<script type="module" src="/src/main.tsx"></script>';
 const VITE_CLIENT_TAG = '<script type="module" src="/@vite/client"></script>';
+const REACT_REFRESH_PREAMBLE = `<script type="module">
+import { injectIntoGlobalHook } from "/@react-refresh";
+injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => (type) => type;
+</script>`;
 
-function injectViteClient(html: string): string {
-  if (html.includes(VITE_CLIENT_TAG)) return html;
-  if (html.includes(MAIN_ENTRY_TAG)) {
-    return html.replace(MAIN_ENTRY_TAG, `${VITE_CLIENT_TAG}\n    ${MAIN_ENTRY_TAG}`);
+function injectViteDevPreamble(html: string): string {
+  let injectedHtml = html;
+  if (!injectedHtml.includes('"/@react-refresh"') && !injectedHtml.includes("'/@react-refresh'")) {
+    injectedHtml = injectedHtml.includes("</head>")
+      ? injectedHtml.replace("</head>", `    ${REACT_REFRESH_PREAMBLE}\n  </head>`)
+      : `${REACT_REFRESH_PREAMBLE}\n${injectedHtml}`;
   }
-  return html.replace("</body>", `    ${VITE_CLIENT_TAG}\n  </body>`);
+  if (injectedHtml.includes(VITE_CLIENT_TAG)) return injectedHtml;
+  if (injectedHtml.includes(MAIN_ENTRY_TAG)) {
+    return injectedHtml.replace(MAIN_ENTRY_TAG, `${VITE_CLIENT_TAG}\n    ${MAIN_ENTRY_TAG}`);
+  }
+  return injectedHtml.replace("</body>", `    ${VITE_CLIENT_TAG}\n  </body>`);
 }
 
 export function createCachedViteHtmlRenderer(opts: {
@@ -40,7 +52,7 @@ export function createCachedViteHtmlRenderer(opts: {
   function loadHtml(): string {
     if (cachedHtml === null) {
       const rawTemplate = fs.readFileSync(templatePath, "utf-8");
-      cachedHtml = brandHtml(injectViteClient(rawTemplate));
+      cachedHtml = injectViteDevPreamble(brandHtml(rawTemplate));
     }
     return cachedHtml;
   }
