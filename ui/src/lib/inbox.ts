@@ -321,6 +321,14 @@ export function saveInboxWorkItemGroupBy(groupBy: InboxWorkItemGroupBy) {
   }
 }
 
+export function shouldResetInboxWorkspaceGrouping(
+  groupBy: InboxWorkItemGroupBy,
+  isolatedWorkspacesEnabled: boolean,
+  experimentalSettingsLoaded: boolean,
+): boolean {
+  return experimentalSettingsLoaded && groupBy === "workspace" && !isolatedWorkspacesEnabled;
+}
+
 export function shouldIncludeRoutineExecutionIssue(
   issue: Pick<Issue, "originKind">,
   showRoutineExecutions: boolean,

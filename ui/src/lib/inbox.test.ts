@@ -43,6 +43,7 @@ import {
   saveInboxIssueColumns,
   saveInboxWorkItemGroupBy,
   saveLastInboxTab,
+  shouldResetInboxWorkspaceGrouping,
   shouldShowInboxSection,
   type InboxWorkItem,
 } from "./inbox";
@@ -1078,5 +1079,15 @@ describe("inbox helpers", () => {
   it("persists workspace grouping preferences", () => {
     saveInboxWorkItemGroupBy("workspace");
     expect(loadInboxWorkItemGroupBy()).toBe("workspace");
+  });
+
+  it("does not reset workspace grouping before experimental settings have loaded", () => {
+    expect(shouldResetInboxWorkspaceGrouping("workspace", false, false)).toBe(false);
+  });
+
+  it("resets workspace grouping only when settings are loaded and workspace grouping is unavailable", () => {
+    expect(shouldResetInboxWorkspaceGrouping("workspace", false, true)).toBe(true);
+    expect(shouldResetInboxWorkspaceGrouping("workspace", true, true)).toBe(false);
+    expect(shouldResetInboxWorkspaceGrouping("none", false, true)).toBe(false);
   });
 });

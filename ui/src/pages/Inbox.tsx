@@ -116,6 +116,7 @@ import {
   loadInboxWorkItemGroupBy,
   normalizeInboxIssueColumns,
   resolveInboxNestingEnabled,
+  shouldResetInboxWorkspaceGrouping,
   resolveIssueWorkspaceName,
   resolveInboxSelectionIndex,
   saveInboxFilterPreferences,
@@ -649,6 +650,7 @@ export function Inbox() {
     queryFn: () => instanceSettingsApi.getExperimental(),
     retry: false,
   });
+  const experimentalSettingsLoaded = experimentalSettings !== undefined;
   const [searchQuery, setSearchQuery] = useState("");
   const normalizedSearchQuery = searchQuery.trim();
   const [filterPreferences, setFilterPreferences] = useState<InboxFilterPreferences>(
@@ -1093,10 +1095,10 @@ export function Inbox() {
   const [nestingPreferenceEnabled, setNestingPreferenceEnabled] = useState(() => loadInboxNesting());
   const nestingEnabled = resolveInboxNestingEnabled(nestingPreferenceEnabled, isMobile);
   useEffect(() => {
-    if (isolatedWorkspacesEnabled || groupBy !== "workspace") return;
+    if (!shouldResetInboxWorkspaceGrouping(groupBy, isolatedWorkspacesEnabled, experimentalSettingsLoaded)) return;
     setGroupBy("none");
     saveInboxWorkItemGroupBy("none");
-  }, [groupBy, isolatedWorkspacesEnabled]);
+  }, [experimentalSettingsLoaded, groupBy, isolatedWorkspacesEnabled]);
   const toggleNesting = useCallback(() => {
     setNestingPreferenceEnabled((prev) => {
       const next = !prev;
