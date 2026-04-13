@@ -78,6 +78,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatIssueActivityAction } from "@/lib/activity-format";
 import { buildIssuePropertiesPanelKey } from "../lib/issue-properties-panel-key";
+import { shouldRenderRichSubIssuesSection } from "../lib/issue-detail-subissues";
 import { resolveIssueChatTranscriptRuns } from "../lib/issueChatTranscriptRuns";
 import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
 import {
@@ -93,6 +94,7 @@ import {
   MoreHorizontal,
   MoreVertical,
   Paperclip,
+  Plus,
   Repeat,
   SlidersHorizontal,
   Trash2,
@@ -748,6 +750,7 @@ export function IssueDetail() {
     () => buildIssuePropertiesPanelKey(issue ?? null, childIssues),
     [childIssues, issue],
   );
+  const showRichSubIssuesSection = shouldRenderRichSubIssuesSection(childIssuesLoading, childIssues.length);
   const openNewSubIssue = useCallback(() => {
     if (!issue) return;
     openNewIssue(buildSubIssueDefaultsForViewer(issue, currentUserId));
@@ -2117,25 +2120,33 @@ export function IssueDetail() {
         missingBehavior="placeholder"
       />
 
-<<<<<<< HEAD
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-medium text-muted-foreground">Sub-issues</h3>
+      {showRichSubIssuesSection ? (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-medium text-muted-foreground">Sub-issues</h3>
+          </div>
+          <IssuesList
+            issues={childIssues}
+            isLoading={childIssuesLoading}
+            agents={agents}
+            projects={projects}
+            projectId={issue.projectId ?? undefined}
+            viewStateKey={`paperclip:issue-detail:${issue.id}:subissues-view`}
+            issueLinkState={resolvedIssueDetailState ?? location.state}
+            searchFilters={{ parentId: issue.id }}
+            baseCreateIssueDefaults={buildSubIssueDefaultsForViewer(issue, currentUserId)}
+            createIssueLabel="Sub-issue"
+            onUpdateIssue={handleChildIssueUpdate}
+          />
         </div>
-        <IssuesList
-          issues={childIssues}
-          isLoading={childIssuesLoading}
-          agents={agents}
-          projects={projects}
-          projectId={issue.projectId ?? undefined}
-          viewStateKey={`paperclip:issue-detail:${issue.id}:subissues-view`}
-          issueLinkState={resolvedIssueDetailState ?? location.state}
-          searchFilters={{ parentId: issue.id }}
-          baseCreateIssueDefaults={buildSubIssueDefaultsForViewer(issue, currentUserId)}
-          createIssueLabel="Sub-issue"
-          onUpdateIssue={handleChildIssueUpdate}
-        />
-      </div>
+      ) : (
+        <div className="flex justify-start">
+          <Button variant="outline" size="sm" onClick={openNewSubIssue} className="shadow-none">
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            New Sub-issue
+          </Button>
+        </div>
+      )}
 
       <IssueDocumentsSection
         issue={issue}
