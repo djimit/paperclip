@@ -88,6 +88,7 @@ interface IssueChatMessageContext {
   feedbackTermsUrl: string | null;
   agentMap?: Map<string, Agent>;
   currentUserId?: string | null;
+  userLabelMap?: ReadonlyMap<string, string> | null;
   onVote?: (
     commentId: string,
     vote: FeedbackVoteValue,
@@ -192,6 +193,7 @@ interface IssueChatThreadProps {
   issueStatus?: string;
   agentMap?: Map<string, Agent>;
   currentUserId?: string | null;
+  userLabelMap?: ReadonlyMap<string, string> | null;
   onVote?: (
     commentId: string,
     vote: FeedbackVoteValue,
@@ -444,12 +446,13 @@ function formatTimelineAssigneeLabel(
   assignee: IssueTimelineAssignee,
   agentMap?: Map<string, Agent>,
   currentUserId?: string | null,
+  userLabelMap?: ReadonlyMap<string, string> | null,
 ) {
   if (assignee.agentId) {
     return agentMap?.get(assignee.agentId)?.name ?? assignee.agentId.slice(0, 8);
   }
   if (assignee.userId) {
-    return formatAssigneeUserLabel(assignee.userId, currentUserId) ?? "Board";
+    return formatAssigneeUserLabel(assignee.userId, currentUserId, userLabelMap) ?? "Board";
   }
   return "Unassigned";
 }
@@ -1402,7 +1405,7 @@ function IssueChatFeedbackButtons({
 }
 
 function IssueChatSystemMessage() {
-  const { agentMap, currentUserId } = useContext(IssueChatCtx);
+  const { agentMap, currentUserId, userLabelMap } = useContext(IssueChatCtx);
   const message = useMessage();
   const custom = message.metadata.custom as Record<string, unknown>;
   const anchorId = typeof custom.anchorId === "string" ? custom.anchorId : undefined;
@@ -1458,11 +1461,11 @@ function IssueChatSystemMessage() {
               Assignee
             </span>
             <span className="text-muted-foreground">
-              {formatTimelineAssigneeLabel(assigneeChange.from, agentMap, currentUserId)}
+              {formatTimelineAssigneeLabel(assigneeChange.from, agentMap, currentUserId, userLabelMap)}
             </span>
             <ArrowRight className="h-3 w-3 text-muted-foreground" />
             <span className="font-medium text-foreground">
-              {formatTimelineAssigneeLabel(assigneeChange.to, agentMap, currentUserId)}
+              {formatTimelineAssigneeLabel(assigneeChange.to, agentMap, currentUserId, userLabelMap)}
             </span>
           </div>
         ) : null}
@@ -1778,6 +1781,7 @@ export function IssueChatThread({
   issueStatus,
   agentMap,
   currentUserId,
+  userLabelMap,
   onVote,
   onAdd,
   onCancelRun,
@@ -1856,6 +1860,7 @@ export function IssueChatThread({
         projectId,
         agentMap,
         currentUserId,
+        userLabelMap,
       }),
     [
       comments,
@@ -1870,6 +1875,7 @@ export function IssueChatThread({
       projectId,
       agentMap,
       currentUserId,
+      userLabelMap,
     ],
   );
 
@@ -1912,6 +1918,7 @@ export function IssueChatThread({
       feedbackTermsUrl,
       agentMap,
       currentUserId,
+      userLabelMap,
       onVote,
       onInterruptQueued,
       interruptingQueuedRunId,
@@ -1923,6 +1930,7 @@ export function IssueChatThread({
       feedbackTermsUrl,
       agentMap,
       currentUserId,
+      userLabelMap,
       onVote,
       onInterruptQueued,
       interruptingQueuedRunId,

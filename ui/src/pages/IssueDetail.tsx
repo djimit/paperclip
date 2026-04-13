@@ -17,7 +17,7 @@ import { usePanel } from "../context/PanelContext";
 import { useToast } from "../context/ToastContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../lib/assignees";
-import { buildCompanyUserInlineOptions, buildMarkdownMentionOptions } from "../lib/company-members";
+import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, buildMarkdownMentionOptions } from "../lib/company-members";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
 import {
@@ -222,14 +222,17 @@ function mergeOptimisticFeedbackVote(
   ];
 }
 
-function ActorIdentity({ evt, agentMap }: { evt: ActivityEvent; agentMap: Map<string, Agent> }) {
+function ActorIdentity({ evt, agentMap, userProfileMap }: { evt: ActivityEvent; agentMap: Map<string, Agent>; userProfileMap?: Map<string, import("../lib/company-members").CompanyUserProfile> }) {
   const id = evt.actorId;
   if (evt.actorType === "agent") {
     const agent = agentMap.get(id);
     return <Identity name={agent?.name ?? id.slice(0, 8)} size="sm" />;
   }
   if (evt.actorType === "system") return <Identity name="System" size="sm" />;
-  if (evt.actorType === "user") return <Identity name="Board" size="sm" />;
+  if (evt.actorType === "user") {
+    const profile = userProfileMap?.get(id);
+    return <Identity name={profile?.label ?? "Board"} avatarUrl={profile?.image} size="sm" />;
+  }
   return <Identity name={id || "Unknown"} size="sm" />;
 }
 
@@ -534,8 +537,8 @@ export function IssueDetail() {
     enabled: !!selectedCompanyId,
   });
   const { data: companyMembers } = useQuery({
-    queryKey: queryKeys.access.companyMembers(selectedCompanyId!),
-    queryFn: () => accessApi.listMembers(selectedCompanyId!),
+    queryKey: queryKeys.access.companyUserDirectory(selectedCompanyId!),
+    queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
 
@@ -589,6 +592,14 @@ export function IssueDetail() {
     for (const a of agents ?? []) map.set(a.id, a);
     return map;
   }, [agents]);
+  const userProfileMap = useMemo(
+    () => buildCompanyUserProfileMap(companyMembers?.users),
+    [companyMembers?.users],
+  );
+  const userLabelMap = useMemo(
+    () => buildCompanyUserLabelMap(companyMembers?.users),
+    [companyMembers?.users],
+  );
   const transcriptRuns = useMemo(
     () =>
       resolveIssueChatTranscriptRuns({
@@ -611,9 +622,9 @@ export function IssueDetail() {
     return buildMarkdownMentionOptions({
       agents,
       projects: orderedProjects,
-      members: companyMembers?.members,
+      members: companyMembers?.users,
     });
-  }, [agents, companyMembers?.members, orderedProjects]);
+  }, [agents, companyMembers?.users, orderedProjects]);
 
   const resolvedProject = useMemo(
     () => (issue?.projectId ? orderedProjects.find((project) => project.id === issue.projectId) ?? issue.project ?? null : null),
@@ -665,7 +676,7 @@ export function IssueDetail() {
 
   const commentReassignOptions = useMemo(() => {
     const options: Array<{ id: string; label: string; searchText?: string }> = [];
-    options.push(...buildCompanyUserInlineOptions(companyMembers?.members, { excludeUserIds: [currentUserId] }));
+    options.push(...buildCompanyUserInlineOptions(companyMembers?.users, { excludeUserIds: [currentUserId] }));
     const activeAgents = [...(agents ?? [])]
       .filter((agent) => agent.status !== "terminated")
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -676,7 +687,7 @@ export function IssueDetail() {
       options.push({ id: `user:${currentUserId}`, label: "Me" });
     }
     return options;
-  }, [agents, companyMembers?.members, currentUserId]);
+  }, [agents, companyMembers?.users, currentUserId]);
 
   const actualAssigneeValue = useMemo(
     () => assigneeValueFromSelection(issue ?? {}),
@@ -2133,6 +2144,7 @@ export function IssueDetail() {
                 issueStatus={issue.status}
                 agentMap={agentMap}
                 currentUserId={currentUserId}
+                userLabelMap={userLabelMap}
                 enableLiveTranscriptPolling={false}
                 transcriptsByRunId={issueChatTranscriptByRun}
                 hasOutputForRun={issueChatHasOutputForRun}
@@ -2237,8 +2249,8 @@ export function IssueDetail() {
                 <div className="space-y-1.5">
                   {activity.slice(0, 20).map((evt) => (
                     <div key={evt.id} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <ActorIdentity evt={evt} agentMap={agentMap} />
-                      <span>{formatIssueActivityAction(evt.action, evt.details, { agentMap, currentUserId })}</span>
+                      <ActorIdentity evt={evt} agentMap={agentMap} userProfileMap={userProfileMap} />
+                      <span>{formatIssueActivityAction(evt.action, evt.details, { agentMap, userProfileMap, currentUserId })}</span>
                       <span className="ml-auto shrink-0">{relativeTime(evt.createdAt)}</span>
                     </div>
                   ))}
