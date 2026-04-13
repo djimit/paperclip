@@ -305,6 +305,7 @@ export type {
   DashboardSummary,
   ActivityEvent,
   SidebarBadges,
+  SidebarOrderPreference,
   InboxDismissal,
   CompanyMembership,
   PrincipalPermissionGrant,
@@ -377,6 +378,12 @@ export type {
   QuotaWindow,
   ProviderQuotaResult,
 } from "./types/index.js";
+
+export {
+  sidebarOrderPreferenceSchema,
+  upsertSidebarOrderPreferenceSchema,
+  type UpsertSidebarOrderPreference,
+} from "./validators/sidebar-preferences.js";
 
 export { workspaceRuntimeControlTargetSchema } from "./validators/execution-workspace.js";
 export {
