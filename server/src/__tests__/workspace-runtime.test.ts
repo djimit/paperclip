@@ -21,6 +21,7 @@ import { eq } from "drizzle-orm";
 import {
   buildWorkspaceRuntimeDesiredStatePatch,
   cleanupExecutionWorkspaceArtifacts,
+  ensurePersistedExecutionWorkspaceAvailable,
   ensureServerWorkspaceLinksCurrent,
   ensureRuntimeServicesForRun,
   listConfiguredRuntimeServiceEntries,
@@ -1445,6 +1446,187 @@ describe("realizeExecutionWorkspace", () => {
     await expect(fs.readFile(path.join(workspace.cwd, "feature.txt"), "utf8")).resolves.toBe("preserve me\n");
     const actualHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace.cwd })).stdout.trim();
     expect(actualHead).toBe(expectedHead);
+  });
+
+  it("reattaches a missing persisted git worktree before manual control starts it", async () => {
+    const repoRoot = await createTempRepo();
+    const branchName = "PAP-451-restore-persisted-worktree";
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "restore.sh"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf '%s\\n' \"$PAPERCLIP_WORKSPACE_BRANCH\" > .paperclip-restored-branch",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.chmod(path.join(repoRoot, "scripts", "restore.sh"), 0o755);
+    await runGit(repoRoot, ["add", "scripts/restore.sh"]);
+    await runGit(repoRoot, ["commit", "-m", "Add restore script"]);
+
+    await runGit(repoRoot, ["checkout", "-b", branchName]);
+    await fs.writeFile(path.join(repoRoot, "feature.txt"), "persisted\n", "utf8");
+    await runGit(repoRoot, ["add", "feature.txt"]);
+    await runGit(repoRoot, ["commit", "-m", "Add persisted feature"]);
+    const expectedHead = (await execFileAsync("git", ["rev-parse", branchName], { cwd: repoRoot })).stdout.trim();
+    await runGit(repoRoot, ["checkout", "main"]);
+
+    const initial = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "bash ./scripts/restore.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-451",
+        title: "Restore persisted worktree",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    await fs.rm(initial.cwd, { recursive: true, force: true });
+
+    const restored = await ensurePersistedExecutionWorkspaceAvailable({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      workspace: {
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        cwd: initial.cwd,
+        providerRef: initial.worktreePath,
+        projectId: "project-1",
+        projectWorkspaceId: "workspace-1",
+        repoUrl: null,
+        baseRef: "HEAD",
+        branchName,
+        config: {
+          provisionCommand: "bash ./scripts/restore.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-451",
+        title: "Restore persisted worktree",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    expect(restored).not.toBeNull();
+    expect(restored?.cwd).toBe(initial.cwd);
+    await expect(fs.readFile(path.join(initial.cwd, "feature.txt"), "utf8")).resolves.toBe("persisted\n");
+    await expect(fs.readFile(path.join(initial.cwd, ".paperclip-restored-branch"), "utf8")).resolves.toBe(`${branchName}\n`);
+    const actualHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: initial.cwd })).stdout.trim();
+    expect(actualHead).toBe(expectedHead);
+  });
+
+  it("reprovisions an existing persisted git worktree before manual control starts it", async () => {
+    const repoRoot = await createTempRepo();
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "restore.sh"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf 'reprovisioned\\n' > .paperclip-restored-state",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.chmod(path.join(repoRoot, "scripts", "restore.sh"), 0o755);
+    await runGit(repoRoot, ["add", "scripts/restore.sh"]);
+    await runGit(repoRoot, ["commit", "-m", "Add reprovision script"]);
+
+    const initial = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+          provisionCommand: "bash ./scripts/restore.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-452",
+        title: "Reprovision persisted worktree",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    await fs.rm(path.join(initial.cwd, ".paperclip-restored-state"), { force: true });
+
+    await ensurePersistedExecutionWorkspaceAvailable({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      workspace: {
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        cwd: initial.cwd,
+        providerRef: initial.worktreePath,
+        projectId: "project-1",
+        projectWorkspaceId: "workspace-1",
+        repoUrl: null,
+        baseRef: "HEAD",
+        branchName: initial.branchName,
+        config: {
+          provisionCommand: "bash ./scripts/restore.sh",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-452",
+        title: "Reprovision persisted worktree",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    await expect(fs.readFile(path.join(initial.cwd, ".paperclip-restored-state"), "utf8")).resolves.toBe("reprovisioned\n");
   });
 
   it("auto-detects the default branch when baseRef is not configured", async () => {

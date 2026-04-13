@@ -1160,6 +1160,147 @@ export async function realizeExecutionWorkspace(input: {
   };
 }
 
+export async function ensurePersistedExecutionWorkspaceAvailable(input: {
+  base: ExecutionWorkspaceInput;
+  workspace: {
+    mode: string | null | undefined;
+    strategyType: string | null | undefined;
+    cwd: string | null | undefined;
+    providerRef: string | null | undefined;
+    projectId: string | null | undefined;
+    projectWorkspaceId: string | null | undefined;
+    repoUrl: string | null | undefined;
+    baseRef: string | null | undefined;
+    branchName: string | null | undefined;
+    config?: {
+      provisionCommand?: string | null;
+    } | null;
+  };
+  issue: ExecutionWorkspaceIssueRef | null;
+  agent: ExecutionWorkspaceAgentRef;
+  recorder?: WorkspaceOperationRecorder | null;
+}): Promise<RealizedExecutionWorkspace | null> {
+  const cwd = asString(input.workspace.cwd ?? input.workspace.providerRef, "").trim();
+  if (!cwd) return null;
+
+  const strategy = input.workspace.strategyType === "git_worktree" ? "git_worktree" : "project_primary";
+  const realized: RealizedExecutionWorkspace = {
+    baseCwd: input.base.baseCwd,
+    source: input.workspace.mode === "shared_workspace" ? "project_primary" : "task_session",
+    projectId: input.workspace.projectId ?? input.base.projectId,
+    workspaceId: input.workspace.projectWorkspaceId ?? input.base.workspaceId,
+    repoUrl: input.workspace.repoUrl ?? input.base.repoUrl,
+    repoRef: input.workspace.baseRef ?? input.base.repoRef,
+    strategy,
+    cwd,
+    branchName: input.workspace.branchName ?? null,
+    worktreePath: strategy === "git_worktree" ? (input.workspace.providerRef ?? cwd) : null,
+    warnings: [],
+    created: false,
+  };
+  const provisionCommand = asString(input.workspace.config?.provisionCommand, "").trim();
+
+  if (strategy !== "git_worktree") {
+    return realized;
+  }
+  if (await directoryExists(cwd)) {
+    if (provisionCommand) {
+      const repoRoot = await runGit(["rev-parse", "--show-toplevel"], input.base.baseCwd);
+      await provisionExecutionWorktree({
+        strategy: {
+          type: "git_worktree",
+          provisionCommand,
+        },
+        base: input.base,
+        repoRoot,
+        worktreePath: realized.worktreePath ?? cwd,
+        branchName: realized.branchName ?? "",
+        issue: input.issue,
+        agent: input.agent,
+        created: false,
+        recorder: input.recorder ?? null,
+      });
+    }
+    return realized;
+  }
+
+  const repoRoot = await runGit(["rev-parse", "--show-toplevel"], input.base.baseCwd);
+  const worktreePath = realized.worktreePath ?? cwd;
+  const branchName = asString(input.workspace.branchName, "").trim();
+  if (!branchName) {
+    throw new Error(`Execution workspace "${cwd}" is missing and cannot be restored because no branch name is recorded.`);
+  }
+
+  await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+  await runGit(["worktree", "prune"], repoRoot).catch(() => {});
+
+  let created = false;
+  try {
+    await recordGitOperation(input.recorder, {
+      phase: "worktree_prepare",
+      args: ["worktree", "add", worktreePath, branchName],
+      cwd: repoRoot,
+      metadata: {
+        repoRoot,
+        worktreePath,
+        branchName,
+        baseRef: input.workspace.baseRef ?? input.base.repoRef ?? null,
+        created: false,
+        restored: true,
+      },
+      successMessage: `Reattached missing git worktree at ${worktreePath}\n`,
+      failureLabel: `git worktree add ${worktreePath}`,
+    });
+  } catch (error) {
+    if (
+      !gitErrorIncludes(error, "invalid reference")
+      && !gitErrorIncludes(error, "not a commit")
+      && !gitErrorIncludes(error, "unknown revision")
+    ) {
+      throw error;
+    }
+    const baseRef = input.workspace.baseRef ?? await detectDefaultBranch(repoRoot) ?? "HEAD";
+    await recordGitOperation(input.recorder, {
+      phase: "worktree_prepare",
+      args: ["worktree", "add", "-b", branchName, worktreePath, baseRef],
+      cwd: repoRoot,
+      metadata: {
+        repoRoot,
+        worktreePath,
+        branchName,
+        baseRef,
+        created: true,
+        restored: true,
+      },
+      successMessage: `Recreated missing git worktree at ${worktreePath}\n`,
+      failureLabel: `git worktree add ${worktreePath}`,
+    });
+    created = true;
+  }
+
+  await provisionExecutionWorktree({
+    strategy: {
+      type: "git_worktree",
+      ...(provisionCommand ? { provisionCommand } : {}),
+    },
+    base: input.base,
+    repoRoot,
+    worktreePath,
+    branchName,
+    issue: input.issue,
+    agent: input.agent,
+    created,
+    recorder: input.recorder ?? null,
+  });
+
+  return {
+    ...realized,
+    cwd: worktreePath,
+    worktreePath,
+    created,
+  };
+}
+
 export async function cleanupExecutionWorkspaceArtifacts(input: {
   workspace: {
     id: string;

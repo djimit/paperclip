@@ -16,6 +16,7 @@ import { readProjectWorkspaceRuntimeConfig } from "../services/project-workspace
 import {
   buildWorkspaceRuntimeDesiredStatePatch,
   cleanupExecutionWorkspaceArtifacts,
+  ensurePersistedExecutionWorkspaceAvailable,
   listConfiguredRuntimeServiceEntries,
   runWorkspaceJobForControl,
   startRuntimeServicesForWorkspaceControl,
@@ -123,6 +124,20 @@ export function executionWorkspaceRoutes(db: Db) {
     const projectWorkspaceRuntime = readProjectWorkspaceRuntimeConfig(
       (projectWorkspace?.metadata as Record<string, unknown> | null) ?? null,
     )?.workspaceRuntime ?? null;
+    const projectPolicy = existing.projectId
+      ? await db
+          .select({
+            executionWorkspacePolicy: projects.executionWorkspacePolicy,
+          })
+          .from(projects)
+          .where(
+            and(
+              eq(projects.id, existing.projectId),
+              eq(projects.companyId, existing.companyId),
+            ),
+          )
+          .then((rows) => parseProjectExecutionWorkspacePolicy(rows[0]?.executionWorkspacePolicy))
+      : null;
     const effectiveRuntimeConfig = existing.config?.workspaceRuntime ?? projectWorkspaceRuntime ?? null;
     const target = req.body as { workspaceCommandId?: string | null; runtimeServiceId?: string | null; serviceIndex?: number | null };
     const configuredServices = effectiveRuntimeConfig
@@ -197,9 +212,56 @@ export function executionWorkspaceRoutes(db: Db) {
         serviceIndex: selectedServiceIndex,
       },
       run: async () => {
+        const ensureWorkspaceAvailable = async () =>
+          await ensurePersistedExecutionWorkspaceAvailable({
+            base: {
+              baseCwd: projectWorkspace?.cwd ?? workspaceCwd,
+              source: existing.mode === "shared_workspace" ? "project_primary" : "task_session",
+              projectId: existing.projectId,
+              workspaceId: existing.projectWorkspaceId,
+              repoUrl: existing.repoUrl,
+              repoRef: existing.baseRef,
+            },
+            workspace: {
+              mode: existing.mode,
+              strategyType: existing.strategyType,
+              cwd: existing.cwd,
+              providerRef: existing.providerRef,
+              projectId: existing.projectId,
+              projectWorkspaceId: existing.projectWorkspaceId,
+              repoUrl: existing.repoUrl,
+              baseRef: existing.baseRef,
+              branchName: existing.branchName,
+              config: {
+                ...existing.config,
+                provisionCommand:
+                  existing.config?.provisionCommand
+                  ?? projectPolicy?.workspaceStrategy?.provisionCommand
+                  ?? null,
+              },
+            },
+            issue: existing.sourceIssueId
+              ? {
+                  id: existing.sourceIssueId,
+                  identifier: null,
+                  title: existing.name,
+                }
+              : null,
+            agent: {
+              id: actor.agentId ?? null,
+              name: actor.actorType === "user" ? "Board" : "Agent",
+              companyId: existing.companyId,
+            },
+            recorder,
+          });
+
         if (action === "run") {
           if (!workspaceCommand || workspaceCommand.kind !== "job") {
             throw new Error("Workspace job selection is required");
+          }
+          const availableWorkspace = await ensureWorkspaceAvailable();
+          if (!availableWorkspace) {
+            throw new Error("Execution workspace needs a local path before Paperclip can run workspace commands");
           }
           return await runWorkspaceJobForControl({
             actor: {
@@ -214,20 +276,7 @@ export function executionWorkspaceRoutes(db: Db) {
                   title: existing.name,
                 }
               : null,
-            workspace: {
-              baseCwd: workspaceCwd,
-              source: existing.mode === "shared_workspace" ? "project_primary" : "task_session",
-              projectId: existing.projectId,
-              workspaceId: existing.projectWorkspaceId,
-              repoUrl: existing.repoUrl,
-              repoRef: existing.baseRef,
-              strategy: existing.strategyType === "git_worktree" ? "git_worktree" : "project_primary",
-              cwd: workspaceCwd,
-              branchName: existing.branchName,
-              worktreePath: existing.strategyType === "git_worktree" ? workspaceCwd : null,
-              warnings: [],
-              created: false,
-            },
+            workspace: availableWorkspace,
             command: workspaceCommand.rawConfig,
             adapterEnv: {},
             recorder,
@@ -261,6 +310,10 @@ export function executionWorkspaceRoutes(db: Db) {
         }
 
         if (action === "start" || action === "restart") {
+          const availableWorkspace = await ensureWorkspaceAvailable();
+          if (!availableWorkspace) {
+            throw new Error("Execution workspace needs a local path before Paperclip can manage local runtime services");
+          }
           const startedServices = await startRuntimeServicesForWorkspaceControl({
             db,
             actor: {
@@ -275,20 +328,7 @@ export function executionWorkspaceRoutes(db: Db) {
                   title: existing.name,
                 }
               : null,
-            workspace: {
-              baseCwd: workspaceCwd,
-              source: existing.mode === "shared_workspace" ? "project_primary" : "task_session",
-              projectId: existing.projectId,
-              workspaceId: existing.projectWorkspaceId,
-              repoUrl: existing.repoUrl,
-              repoRef: existing.baseRef,
-              strategy: existing.strategyType === "git_worktree" ? "git_worktree" : "project_primary",
-              cwd: workspaceCwd,
-              branchName: existing.branchName,
-              worktreePath: existing.strategyType === "git_worktree" ? workspaceCwd : null,
-              warnings: [],
-              created: false,
-            },
+            workspace: availableWorkspace,
             executionWorkspaceId: existing.id,
             config: { workspaceRuntime: effectiveRuntimeConfig },
             adapterEnv: {},
