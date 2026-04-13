@@ -110,6 +110,7 @@ import {
   groupInboxWorkItems,
   isInboxEntityDismissed,
   isMineInboxTab,
+  loadCollapsedInboxGroupKeys,
   loadInboxFilterPreferences,
   loadInboxIssueColumns,
   loadInboxNesting,
@@ -120,6 +121,7 @@ import {
   resolveIssueWorkspaceName,
   resolveInboxSelectionIndex,
   saveInboxFilterPreferences,
+  saveCollapsedInboxGroupKeys,
   saveInboxIssueColumns,
   saveInboxNesting,
   saveInboxWorkItemGroupBy,
@@ -724,6 +726,7 @@ export function Inbox() {
     if (previousSelectedCompanyIdRef.current !== selectedCompanyId) {
       previousSelectedCompanyIdRef.current = selectedCompanyId;
       setFilterPreferences(loadInboxFilterPreferences(selectedCompanyId));
+      setCollapsedGroupKeys(loadCollapsedInboxGroupKeys(selectedCompanyId));
     }
   }, [selectedCompanyId]);
 
@@ -1107,15 +1110,16 @@ export function Inbox() {
     });
   }, []);
   const [collapsedInboxParents, setCollapsedInboxParents] = useState<Set<string>>(new Set());
-  const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<Set<string>>(new Set());
+  const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<Set<string>>(() => loadCollapsedInboxGroupKeys(selectedCompanyId));
   const toggleGroupCollapse = useCallback((groupKey: string) => {
     setCollapsedGroupKeys((prev) => {
       const next = new Set(prev);
       if (next.has(groupKey)) next.delete(groupKey);
       else next.add(groupKey);
+      saveCollapsedInboxGroupKeys(selectedCompanyId, next);
       return next;
     });
-  }, []);
+  }, [selectedCompanyId]);
   const groupedSections = useMemo<InboxGroupedSection[]>(() => [
     ...buildGroupedInboxSections(effectiveWorkItems, groupBy, nestingEnabled, inboxWorkspaceGrouping),
     ...buildGroupedInboxSections(

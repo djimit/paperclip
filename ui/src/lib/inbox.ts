@@ -22,6 +22,7 @@ export const INBOX_ISSUE_COLUMNS_KEY = "paperclip:inbox:issue-columns";
 export const INBOX_NESTING_KEY = "paperclip:inbox:nesting";
 export const INBOX_GROUP_BY_KEY = "paperclip:inbox:group-by";
 export const INBOX_FILTER_PREFERENCES_KEY_PREFIX = "paperclip:inbox:filters";
+export const INBOX_COLLAPSED_GROUPS_KEY_PREFIX = "paperclip:inbox:collapsed-groups";
 export type InboxTab = "mine" | "recent" | "unread" | "all";
 export type InboxCategoryFilter =
   | "everything"
@@ -164,6 +165,11 @@ function getInboxFilterPreferencesStorageKey(companyId: string | null | undefine
   return `${INBOX_FILTER_PREFERENCES_KEY_PREFIX}:${companyId}`;
 }
 
+function getInboxCollapsedGroupsStorageKey(companyId: string | null | undefined): string | null {
+  if (!companyId) return null;
+  return `${INBOX_COLLAPSED_GROUPS_KEY_PREFIX}:${companyId}`;
+}
+
 export function loadInboxFilterPreferences(
   companyId: string | null | undefined,
 ): InboxFilterPreferences {
@@ -213,6 +219,36 @@ export function saveInboxFilterPreferences(
         issueFilters: normalizeIssueFilterState(preferences.issueFilters),
       }),
     );
+  } catch {
+    // Ignore localStorage failures.
+  }
+}
+
+export function loadCollapsedInboxGroupKeys(
+  companyId: string | null | undefined,
+): Set<string> {
+  const storageKey = getInboxCollapsedGroupsStorageKey(companyId);
+  if (!storageKey) return new Set();
+
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(normalizeStringArray(parsed));
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveCollapsedInboxGroupKeys(
+  companyId: string | null | undefined,
+  groupKeys: ReadonlySet<string>,
+) {
+  const storageKey = getInboxCollapsedGroupsStorageKey(companyId);
+  if (!storageKey) return;
+
+  try {
+    localStorage.setItem(storageKey, JSON.stringify([...groupKeys]));
   } catch {
     // Ignore localStorage failures.
   }

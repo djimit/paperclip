@@ -31,6 +31,7 @@ import {
   loadInboxFilterPreferences,
   loadInboxIssueColumns,
   loadInboxWorkItemGroupBy,
+  loadCollapsedInboxGroupKeys,
   loadLastInboxTab,
   matchesInboxIssueSearch,
   normalizeInboxIssueColumns,
@@ -40,6 +41,7 @@ import {
   resolveIssueWorkspaceGroup,
   resolveInboxSelectionIndex,
   saveInboxFilterPreferences,
+  saveCollapsedInboxGroupKeys,
   saveInboxIssueColumns,
   saveInboxWorkItemGroupBy,
   saveLastInboxTab,
@@ -1079,6 +1081,20 @@ describe("inbox helpers", () => {
   it("persists workspace grouping preferences", () => {
     saveInboxWorkItemGroupBy("workspace");
     expect(loadInboxWorkItemGroupBy()).toBe("workspace");
+  });
+
+  it("persists collapsed inbox groups per company", () => {
+    saveCollapsedInboxGroupKeys("company-1", new Set(["workspace:alpha", "workspace:beta"]));
+    saveCollapsedInboxGroupKeys("company-2", new Set(["type:approval"]));
+
+    expect(loadCollapsedInboxGroupKeys("company-1")).toEqual(new Set(["workspace:alpha", "workspace:beta"]));
+    expect(loadCollapsedInboxGroupKeys("company-2")).toEqual(new Set(["type:approval"]));
+  });
+
+  it("returns empty collapsed inbox groups for missing or invalid storage", () => {
+    expect(loadCollapsedInboxGroupKeys("company-1")).toEqual(new Set());
+    localStorage.setItem("paperclip:inbox:collapsed-groups:company-1", JSON.stringify({ nope: true }));
+    expect(loadCollapsedInboxGroupKeys("company-1")).toEqual(new Set());
   });
 
   it("does not reset workspace grouping before experimental settings have loaded", () => {
