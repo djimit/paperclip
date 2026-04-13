@@ -15,6 +15,7 @@ import {
   useContext,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -70,6 +71,7 @@ import { restoreSubmittedCommentDraft } from "../lib/comment-submit-draft";
 import {
   captureComposerViewportSnapshot,
   restoreComposerViewportSnapshot,
+  shouldPreserveComposerViewport,
 } from "../lib/issue-chat-scroll";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import { timeAgo } from "../lib/timeAgo";
@@ -1884,6 +1886,9 @@ export function IssueChatThread({
   const location = useLocation();
   const hasScrolledRef = useRef(false);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
+  const composerViewportAnchorRef = useRef<HTMLDivElement | null>(null);
+  const composerViewportSnapshotRef = useRef<ReturnType<typeof captureComposerViewportSnapshot>>(null);
+  const preserveComposerViewportRef = useRef(false);
   const displayLiveRuns = useMemo(() => {
     const deduped = new Map<string, LiveRunForIssue>();
     for (const run of liveRuns) {
@@ -1987,6 +1992,19 @@ export function IssueChatThread({
     onSend: ({ body, reopen, reassignment }) => onAdd(body, reopen, reassignment),
     onCancel: onCancelRun,
   });
+
+  useLayoutEffect(() => {
+    const composerElement = composerViewportAnchorRef.current;
+    if (preserveComposerViewportRef.current) {
+      restoreComposerViewportSnapshot(
+        composerViewportSnapshotRef.current,
+        composerElement,
+      );
+    }
+
+    composerViewportSnapshotRef.current = captureComposerViewportSnapshot(composerElement);
+    preserveComposerViewportRef.current = shouldPreserveComposerViewport(composerElement);
+  }, [messages]);
 
   useEffect(() => {
     const hash = location.hash;
@@ -2096,20 +2114,22 @@ export function IssueChatThread({
         </IssueChatErrorBoundary>
 
         {showComposer ? (
-          <IssueChatComposer
-            ref={composerRef}
-            onImageUpload={imageUploadHandler}
-            onAttachImage={onAttachImage}
-            draftKey={draftKey}
-            enableReassign={enableReassign}
-            reassignOptions={reassignOptions}
-            currentAssigneeValue={currentAssigneeValue}
-            suggestedAssigneeValue={suggestedAssigneeValue}
-            mentions={mentions}
-            agentMap={agentMap}
-            composerDisabledReason={composerDisabledReason}
-            issueStatus={issueStatus}
-          />
+          <div ref={composerViewportAnchorRef}>
+            <IssueChatComposer
+              ref={composerRef}
+              onImageUpload={imageUploadHandler}
+              onAttachImage={onAttachImage}
+              draftKey={draftKey}
+              enableReassign={enableReassign}
+              reassignOptions={reassignOptions}
+              currentAssigneeValue={currentAssigneeValue}
+              suggestedAssigneeValue={suggestedAssigneeValue}
+              mentions={mentions}
+              agentMap={agentMap}
+              composerDisabledReason={composerDisabledReason}
+              issueStatus={issueStatus}
+            />
+          </div>
         ) : null}
       </div>
       </IssueChatCtx.Provider>

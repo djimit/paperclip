@@ -19,6 +19,16 @@ const { threadMessagesMock } = vi.hoisted(() => ({
   threadMessagesMock: vi.fn(() => <div data-testid="thread-messages" />),
 }));
 
+const {
+  captureComposerViewportSnapshotMock,
+  restoreComposerViewportSnapshotMock,
+  shouldPreserveComposerViewportMock,
+} = vi.hoisted(() => ({
+  captureComposerViewportSnapshotMock: vi.fn(),
+  restoreComposerViewportSnapshotMock: vi.fn(),
+  shouldPreserveComposerViewportMock: vi.fn(),
+}));
+
 vi.mock("@assistant-ui/react", () => ({
   AssistantRuntimeProvider: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   ThreadPrimitive: {
@@ -54,6 +64,16 @@ vi.mock("./transcript/useLiveRunTranscripts", () => ({
     hasOutputForRun: () => false,
   }),
 }));
+
+vi.mock("../lib/issue-chat-scroll", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/issue-chat-scroll")>();
+  return {
+    ...actual,
+    captureComposerViewportSnapshot: captureComposerViewportSnapshotMock.mockImplementation(actual.captureComposerViewportSnapshot),
+    restoreComposerViewportSnapshot: restoreComposerViewportSnapshotMock.mockImplementation(actual.restoreComposerViewportSnapshot),
+    shouldPreserveComposerViewport: shouldPreserveComposerViewportMock.mockImplementation(actual.shouldPreserveComposerViewport),
+  };
+});
 
 vi.mock("./MarkdownBody", () => ({
   MarkdownBody: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -133,6 +153,9 @@ describe("IssueChatThread", () => {
     appendMock.mockReset();
     markdownEditorFocusMock.mockReset();
     threadMessagesMock.mockReset();
+    captureComposerViewportSnapshotMock.mockClear();
+    restoreComposerViewportSnapshotMock.mockClear();
+    shouldPreserveComposerViewportMock.mockClear();
   });
 
   it("drops the count heading and does not use an internal scrollbox", () => {
@@ -490,6 +513,62 @@ describe("IssueChatThread", () => {
 
     scrollByMock.mockRestore();
     requestAnimationFrameMock.mockRestore();
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("requests composer viewport restoration when live messages arrive while the composer is visible", () => {
+    const root = createRoot(container);
+    const scrollByMock = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
+    shouldPreserveComposerViewportMock.mockReturnValue(true);
+    captureComposerViewportSnapshotMock.mockReturnValue({ composerViewportTop: 420 });
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[{
+              id: "run-1",
+              issueId: "issue-1",
+              status: "running",
+              invocationSource: "comment",
+              triggerDetail: null,
+              startedAt: "2026-04-06T12:00:00.000Z",
+              finishedAt: null,
+              createdAt: "2026-04-06T12:00:00.000Z",
+              agentId: "agent-1",
+              agentName: "Agent 1",
+              adapterType: "codex_local",
+            }]}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(restoreComposerViewportSnapshotMock).toHaveBeenCalled();
+
+    scrollByMock.mockRestore();
     act(() => {
       root.unmount();
     });

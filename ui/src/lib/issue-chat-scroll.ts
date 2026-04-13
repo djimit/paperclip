@@ -36,6 +36,22 @@ export function captureComposerViewportSnapshot(
   };
 }
 
+export function shouldPreserveComposerViewport(
+  composerElement: HTMLElement | null,
+  doc: Document = document,
+) {
+  if (!composerElement) return false;
+
+  const activeElement = doc.activeElement;
+  if (activeElement instanceof Node && composerElement.contains(activeElement)) {
+    return true;
+  }
+
+  const viewportHeight = doc.defaultView?.innerHeight ?? window.innerHeight;
+  const rect = composerElement.getBoundingClientRect();
+  return rect.bottom > 0 && rect.top < viewportHeight;
+}
+
 export function restoreComposerViewportSnapshot(
   snapshot: ComposerViewportSnapshot | null,
   composerElement: HTMLElement | null,

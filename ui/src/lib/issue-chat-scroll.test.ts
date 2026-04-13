@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   captureComposerViewportSnapshot,
   restoreComposerViewportSnapshot,
+  shouldPreserveComposerViewport,
 } from "./issue-chat-scroll";
 
 function mockTop(element: HTMLElement, top: number) {
@@ -69,5 +70,29 @@ describe("issue-chat-scroll", () => {
     scrollByMock.mockRestore();
     composer.remove();
     mainContent.remove();
+  });
+
+  it("preserves the composer viewport when the composer is visible", () => {
+    const composer = document.createElement("div");
+    document.body.appendChild(composer);
+    mockTop(composer, 540);
+
+    expect(shouldPreserveComposerViewport(composer)).toBe(true);
+
+    composer.remove();
+  });
+
+  it("preserves the composer viewport when focus stays inside the composer", () => {
+    const composer = document.createElement("div");
+    const input = document.createElement("textarea");
+    composer.appendChild(input);
+    document.body.appendChild(composer);
+    mockTop(composer, 1200);
+
+    input.focus();
+
+    expect(shouldPreserveComposerViewport(composer)).toBe(true);
+
+    composer.remove();
   });
 });
