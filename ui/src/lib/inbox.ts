@@ -485,6 +485,10 @@ export function isMineInboxTab(tab: InboxTab): boolean {
   return tab === "mine";
 }
 
+export function shouldShowCompanyAlerts(tab: InboxTab): boolean {
+  return tab === "all";
+}
+
 export function resolveInboxSelectionIndex(
   previousIndex: number,
   itemCount: number,
@@ -806,7 +810,8 @@ export function computeInboxBadgeData({
   const alerts = Number(showAggregateAgentError) + Number(showBudgetAlert);
 
   return {
-    inbox: actionableApprovals + visibleJoinRequests + failedRuns + visibleMineIssues + alerts,
+    // The inbox badge reflects personal/actionable work, not company-wide health alerts.
+    inbox: actionableApprovals + visibleJoinRequests + failedRuns + visibleMineIssues,
     approvals: actionableApprovals,
     failedRuns,
     joinRequests: visibleJoinRequests,

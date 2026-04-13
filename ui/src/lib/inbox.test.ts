@@ -38,6 +38,7 @@ import {
   saveInboxFilterPreferences,
   saveInboxIssueColumns,
   saveLastInboxTab,
+  shouldShowCompanyAlerts,
   shouldShowInboxSection,
   type InboxWorkItem,
 } from "./inbox";
@@ -307,7 +308,7 @@ describe("inbox helpers", () => {
     });
 
     expect(result).toEqual({
-      inbox: 6,
+      inbox: 5,
       approvals: 1,
       failedRuns: 2,
       joinRequests: 1,
@@ -351,7 +352,8 @@ describe("inbox helpers", () => {
     });
 
     expect(result.mineIssues).toBe(1);
-    expect(result.inbox).toBe(3);
+    expect(result.inbox).toBe(1);
+    expect(result.alerts).toBe(2);
   });
 
   it("resurfaces non-issue items when they change after dismissal", () => {
@@ -444,6 +446,22 @@ describe("inbox helpers", () => {
     });
 
     expect(result.approvals).toBe(0);
+  });
+
+  it("does not count company-wide alerts in the personal inbox badge", () => {
+    const result = computeInboxBadgeData({
+      approvals: [],
+      joinRequests: [],
+      dashboard,
+      heartbeatRuns: [],
+      mineIssues: [],
+      dismissedAlerts: new Set<string>(),
+      dismissedAtByKey: new Map(),
+      currentUserId: "user-1",
+    });
+
+    expect(result.alerts).toBe(2);
+    expect(result.inbox).toBe(0);
   });
 
   it("mixes approvals into the inbox feed by most recent activity", () => {
@@ -570,6 +588,13 @@ describe("inbox helpers", () => {
         showOnAll: false,
       }),
     ).toBe(false);
+  });
+
+  it("shows company alerts only on the all tab", () => {
+    expect(shouldShowCompanyAlerts("mine")).toBe(false);
+    expect(shouldShowCompanyAlerts("recent")).toBe(false);
+    expect(shouldShowCompanyAlerts("unread")).toBe(false);
+    expect(shouldShowCompanyAlerts("all")).toBe(true);
   });
 
   it("limits recent touched issues before unread badge counting", () => {
