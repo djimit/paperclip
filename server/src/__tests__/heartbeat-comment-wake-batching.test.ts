@@ -584,7 +584,7 @@ describe("heartbeat comment wake batching", () => {
         .then((rows) => rows[0] ?? null);
 
       expect(reopenedIssue).toMatchObject({
-        status: "todo",
+        status: "in_progress",
         completedAt: null,
       });
 
