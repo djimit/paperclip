@@ -939,22 +939,22 @@ export function IssueDetail() {
     placeholderData: keepPreviousDataForSameQueryTail<IssueAttachment[]>(issueId ?? "pending"),
   });
 
-  const { data: liveRunCount = 0 } = useQuery({
+  const { data: liveRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>({
     queryKey: queryKeys.issues.liveRuns(issueId!),
     queryFn: () => heartbeatsApi.liveRunsForIssue(issueId!),
     enabled: !!issueId,
     refetchInterval: 3000,
     select: (runs) => runs.length,
-    placeholderData: keepPreviousDataForSameQueryTail<number>(issueId ?? "pending"),
+    placeholderData: keepPreviousDataForSameQueryTail<LiveRunForIssue[]>(issueId ?? "pending"),
   });
 
-  const { data: hasActiveRun = false } = useQuery({
+  const { data: hasActiveRun = false } = useQuery<ActiveRunForIssue | null, Error, boolean>({
     queryKey: queryKeys.issues.activeRun(issueId!),
     queryFn: () => heartbeatsApi.activeRunForIssue(issueId!),
     enabled: !!issueId && (!!issue?.executionRunId || issue?.status === "in_progress"),
     refetchInterval: liveRunCount > 0 ? false : 3000,
     select: (run) => !!run,
-    placeholderData: keepPreviousDataForSameQueryTail<boolean>(issueId ?? "pending"),
+    placeholderData: keepPreviousDataForSameQueryTail<ActiveRunForIssue | null>(issueId ?? "pending"),
   });
   const hasLiveRuns = liveRunCount > 0 || hasActiveRun;
   const sourceBreadcrumb = useMemo(
