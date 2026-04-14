@@ -16,6 +16,8 @@ import {
 
 const mdxEditorMockState = vi.hoisted(() => ({
   emitMountEmptyReset: false,
+  emitMountParseError: false,
+  emitMountSilentEmptyState: false,
   markdownValues: [] as string[],
 }));
 
@@ -37,11 +39,13 @@ vi.mock("@mdxeditor/editor", async () => {
       markdown,
       placeholder,
       onChange,
+      onError,
       className,
     }: {
       markdown: string;
       placeholder?: string;
       onChange?: (value: string) => void;
+      onError?: (error: unknown) => void;
       className?: string;
     },
     forwardedRef: React.ForwardedRef<{ setMarkdown: (value: string) => void; focus: () => void } | null>,
@@ -65,6 +69,16 @@ vi.mock("@mdxeditor/editor", async () => {
         if (mdxEditorMockState.emitMountEmptyReset) {
           setContent("");
           onChange?.("");
+        }
+        if (mdxEditorMockState.emitMountSilentEmptyState) {
+          setContent("");
+        }
+        if (mdxEditorMockState.emitMountParseError) {
+          setContent("");
+          onError?.({
+            error: "Unsupported markdown syntax",
+            source: markdown,
+          });
         }
       }, 0);
       return () => {
@@ -148,6 +162,8 @@ describe("MarkdownEditor", () => {
     Range.prototype.getBoundingClientRect = originalRangeRect;
     vi.clearAllMocks();
     mdxEditorMockState.emitMountEmptyReset = false;
+    mdxEditorMockState.emitMountParseError = false;
+    mdxEditorMockState.emitMountSilentEmptyState = false;
     mdxEditorMockState.markdownValues = [];
   });
 
@@ -224,6 +240,62 @@ describe("MarkdownEditor", () => {
     expect(mdxEditorMockState.markdownValues.at(-1)).not.toContain("<img");
     expect(container.textContent).toContain("Before");
     expect(container.textContent).toContain("After");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("falls back to a raw textarea when the rich parser rejects the markdown", async () => {
+    mdxEditorMockState.emitMountParseError = true;
+    const handleChange = vi.fn();
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <MarkdownEditor
+          value="Affected versions: <= v0.3.1"
+          onChange={handleChange}
+          placeholder="Markdown body"
+        />,
+      );
+    });
+
+    await flush();
+
+    const textarea = container.querySelector("textarea");
+    expect(textarea).not.toBeNull();
+    expect(textarea?.value).toBe("Affected versions: <= v0.3.1");
+    expect(container.textContent).toContain("Rich editor unavailable for this markdown");
+    expect(handleChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("falls back to a raw textarea when the rich editor mounts into the placeholder without callbacks", async () => {
+    mdxEditorMockState.emitMountSilentEmptyState = true;
+    const handleChange = vi.fn();
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <MarkdownEditor
+          value="Affected versions: <= v0.3.1"
+          onChange={handleChange}
+          placeholder="Add a description..."
+        />,
+      );
+    });
+
+    await flush();
+
+    const textarea = container.querySelector("textarea");
+    expect(textarea).not.toBeNull();
+    expect(textarea?.value).toBe("Affected versions: <= v0.3.1");
+    expect(container.textContent).toContain("Rich editor unavailable for this markdown");
+    expect(handleChange).not.toHaveBeenCalled();
 
     await act(async () => {
       root.unmount();
