@@ -142,7 +142,7 @@ function normalizeIssueFilterState(value: unknown): IssueFilterState {
     labels: normalizeStringArray(candidate.labels),
     projects: normalizeStringArray(candidate.projects),
     workspaces: normalizeStringArray(candidate.workspaces),
-    showRoutineExecutions: candidate.showRoutineExecutions !== false,
+    hideRoutineExecutions: candidate.hideRoutineExecutions === true,
   };
 }
 
@@ -367,14 +367,14 @@ export function shouldResetInboxWorkspaceGrouping(
 
 export function shouldIncludeRoutineExecutionIssue(
   issue: Pick<Issue, "originKind">,
-  showRoutineExecutions: boolean,
+  hideRoutineExecutions: boolean,
 ): boolean {
-  return showRoutineExecutions || issue.originKind !== "routine_execution";
+  return !hideRoutineExecutions || issue.originKind !== "routine_execution";
 }
 
-export function filterInboxIssues(issues: Issue[], showRoutineExecutions: boolean): Issue[] {
-  if (showRoutineExecutions) return issues;
-  return issues.filter((issue) => shouldIncludeRoutineExecutionIssue(issue, showRoutineExecutions));
+export function filterInboxIssues(issues: Issue[], hideRoutineExecutions: boolean): Issue[] {
+  if (!hideRoutineExecutions) return issues;
+  return issues.filter((issue) => shouldIncludeRoutineExecutionIssue(issue, hideRoutineExecutions));
 }
 
 export function matchesInboxIssueSearch(

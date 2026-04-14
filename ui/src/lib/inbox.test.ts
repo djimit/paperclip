@@ -718,7 +718,7 @@ describe("inbox helpers", () => {
           labels: [],
           projects: [],
           workspaces: [],
-          showRoutineExecutions: false,
+          hideRoutineExecutions: true,
         },
       }).map((issue) => issue.id),
     ).toEqual(["remote-match"]);
@@ -736,7 +736,7 @@ describe("inbox helpers", () => {
           labels: [],
           projects: [],
           workspaces: [],
-          showRoutineExecutions: false,
+          hideRoutineExecutions: true,
         },
       }),
     ).toEqual([]);
@@ -754,7 +754,7 @@ describe("inbox helpers", () => {
           labels: [],
           projects: [],
           workspaces: [],
-          showRoutineExecutions: false,
+          hideRoutineExecutions: true,
         },
       }),
     ).toEqual([]);
@@ -779,7 +779,7 @@ describe("inbox helpers", () => {
         labels: ["label-1"],
         projects: ["project-1"],
         workspaces: ["workspace-1"],
-        showRoutineExecutions: true,
+        hideRoutineExecutions: false,
       },
     });
     saveInboxFilterPreferences("company-2", {
@@ -792,7 +792,7 @@ describe("inbox helpers", () => {
         labels: [],
         projects: [],
         workspaces: [],
-        showRoutineExecutions: false,
+        hideRoutineExecutions: true,
       },
     });
 
@@ -806,7 +806,7 @@ describe("inbox helpers", () => {
         labels: ["label-1"],
         projects: ["project-1"],
         workspaces: ["workspace-1"],
-        showRoutineExecutions: true,
+        hideRoutineExecutions: false,
       },
     });
     expect(loadInboxFilterPreferences("company-2")).toEqual({
@@ -819,7 +819,7 @@ describe("inbox helpers", () => {
         labels: [],
         projects: [],
         workspaces: [],
-        showRoutineExecutions: false,
+        hideRoutineExecutions: true,
       },
     });
   });
@@ -835,7 +835,7 @@ describe("inbox helpers", () => {
         labels: null,
         projects: ["project-1"],
         workspaces: ["workspace-1", false],
-        showRoutineExecutions: "yes",
+        hideRoutineExecutions: "yes",
       },
     }));
 
@@ -849,7 +849,7 @@ describe("inbox helpers", () => {
         labels: [],
         projects: ["project-1"],
         workspaces: ["workspace-1"],
-        showRoutineExecutions: true,
+        hideRoutineExecutions: false,
       },
     });
   });
@@ -1003,12 +1003,12 @@ describe("inbox helpers", () => {
     expect(getInboxKeyboardSelectionIndex(0, 3, "previous")).toBe(0);
   });
 
-  it("hides routine execution issues until the toggle is enabled", () => {
+  it("hides routine execution issues when the hide toggle is enabled", () => {
     const manualIssue = { ...makeIssue("manual", true), originKind: "manual" as const };
     const routineIssue = { ...makeIssue("routine", true), originKind: "routine_execution" as const };
 
-    expect(filterInboxIssues([manualIssue, routineIssue], false)).toEqual([manualIssue]);
-    expect(filterInboxIssues([manualIssue, routineIssue], true)).toEqual([manualIssue, routineIssue]);
+    expect(filterInboxIssues([manualIssue, routineIssue], false)).toEqual([manualIssue, routineIssue]);
+    expect(filterInboxIssues([manualIssue, routineIssue], true)).toEqual([manualIssue]);
   });
 
   it("groups mixed inbox items by type while preserving item order within each group", () => {
