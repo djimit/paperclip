@@ -50,7 +50,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
-import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, Columns3, User, Search } from "lucide-react";
+import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search } from "lucide-react";
 import { KanbanBoard } from "./KanbanBoard";
 import { buildIssueTree, countDescendants } from "../lib/issue-tree";
 import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
@@ -64,6 +64,7 @@ export type IssueViewState = IssueFilterState & {
   sortDir: "asc" | "desc";
   groupBy: "status" | "priority" | "assignee" | "workspace" | "parent" | "none";
   viewMode: "list" | "board";
+  nestingEnabled: boolean;
   collapsedGroups: string[];
   collapsedParents: string[];
 };
@@ -74,6 +75,7 @@ const defaultViewState: IssueViewState = {
   sortDir: "desc",
   groupBy: "none",
   viewMode: "list",
+  nestingEnabled: true,
   collapsedGroups: [],
   collapsedParents: [],
 };
@@ -574,6 +576,19 @@ export function IssuesList({
             </button>
           </div>
 
+          {viewState.viewMode === "list" && (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className={cn("hidden h-8 w-8 shrink-0 sm:inline-flex", viewState.nestingEnabled && "bg-accent")}
+              onClick={() => updateView({ nestingEnabled: !viewState.nestingEnabled })}
+              title={viewState.nestingEnabled ? "Disable parent-child nesting" : "Enable parent-child nesting"}
+            >
+              <ListTree className="h-3.5 w-3.5" />
+            </Button>
+          )}
+
           <IssueColumnPicker
             availableColumns={availableIssueColumns}
             visibleColumnSet={visibleIssueColumnSet}
@@ -727,7 +742,9 @@ export function IssuesList({
             )}
             <CollapsibleContent>
               {(() => {
-                const { roots, childMap } = buildIssueTree(group.items);
+                const { roots, childMap } = viewState.nestingEnabled
+                  ? buildIssueTree(group.items)
+                  : { roots: group.items, childMap: new Map<string, Issue[]>() };
 
                 const renderIssueRow = (issue: Issue, depth: number) => {
                   const children = childMap.get(issue.id) ?? [];
