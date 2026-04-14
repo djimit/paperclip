@@ -50,11 +50,11 @@ export function trackGoalCreated(
 
 export function trackAgentCreated(
   client: TelemetryClient,
-  dims: { agentRole: string; agentId: string },
+  dims: { agentRole: string; agentId?: string },
 ): void {
   client.track("agent.created", {
     agent_role: dims.agentRole,
-    agent_id: dims.agentId,
+    ...(dims.agentId ? { agent_id: dims.agentId } : {}),
   });
 }
 
@@ -70,21 +70,23 @@ export function trackSkillImported(
 
 export function trackAgentFirstHeartbeat(
   client: TelemetryClient,
-  dims: { agentRole: string; agentId: string },
+  dims: { agentRole: string; agentId?: string },
 ): void {
   client.track("agent.first_heartbeat", {
     agent_role: dims.agentRole,
-    agent_id: dims.agentId,
+    ...(dims.agentId ? { agent_id: dims.agentId } : {}),
   });
 }
 
 export function trackAgentTaskCompleted(
   client: TelemetryClient,
-  dims: { agentRole: string; agentId: string },
+  dims: { agentRole: string; agentId?: string; adapterType?: string; model?: string },
 ): void {
   client.track("agent.task_completed", {
     agent_role: dims.agentRole,
-    agent_id: dims.agentId,
+    ...(dims.agentId ? { agent_id: dims.agentId } : {}),
+    ...(dims.adapterType ? { adapter_type: dims.adapterType } : {}),
+    ...(dims.model ? { model: dims.model } : {}),
   });
 }
 

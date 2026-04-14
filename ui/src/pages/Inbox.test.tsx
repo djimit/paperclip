@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompanyJoinRequest } from "../api/access";
 import {
   FailedRunInboxRow,
+  InboxGroupHeader,
   InboxIssueMetaLeading,
   InboxIssueTrailingColumns,
   formatJoinRequestInboxLabel,
@@ -307,5 +308,54 @@ describe("formatJoinRequestInboxLabel", () => {
         }),
       ),
     ).toBe("snapshot@example.com");
+  });
+});
+
+describe("InboxGroupHeader", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it("shows a left caret and expanded state for collapsible mobile headers", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(<InboxGroupHeader label="Primary workspace (default)" collapsible collapsed={false} />);
+    });
+
+    const button = container.querySelector("button");
+    expect(button).not.toBeNull();
+    expect(button?.getAttribute("aria-expanded")).toBe("true");
+    expect(button?.textContent).toContain("Primary workspace (default)");
+    const caret = container.querySelector("svg");
+    expect(caret?.className.baseVal).toContain("rotate-90");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("keeps the caret collapsed when the mobile group is hidden", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(<InboxGroupHeader label="Feature Branch" collapsible collapsed />);
+    });
+
+    const button = container.querySelector("button");
+    expect(button?.getAttribute("aria-expanded")).toBe("false");
+    const caret = container.querySelector("svg");
+    expect(caret?.className.baseVal).not.toContain("rotate-90");
+
+    act(() => {
+      root.unmount();
+    });
   });
 });

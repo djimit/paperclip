@@ -6,17 +6,30 @@ import { healthRoutes } from "../routes/health.js";
 import * as devServerStatus from "../dev-server-status.js";
 import { serverVersion } from "../version.js";
 
+const mockReadPersistedDevServerStatus = vi.hoisted(() => vi.fn());
+
+vi.mock("../dev-server-status.js", () => ({
+  readPersistedDevServerStatus: mockReadPersistedDevServerStatus,
+  toDevServerHealthStatus: vi.fn(),
+}));
+
+function createApp(db?: Db) {
+  const app = express();
+  app.use("/health", healthRoutes(db));
+  return app;
+}
+
 describe("GET /health", () => {
   beforeEach(() => {
-    vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(undefined);
+    vi.clearAllMocks();
+    mockReadPersistedDevServerStatus.mockReturnValue(undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
   it("returns 200 with status ok", async () => {
-    const app = express();
-    app.use("/health", healthRoutes());
+    const app = createApp();
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: "ok", version: serverVersion });
@@ -26,8 +39,7 @@ describe("GET /health", () => {
     const db = {
       execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
     } as unknown as Db;
-    const app = express();
-    app.use("/health", healthRoutes(db));
+    const app = createApp(db);
 
     const res = await request(app).get("/health");
 
@@ -40,8 +52,7 @@ describe("GET /health", () => {
     const db = {
       execute: vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED")),
     } as unknown as Db;
-    const app = express();
-    app.use("/health", healthRoutes(db));
+    const app = createApp(db);
 
     const res = await request(app).get("/health");
 
