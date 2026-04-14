@@ -75,6 +75,7 @@ import {
 import { extractSkillMentionIds } from "@paperclipai/shared";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
+const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MAX = 10;
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
@@ -98,6 +99,7 @@ const SESSIONED_LOCAL_ADAPTERS = new Set([
   "opencode_local",
   "pi_local",
 ]);
+const INLINE_BASE64_IMAGE_DATA_RE = /("type":"image","source":\{"type":"base64","data":")([A-Za-z0-9+/=]{1024,})(")/g;
 
 type RuntimeConfigSecretResolver = Pick<
   ReturnType<typeof secretService>,
@@ -411,6 +413,23 @@ const heartbeatRunIssueSummaryColumns = {
 
 function appendExcerpt(prev: string, chunk: string) {
   return appendWithCap(prev, chunk, MAX_EXCERPT_BYTES);
+}
+
+function redactInlineBase64ImageData(chunk: string) {
+  return chunk.replace(INLINE_BASE64_IMAGE_DATA_RE, (_match, prefix: string, data: string, suffix: string) =>
+    `${prefix}[omitted base64 image data: ${data.length} chars]${suffix}`,
+  );
+}
+
+export function compactRunLogChunk(chunk: string, maxChars = MAX_PERSISTED_LOG_CHUNK_CHARS) {
+  const normalized = redactInlineBase64ImageData(chunk);
+  if (normalized.length <= maxChars) return normalized;
+
+  const headChars = Math.max(0, Math.floor(maxChars * 0.6));
+  const tailChars = Math.max(0, Math.floor(maxChars * 0.25));
+  const omittedChars = Math.max(0, normalized.length - headChars - tailChars);
+  const marker = `\n[paperclip truncated run log chunk: omitted ${omittedChars} chars]\n`;
+  return `${normalized.slice(0, headChars)}${marker}${normalized.slice(normalized.length - tailChars)}`;
 }
 
 function normalizeMaxConcurrentRuns(value: unknown) {
@@ -2517,7 +2536,7 @@ export function heartbeatService(db: Db) {
 
     if (isFirstHeartbeat && updated) {
       const tc = getTelemetryClient();
-      if (tc) trackAgentFirstHeartbeat(tc, { agentRole: updated.role });
+      if (tc) trackAgentFirstHeartbeat(tc, { agentRole: updated.role, agentId: updated.id });
     }
 
     if (updated) {
@@ -3532,7 +3551,9 @@ export function heartbeatService(db: Db) {
 
       const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
       const onLog = async (stream: "stdout" | "stderr", chunk: string) => {
-        const sanitizedChunk = redactCurrentUserText(chunk, currentUserRedactionOptions);
+        const sanitizedChunk = compactRunLogChunk(
+          redactCurrentUserText(chunk, currentUserRedactionOptions),
+        );
         if (stream === "stdout") stdoutExcerpt = appendExcerpt(stdoutExcerpt, sanitizedChunk);
         if (stream === "stderr") stderrExcerpt = appendExcerpt(stderrExcerpt, sanitizedChunk);
         const ts = new Date().toISOString();

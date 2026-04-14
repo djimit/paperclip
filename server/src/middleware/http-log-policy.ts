@@ -2,8 +2,13 @@ const SILENCED_SUCCESS_METHODS = new Set(["GET", "HEAD"]);
 
 const SILENCED_SUCCESS_API_PATHS = [
   /^\/api\/health(?:\/|$)/,
+  /^\/api\/companies\/[^/]+\/activity(?:\/|$)/,
+  /^\/api\/companies\/[^/]+\/dashboard(?:\/|$)/,
+  /^\/api\/companies\/[^/]+\/heartbeat-runs(?:\/|$)/,
+  /^\/api\/companies\/[^/]+\/issues(?:\/|$)/,
   /^\/api\/companies\/[^/]+\/live-runs(?:\/|$)/,
   /^\/api\/companies\/[^/]+\/sidebar-badges(?:\/|$)/,
+  /^\/api\/heartbeat-runs\/[^/]+\/log(?:\/|$)/,
 ];
 
 const SILENCED_SUCCESS_STATIC_PREFIXES = [

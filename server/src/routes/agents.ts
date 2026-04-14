@@ -1433,7 +1433,7 @@ export function agentRoutes(db: Db) {
     });
     const telemetryClient = getTelemetryClient();
     if (telemetryClient) {
-      trackAgentCreated(telemetryClient, { agentRole: agent.role });
+      trackAgentCreated(telemetryClient, { agentRole: agent.role, agentId: agent.id });
     }
 
     await applyDefaultAgentTaskAssignGrant(
@@ -1521,7 +1521,7 @@ export function agentRoutes(db: Db) {
     });
     const telemetryClient = getTelemetryClient();
     if (telemetryClient) {
-      trackAgentCreated(telemetryClient, { agentRole: agent.role });
+      trackAgentCreated(telemetryClient, { agentRole: agent.role, agentId: agent.id });
     }
 
     await applyDefaultAgentTaskAssignGrant(
