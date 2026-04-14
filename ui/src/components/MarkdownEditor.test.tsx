@@ -16,6 +16,7 @@ import {
 
 const mdxEditorMockState = vi.hoisted(() => ({
   emitMountEmptyReset: false,
+  markdownValues: [] as string[],
 }));
 
 vi.mock("@mdxeditor/editor", async () => {
@@ -45,12 +46,17 @@ vi.mock("@mdxeditor/editor", async () => {
     },
     forwardedRef: React.ForwardedRef<{ setMarkdown: (value: string) => void; focus: () => void } | null>,
   ) {
+    mdxEditorMockState.markdownValues.push(markdown);
     const [content, setContent] = React.useState(markdown);
     const editableRef = React.useRef<HTMLDivElement>(null);
     const handle = React.useMemo(() => ({
       setMarkdown: (value: string) => setContent(value),
       focus: () => editableRef.current?.focus(),
     }), []);
+
+    React.useEffect(() => {
+      setContent(markdown);
+    }, [markdown]);
 
     React.useEffect(() => {
       setForwardedRef(forwardedRef, null);
@@ -142,6 +148,7 @@ describe("MarkdownEditor", () => {
     Range.prototype.getBoundingClientRect = originalRangeRect;
     vi.clearAllMocks();
     mdxEditorMockState.emitMountEmptyReset = false;
+    mdxEditorMockState.markdownValues = [];
   });
 
   it("applies async external value updates once the editor ref becomes ready", async () => {
@@ -193,6 +200,30 @@ describe("MarkdownEditor", () => {
     await flush();
     expect(container.textContent).toContain("Loaded plan body");
     expect(handleChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("converts advisory-style html image tags to markdown image syntax before mounting the editor", async () => {
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <MarkdownEditor
+          value={`Before\n\n<img width="10" height="10" alt="image" src="https://example.com/test.png" />\n\nAfter`}
+          onChange={() => {}}
+          placeholder="Markdown body"
+        />,
+      );
+    });
+
+    await flush();
+    expect(mdxEditorMockState.markdownValues.at(-1)).toContain("![image](https://example.com/test.png)");
+    expect(mdxEditorMockState.markdownValues.at(-1)).not.toContain("<img");
+    expect(container.textContent).toContain("Before");
+    expect(container.textContent).toContain("After");
 
     await act(async () => {
       root.unmount();

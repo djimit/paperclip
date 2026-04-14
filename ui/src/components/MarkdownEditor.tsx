@@ -78,6 +78,30 @@ export interface MarkdownEditorRef {
   focus: () => void;
 }
 
+function readHtmlAttribute(attrs: string, name: string): string | null {
+  const match = new RegExp(`${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(attrs);
+  return match?.[2] ?? match?.[3] ?? match?.[4] ?? null;
+}
+
+function convertHtmlImagesToMarkdown(text: string): string {
+  return text.replace(/<img\b([^>]*?)\/?>/gi, (tag, attrs: string) => {
+    const src = readHtmlAttribute(attrs, "src");
+    if (!src) return tag;
+    const alt = readHtmlAttribute(attrs, "alt") ?? "image";
+    const title = readHtmlAttribute(attrs, "title");
+    const escapedAlt = alt.replace(/[[\]]/g, "\\$&");
+    const escapedTitle = title?.replace(/"/g, '\\"');
+    return escapedTitle
+      ? `![${escapedAlt}](${src} "${escapedTitle}")`
+      : `![${escapedAlt}](${src})`;
+  });
+}
+
+function prepareMarkdownForEditor(value: string): string {
+  const normalizedLineEndings = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return convertHtmlImagesToMarkdown(normalizedLineEndings);
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -420,12 +444,13 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   mentions,
   onSubmit,
 }: MarkdownEditorProps, forwardedRef) {
+  const editorValue = useMemo(() => prepareMarkdownForEditor(value), [value]);
   const { slashCommands } = useEditorAutocomplete();
   const containerRef = useRef<HTMLDivElement>(null);
   const ref = useRef<MDXEditorMethods>(null);
-  const valueRef = useRef(value);
-  valueRef.current = value;
-  const latestValueRef = useRef(value);
+  const valueRef = useRef(editorValue);
+  valueRef.current = editorValue;
+  const latestValueRef = useRef(editorValue);
   const initialChildOnChangeRef = useRef(true);
   /**
    * After imperative `setMarkdown` (prop sync, mentions, image upload), MDXEditor may emit `onChange`
@@ -562,15 +587,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   }, [hasImageUpload]);
 
   useEffect(() => {
-    if (value !== latestValueRef.current) {
+    if (editorValue !== latestValueRef.current) {
       if (ref.current) {
         // Pair with onChange echo suppression (echoIgnoreMarkdownRef).
-        echoIgnoreMarkdownRef.current = value;
-        ref.current.setMarkdown(value);
-        latestValueRef.current = value;
+        echoIgnoreMarkdownRef.current = editorValue;
+        ref.current.setMarkdown(editorValue);
+        latestValueRef.current = editorValue;
       }
     }
-  }, [value]);
+  }, [editorValue]);
 
   const decorateProjectMentions = useCallback(() => {
     const editable = containerRef.current?.querySelector('[contenteditable="true"]');
@@ -891,7 +916,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     >
       <MDXEditor
         ref={setEditorRef}
-        markdown={value}
+        markdown={editorValue}
         placeholder={placeholder}
         onChange={(next) => {
           const echo = echoIgnoreMarkdownRef.current;
@@ -906,9 +931,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
 
           if (initialChildOnChangeRef.current) {
             initialChildOnChangeRef.current = false;
-            if (next === "" && value !== "") {
-              echoIgnoreMarkdownRef.current = value;
-              ref.current?.setMarkdown(value);
+            if (next === "" && editorValue !== "") {
+              echoIgnoreMarkdownRef.current = editorValue;
+              ref.current?.setMarkdown(editorValue);
               return;
             }
           }
