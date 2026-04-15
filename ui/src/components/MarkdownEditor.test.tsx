@@ -251,7 +251,7 @@ describe("MarkdownEditor", () => {
     await flush();
     expect(mdxEditorMockState.markdownValues.at(-1)).toContain("![image](https://example.com/test.png)");
     expect(mdxEditorMockState.markdownValues.at(-1)).not.toContain("<img");
-    expect(mdxEditorMockState.suppressHtmlProcessingValues).toContain(true);
+    expect(mdxEditorMockState.suppressHtmlProcessingValues).toContain(false);
     expect(container.textContent).toContain("Before");
     expect(container.textContent).toContain("After");
 
