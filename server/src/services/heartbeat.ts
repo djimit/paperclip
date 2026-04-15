@@ -473,6 +473,13 @@ const heartbeatRunSafeColumns = {
   resultJson: heartbeatRunSafeResultJsonColumn,
 } as const;
 
+const heartbeatRunLogAccessColumns = {
+  id: heartbeatRuns.id,
+  companyId: heartbeatRuns.companyId,
+  logStore: heartbeatRuns.logStore,
+  logRef: heartbeatRuns.logRef,
+} as const;
+
 const heartbeatRunIssueSummaryColumns = {
   id: heartbeatRuns.id,
   status: heartbeatRuns.status,
@@ -1508,6 +1515,14 @@ export function heartbeatService(db: Db) {
   async function getRun(runId: string, opts?: { unsafeFullResultJson?: boolean }) {
     return db
       .select(opts?.unsafeFullResultJson ? getTableColumns(heartbeatRuns) : heartbeatRunSafeColumns)
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+  }
+
+  async function getRunLogAccess(runId: string) {
+    return db
+      .select(heartbeatRunLogAccessColumns)
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.id, runId))
       .then((rows) => rows[0] ?? null);
@@ -2942,7 +2957,10 @@ export function heartbeatService(db: Db) {
   async function escalateStrandedAssignedIssue(input: {
     issue: typeof issues.$inferSelect;
     previousStatus: "todo" | "in_progress";
-    latestRun: typeof heartbeatRuns.$inferSelect | null;
+    latestRun: Pick<
+      typeof heartbeatRuns.$inferSelect,
+      "id" | "status" | "error" | "errorCode" | "contextSnapshot"
+    > | null;
     comment: string;
   }) {
     const updated = await issuesSvc.update(input.issue.id, {
@@ -5175,6 +5193,8 @@ export function heartbeatService(db: Db) {
 
     getRun,
 
+    getRunLogAccess,
+
     getRuntimeState: async (agentId: string) => {
       const state = await getRuntimeState(agentId);
       const agent = await getAgent(agentId);
@@ -5248,8 +5268,17 @@ export function heartbeatService(db: Db) {
         .orderBy(asc(heartbeatRunEvents.seq))
         .limit(Math.max(1, Math.min(limit, 1000))),
 
-    readLog: async (runId: string, opts?: { offset?: number; limitBytes?: number }) => {
-      const run = await getRun(runId);
+    readLog: async (
+      runOrLookup: string | {
+        id: string;
+        companyId: string;
+        logStore: string | null;
+        logRef: string | null;
+      },
+      opts?: { offset?: number; limitBytes?: number },
+    ) => {
+      const run = typeof runOrLookup === "string" ? await getRunLogAccess(runOrLookup) : runOrLookup;
+      const runId = typeof runOrLookup === "string" ? runOrLookup : runOrLookup.id;
       if (!run) throw notFound("Heartbeat run not found");
       if (!run.logStore || !run.logRef) throw notFound("Run log not found");
 
