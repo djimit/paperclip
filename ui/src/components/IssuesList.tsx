@@ -765,12 +765,6 @@ export function IssuesList({
           Showing up to {ISSUE_SEARCH_RESULT_LIMIT} matches. Refine the search to narrow further.
         </p>
       )}
-      {viewState.viewMode === "list" && remainingIssueRowCount > 0 && (
-        <p className="text-xs text-muted-foreground">
-          Rendering {Math.min(renderedIssueRowLimit, filtered.length)} of {filtered.length} issues...
-        </p>
-      )}
-
       {!isLoading && filtered.length === 0 && viewState.viewMode === "list" && (
         <EmptyState
           icon={CircleDot}
@@ -788,7 +782,8 @@ export function IssuesList({
           onUpdateIssue={onUpdateIssue}
         />
       ) : (
-        groupedContent.map((group) => {
+        <>
+          {groupedContent.map((group) => {
           if (remainingRowsToRender <= 0) return null;
           return (
           <Collapsible
@@ -1039,7 +1034,13 @@ export function IssuesList({
             </CollapsibleContent>
           </Collapsible>
           );
-        })
+          })}
+          {remainingIssueRowCount > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Rendering {Math.min(renderedIssueRowLimit, filtered.length)} of {filtered.length} issues
+            </p>
+          )}
+        </>
       )}
     </div>
   );
