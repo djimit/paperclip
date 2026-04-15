@@ -350,9 +350,9 @@ export function IssuesList({
   });
   const { data: executionWorkspaces = [] } = useQuery({
     queryKey: selectedCompanyId
-      ? queryKeys.executionWorkspaces.list(selectedCompanyId)
+      ? queryKeys.executionWorkspaces.summaryList(selectedCompanyId)
       : ["execution-workspaces", "__disabled__"],
-    queryFn: () => executionWorkspacesApi.list(selectedCompanyId!),
+    queryFn: () => executionWorkspacesApi.listSummaries(selectedCompanyId!),
     enabled: !!selectedCompanyId && isolatedWorkspacesEnabled,
   });
 

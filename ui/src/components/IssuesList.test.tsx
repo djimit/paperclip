@@ -28,6 +28,7 @@ const mockAuthApi = vi.hoisted(() => ({
 
 const mockExecutionWorkspacesApi = vi.hoisted(() => ({
   list: vi.fn(),
+  listSummaries: vi.fn(),
 }));
 
 const mockInstanceSettingsApi = vi.hoisted(() => ({
@@ -183,11 +184,13 @@ describe("IssuesList", () => {
     mockIssuesApi.listLabels.mockReset();
     mockAuthApi.getSession.mockReset();
     mockExecutionWorkspacesApi.list.mockReset();
+    mockExecutionWorkspacesApi.listSummaries.mockReset();
     mockInstanceSettingsApi.getExperimental.mockReset();
     mockIssuesApi.list.mockResolvedValue([]);
     mockIssuesApi.listLabels.mockResolvedValue([]);
     mockAuthApi.getSession.mockResolvedValue({ user: null, session: null });
     mockExecutionWorkspacesApi.list.mockResolvedValue([]);
+    mockExecutionWorkspacesApi.listSummaries.mockResolvedValue([]);
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
     localStorage.clear();
   });
@@ -460,7 +463,7 @@ describe("IssuesList", () => {
   it("filters the list to a single workspace when a workspace name is clicked", async () => {
     localStorage.setItem("paperclip:test-issues:company-1:issue-columns", JSON.stringify(["id", "workspace"]));
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
-    mockExecutionWorkspacesApi.list.mockResolvedValue([
+    mockExecutionWorkspacesApi.listSummaries.mockResolvedValue([
       {
         id: "workspace-alpha",
         name: "Alpha",
@@ -656,6 +659,31 @@ describe("IssuesList", () => {
     });
 
     expect(document.activeElement).not.toBe(input);
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("uses workspace summaries instead of the full workspace list on the issues page", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
+    mockExecutionWorkspacesApi.listSummaries.mockResolvedValue([]);
+
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[createIssue()]}
+        agents={[]}
+        projects={[]}
+        viewStateKey="paperclip:test-issues"
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+
+    await waitForAssertion(() => {
+      expect(mockExecutionWorkspacesApi.listSummaries).toHaveBeenCalledWith("company-1");
+      expect(mockExecutionWorkspacesApi.list).not.toHaveBeenCalled();
+    });
 
     act(() => {
       root.unmount();
