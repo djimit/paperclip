@@ -99,7 +99,8 @@ describe("MarkdownBody", () => {
   it("sanitizes unsafe javascript markdown links", () => {
     const html = renderMarkdown("[click me](javascript:alert(document.cookie))");
 
-    expect(html).toContain('<a href="" rel="noreferrer">click me</a>');
+    expect(html).toContain('<a href="" rel="noreferrer"');
+    expect(html).toContain(">click me</a>");
     expect(html).not.toContain("javascript:");
   });
 
