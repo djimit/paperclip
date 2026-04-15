@@ -553,19 +553,20 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   interruptingQueuedRunId,
   onImageClick,
 }: IssueDetailChatTabProps) {
-  const { data: activity, isLoading: activityLoading } = useQuery({
+  const { data: activity } = useQuery({
     queryKey: queryKeys.issues.activity(issueId),
     queryFn: () => activityApi.forIssue(issueId),
     placeholderData: keepPreviousDataForSameQueryTail<ActivityEvent[]>(issueId),
   });
-  const { data: liveRuns, isLoading: liveRunsLoading } = useQuery({
+  const { data: liveRuns } = useQuery({
     queryKey: queryKeys.issues.liveRuns(issueId),
     queryFn: () => heartbeatsApi.liveRunsForIssue(issueId),
     refetchInterval: 3000,
     placeholderData: keepPreviousDataForSameQueryTail<LiveRunForIssue[]>(issueId),
   });
-  const liveRunCount = liveRuns?.length ?? 0;
-  const { data: activeRun, isLoading: activeRunLoading } = useQuery({
+  const resolvedLiveRuns = liveRuns ?? [];
+  const liveRunCount = resolvedLiveRuns.length;
+  const { data: activeRun = null } = useQuery({
     queryKey: queryKeys.issues.activeRun(issueId),
     queryFn: () => heartbeatsApi.activeRunForIssue(issueId),
     enabled: !!executionRunId || issueStatus === "in_progress",
@@ -573,39 +574,41 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
     placeholderData: keepPreviousDataForSameQueryTail<ActiveRunForIssue | null>(issueId),
   });
   const hasLiveRuns = liveRunCount > 0 || !!activeRun;
-  const { data: linkedRuns, isLoading: linkedRunsLoading } = useQuery({
+  const { data: linkedRuns } = useQuery({
     queryKey: queryKeys.issues.runs(issueId),
     queryFn: () => activityApi.runsForIssue(issueId),
     refetchInterval: hasLiveRuns ? 5000 : false,
     placeholderData: keepPreviousDataForSameQueryTail<RunForIssue[]>(issueId),
   });
+  const resolvedActivity = activity ?? [];
+  const resolvedLinkedRuns = linkedRuns ?? [];
 
   const runningIssueRun = useMemo(
-    () => resolveRunningIssueRun(activeRun, liveRuns),
-    [activeRun, liveRuns],
+    () => resolveRunningIssueRun(activeRun, resolvedLiveRuns),
+    [activeRun, resolvedLiveRuns],
   );
   const timelineRuns = useMemo(() => {
     const liveIds = new Set<string>();
-    for (const run of liveRuns ?? []) liveIds.add(run.id);
+    for (const run of resolvedLiveRuns) liveIds.add(run.id);
     if (activeRun) liveIds.add(activeRun.id);
     const historicalRuns = liveIds.size === 0
-      ? (linkedRuns ?? [])
-      : (linkedRuns ?? []).filter((run) => !liveIds.has(run.runId));
+      ? resolvedLinkedRuns
+      : resolvedLinkedRuns.filter((run) => !liveIds.has(run.runId));
     return historicalRuns.map((run) => ({
       ...run,
       adapterType: run.adapterType,
       hasStoredOutput: (run.logBytes ?? 0) > 0,
     }));
-  }, [activeRun, linkedRuns, liveRuns]);
+  }, [activeRun, resolvedLinkedRuns, resolvedLiveRuns]);
   const commentsWithRunMeta = useMemo<IssueDetailComment[]>(() => {
     const activeRunStartedAt = runningIssueRun?.startedAt ?? runningIssueRun?.createdAt ?? null;
     const runMetaByCommentId = new Map<string, { runId: string; runAgentId: string | null; interruptedRunId: string | null }>();
     const agentIdByRunId = new Map<string, string>();
 
-    for (const run of linkedRuns ?? []) {
+    for (const run of resolvedLinkedRuns) {
       agentIdByRunId.set(run.runId, run.agentId);
     }
-    for (const evt of activity ?? []) {
+    for (const evt of resolvedActivity) {
       if (evt.action !== "issue.comment_added" || !evt.runId) continue;
       const details = evt.details ?? {};
       const commentId = typeof details["commentId"] === "string" ? details["commentId"] : null;
@@ -639,20 +642,11 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
       }
       return nextComment;
     });
-  }, [activity, comments, linkedRuns, runningIssueRun]);
+  }, [comments, resolvedActivity, resolvedLinkedRuns, runningIssueRun]);
   const timelineEvents = useMemo(
-    () => extractIssueTimelineEvents(activity),
-    [activity],
+    () => extractIssueTimelineEvents(resolvedActivity),
+    [resolvedActivity],
   );
-  const initialLoading =
-    (activityLoading && activity === undefined)
-    || (linkedRunsLoading && linkedRuns === undefined)
-    || (liveRunsLoading && liveRuns === undefined)
-    || (activeRunLoading && activeRun === undefined);
-
-  if (initialLoading) {
-    return <IssueChatSkeleton />;
-  }
 
   return (
     <div className="space-y-3">
@@ -677,7 +671,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
         feedbackTermsUrl={feedbackTermsUrl}
         linkedRuns={timelineRuns}
         timelineEvents={timelineEvents}
-        liveRuns={liveRuns}
+        liveRuns={resolvedLiveRuns}
         activeRun={activeRun}
         companyId={companyId}
         projectId={projectId}
