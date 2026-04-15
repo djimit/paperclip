@@ -883,9 +883,6 @@ export function IssueDetail() {
     () => readIssueDetailHeaderSeed(location.state) ?? readIssueDetailHeaderSeed(resolvedIssueDetailState),
     [location.state, resolvedIssueDetailState],
   );
-  useEffect(() => {
-    setIssueChatInitialTranscriptReady(false);
-  }, [issueId]);
 
   const { data: issue, isLoading, error } = useQuery({
     ...getIssueDetailQueryOptions(queryClient, issueId!, {
