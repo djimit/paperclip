@@ -132,6 +132,7 @@ function sameRunLock(checkoutRunId: string | null, actorRunId: string | null) {
 }
 
 const TERMINAL_HEARTBEAT_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
+const ISSUE_LIST_DESCRIPTION_MAX_CHARS = 1200;
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -526,6 +527,51 @@ async function activeRunMapForIssues(
   }
   return map;
 }
+
+const issueListSelect = {
+  id: issues.id,
+  companyId: issues.companyId,
+  projectId: issues.projectId,
+  projectWorkspaceId: issues.projectWorkspaceId,
+  goalId: issues.goalId,
+  parentId: issues.parentId,
+  title: issues.title,
+  description: sql<string | null>`
+    CASE
+      WHEN ${issues.description} IS NULL THEN NULL
+      ELSE substring(${issues.description} FROM 1 FOR ${ISSUE_LIST_DESCRIPTION_MAX_CHARS})
+    END
+  `,
+  status: issues.status,
+  priority: issues.priority,
+  assigneeAgentId: issues.assigneeAgentId,
+  assigneeUserId: issues.assigneeUserId,
+  checkoutRunId: issues.checkoutRunId,
+  executionRunId: issues.executionRunId,
+  executionAgentNameKey: issues.executionAgentNameKey,
+  executionLockedAt: issues.executionLockedAt,
+  createdByAgentId: issues.createdByAgentId,
+  createdByUserId: issues.createdByUserId,
+  issueNumber: issues.issueNumber,
+  identifier: issues.identifier,
+  originKind: issues.originKind,
+  originId: issues.originId,
+  originRunId: issues.originRunId,
+  requestDepth: issues.requestDepth,
+  billingCode: issues.billingCode,
+  assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
+  executionPolicy: sql<null>`null`,
+  executionState: sql<null>`null`,
+  executionWorkspaceId: issues.executionWorkspaceId,
+  executionWorkspacePreference: issues.executionWorkspacePreference,
+  executionWorkspaceSettings: sql<null>`null`,
+  startedAt: issues.startedAt,
+  completedAt: issues.completedAt,
+  cancelledAt: issues.cancelledAt,
+  hiddenAt: issues.hiddenAt,
+  createdAt: issues.createdAt,
+  updatedAt: issues.updatedAt,
+};
 
 function withActiveRuns(
   issueRows: IssueWithLabels[],
@@ -1005,7 +1051,7 @@ export function issueService(db: Db) {
       `;
       const canonicalLastActivityAt = issueCanonicalLastActivityAtExpr(companyId);
       const baseQuery = db
-        .select()
+        .select(issueListSelect)
         .from(issues)
         .where(and(...conditions))
         .orderBy(

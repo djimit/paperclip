@@ -698,6 +698,39 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
       "2026-03-26T10:00:00.000Z",
     );
   });
+
+  it("trims list payload fields that can grow large on issue index routes", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+    const longDescription = "x".repeat(5_000);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Large issue",
+      description: longDescription,
+      status: "todo",
+      priority: "medium",
+      executionPolicy: { stages: Array.from({ length: 20 }, (_, index) => ({ index, kind: "review", notes: "y".repeat(400) })) },
+      executionState: { history: Array.from({ length: 20 }, (_, index) => ({ index, body: "z".repeat(400) })) },
+      executionWorkspaceSettings: { notes: "w".repeat(2_000) },
+    });
+
+    const [result] = await svc.list(companyId);
+
+    expect(result).toBeTruthy();
+    expect(result?.description).toHaveLength(1200);
+    expect(result?.executionPolicy).toBeNull();
+    expect(result?.executionState).toBeNull();
+    expect(result?.executionWorkspaceSettings).toBeNull();
+  });
 });
 
 describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
