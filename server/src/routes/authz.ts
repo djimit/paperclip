@@ -51,16 +51,12 @@ export function assertCompanyAccess(req: Request, companyId: string) {
     }
     const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
     const isSafeMethod = ["GET", "HEAD", "OPTIONS"].includes(method);
-    if (!isSafeMethod && !req.actor.isInstanceAdmin) {
-      const memberships = req.actor.memberships ?? [];
-      const membership = memberships.find((item) => item.companyId === companyId);
-      if (!membership) {
+    if (!isSafeMethod && !req.actor.isInstanceAdmin && Array.isArray(req.actor.memberships)) {
+      const membership = req.actor.memberships.find((item) => item.companyId === companyId);
+      if (!membership || membership.status !== "active") {
         throw forbidden("User does not have active company access");
       }
-      if (membership?.status !== "active") {
-        throw forbidden("User does not have active company access");
-      }
-      if (membership?.membershipRole === "viewer") {
+      if (membership.membershipRole === "viewer") {
         throw forbidden("Viewer access is read-only");
       }
     }

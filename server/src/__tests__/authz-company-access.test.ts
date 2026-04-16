@@ -46,6 +46,35 @@ describe("assertCompanyAccess", () => {
     expect(() => assertCompanyAccess(req, "company-1")).toThrow("Viewer access is read-only");
   });
 
+  it("rejects writes when membership details are present but omit the target company", () => {
+    const req = makeReq({
+      method: "POST",
+      actor: {
+        type: "board",
+        userId: "user-1",
+        source: "session",
+        companyIds: ["company-1"],
+        memberships: [],
+      },
+    });
+
+    expect(() => assertCompanyAccess(req, "company-1")).toThrow("User does not have active company access");
+  });
+
+  it("allows legacy board actors that only provide company ids", () => {
+    const req = makeReq({
+      method: "POST",
+      actor: {
+        type: "board",
+        userId: "user-1",
+        source: "session",
+        companyIds: ["company-1"],
+      },
+    });
+
+    expect(() => assertCompanyAccess(req, "company-1")).not.toThrow();
+  });
+
   it("rejects signed-in instance admins without explicit company access", () => {
     const req = makeReq({
       method: "GET",
