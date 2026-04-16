@@ -6,6 +6,7 @@ import {
   principalPermissionGrants,
 } from "@paperclipai/db";
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
+import { conflict } from "../errors.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -153,15 +154,52 @@ export function accessService(db: Db) {
     },
     grantedByUserId: string | null,
   ) {
-    const existing = await getMemberById(companyId, memberId);
-    if (!existing) return null;
-
-    const nextMembershipRole =
-      data.membershipRole !== undefined ? data.membershipRole : existing.membershipRole;
-    const nextStatus = data.status ?? existing.status;
-    const now = new Date();
-
     return db.transaction(async (tx) => {
+      await tx.execute(sql`
+        select ${companyMemberships.id}
+        from ${companyMemberships}
+        where ${companyMemberships.companyId} = ${companyId}
+          and ${companyMemberships.principalType} = 'user'
+          and ${companyMemberships.status} = 'active'
+          and ${companyMemberships.membershipRole} = 'owner'
+        for update
+      `);
+
+      const existing = await tx
+        .select()
+        .from(companyMemberships)
+        .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.id, memberId)))
+        .then((rows) => rows[0] ?? null);
+      if (!existing) return null;
+
+      const nextMembershipRole =
+        data.membershipRole !== undefined ? data.membershipRole : existing.membershipRole;
+      const nextStatus = data.status ?? existing.status;
+
+      if (
+        existing.principalType === "user" &&
+        existing.status === "active" &&
+        existing.membershipRole === "owner" &&
+        (nextStatus !== "active" || nextMembershipRole !== "owner")
+      ) {
+        const activeOwnerCount = await tx
+          .select({ id: companyMemberships.id })
+          .from(companyMemberships)
+          .where(
+            and(
+              eq(companyMemberships.companyId, companyId),
+              eq(companyMemberships.principalType, "user"),
+              eq(companyMemberships.status, "active"),
+              eq(companyMemberships.membershipRole, "owner"),
+            ),
+          )
+          .then((rows) => rows.length);
+        if (activeOwnerCount <= 1) {
+          throw conflict("Cannot remove the last active owner");
+        }
+      }
+
+      const now = new Date();
       const updated = await tx
         .update(companyMemberships)
         .set({
@@ -429,21 +467,62 @@ export function accessService(db: Db) {
       status?: "pending" | "active" | "suspended";
     },
   ) {
-    const existing = await getMemberById(companyId, memberId);
-    if (!existing) return null;
-    const nextMembershipRole =
-      data.membershipRole !== undefined ? data.membershipRole : existing.membershipRole;
-    const nextStatus = data.status ?? existing.status;
-    return db
-      .update(companyMemberships)
-      .set({
-        membershipRole: nextMembershipRole,
-        status: nextStatus,
-        updatedAt: new Date(),
-      })
-      .where(eq(companyMemberships.id, existing.id))
-      .returning()
-      .then((rows) => rows[0] ?? existing);
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`
+        select ${companyMemberships.id}
+        from ${companyMemberships}
+        where ${companyMemberships.companyId} = ${companyId}
+          and ${companyMemberships.principalType} = 'user'
+          and ${companyMemberships.status} = 'active'
+          and ${companyMemberships.membershipRole} = 'owner'
+        for update
+      `);
+
+      const existing = await tx
+        .select()
+        .from(companyMemberships)
+        .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.id, memberId)))
+        .then((rows) => rows[0] ?? null);
+      if (!existing) return null;
+
+      const nextMembershipRole =
+        data.membershipRole !== undefined ? data.membershipRole : existing.membershipRole;
+      const nextStatus = data.status ?? existing.status;
+
+      if (
+        existing.principalType === "user" &&
+        existing.status === "active" &&
+        existing.membershipRole === "owner" &&
+        (nextStatus !== "active" || nextMembershipRole !== "owner")
+      ) {
+        const activeOwnerCount = await tx
+          .select({ id: companyMemberships.id })
+          .from(companyMemberships)
+          .where(
+            and(
+              eq(companyMemberships.companyId, companyId),
+              eq(companyMemberships.principalType, "user"),
+              eq(companyMemberships.status, "active"),
+              eq(companyMemberships.membershipRole, "owner"),
+            ),
+          )
+          .then((rows) => rows.length);
+        if (activeOwnerCount <= 1) {
+          throw conflict("Cannot remove the last active owner");
+        }
+      }
+
+      return tx
+        .update(companyMemberships)
+        .set({
+          membershipRole: nextMembershipRole,
+          status: nextStatus,
+          updatedAt: new Date(),
+        })
+        .where(eq(companyMemberships.id, existing.id))
+        .returning()
+        .then((rows) => rows[0] ?? existing);
+    });
   }
 
   return {
