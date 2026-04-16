@@ -94,6 +94,7 @@ const MAX_INLINE_WAKE_COMMENT_BODY_CHARS = 4_000;
 const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
 const execFile = promisify(execFileCallback);
 const ACTIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running"] as const;
+const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",
@@ -679,6 +680,22 @@ function summarizeRunFailureForIssueComment(
   if (errorCode) return ` Latest retry failure: \`${errorCode}\`.`;
   if (summary) return ` Latest retry failure: ${summary}.`;
   return null;
+}
+
+function didAutomaticRecoveryFail(
+  latestRun: Pick<typeof heartbeatRuns.$inferSelect, "status" | "contextSnapshot"> | null,
+  expectedRetryReason: "assignment_recovery" | "issue_continuation_needed",
+) {
+  if (!latestRun) return false;
+
+  const latestContext = parseObject(latestRun.contextSnapshot);
+  const latestRetryReason = readNonEmptyString(latestContext.retryReason);
+  return (
+    latestRetryReason === expectedRetryReason &&
+    UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES.includes(
+      latestRun.status as (typeof UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES)[number],
+    )
+  );
 }
 
 function normalizeLedgerBillingType(value: unknown): BillingType {
@@ -3037,16 +3054,13 @@ export function heartbeatService(db: Db) {
       }
 
       const latestRun = await getLatestIssueRun(issue.companyId, issue.id);
-      const latestContext = parseObject(latestRun?.contextSnapshot);
-      const latestRetryReason = readNonEmptyString(latestContext.retryReason);
-
       if (issue.status === "todo") {
         if (!latestRun || latestRun.status === "succeeded") {
           result.skipped += 1;
           continue;
         }
 
-        if (latestRetryReason === "assignment_recovery") {
+        if (didAutomaticRecoveryFail(latestRun, "assignment_recovery")) {
           const failureSummary = summarizeRunFailureForIssueComment(latestRun);
           const updated = await escalateStrandedAssignedIssue({
             issue,
@@ -3083,7 +3097,7 @@ export function heartbeatService(db: Db) {
         continue;
       }
 
-      if (latestRetryReason === "issue_continuation_needed") {
+      if (didAutomaticRecoveryFail(latestRun, "issue_continuation_needed")) {
         const failureSummary = summarizeRunFailureForIssueComment(latestRun);
         const updated = await escalateStrandedAssignedIssue({
           issue,
