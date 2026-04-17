@@ -219,6 +219,41 @@ export interface MissionDecompositionResult {
   issues: MissionDecomposedIssue[];
 }
 
+export interface MissionInitializationDocumentResult {
+  key: MissionRequiredDocumentKey;
+  documentId: string;
+  revisionNumber: number;
+  created: boolean;
+}
+
+export interface MissionInitializationResult {
+  issueId: string;
+  identifier: string | null;
+  originKind: string | null;
+  originId: string | null;
+  billingCode: string | null;
+  metadataUpdated: boolean;
+  createdDocumentKeys: MissionRequiredDocumentKey[];
+  existingDocumentKeys: MissionRequiredDocumentKey[];
+  documents: MissionInitializationDocumentResult[];
+  commentId: string | null;
+}
+
+export type MissionAdvanceStopReason =
+  | "approval_required"
+  | "budget_limit"
+  | "unresolved_blockers"
+  | "max_validation_rounds";
+
+export interface MissionAdvanceResult {
+  issueId: string;
+  action: "paused" | "woke_issues" | "noop";
+  stopReason: MissionAdvanceStopReason | null;
+  wokenIssueIds: string[];
+  commentId: string | null;
+  details: Record<string, unknown>;
+}
+
 export interface MissionWaiveFindingResult {
   missionIssueId: string;
   findingId: string;

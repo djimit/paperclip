@@ -206,6 +206,10 @@ export type {
   MissionGeneratedIssueKind,
   MissionDecomposedIssue,
   MissionDecompositionResult,
+  MissionInitializationDocumentResult,
+  MissionInitializationResult,
+  MissionAdvanceStopReason,
+  MissionAdvanceResult,
   MissionWaiveFindingResult,
 } from "./mission.js";
 export type {

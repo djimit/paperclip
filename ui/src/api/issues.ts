@@ -9,6 +9,10 @@ import type {
   IssueBackedMissionSummary,
   IssueComment,
   IssueDocument,
+  MissionAdvanceResult,
+  MissionDecompositionResult,
+  MissionInitializationResult,
+  MissionWaiveFindingResult,
   IssueLabel,
   IssueWorkProduct,
   UpsertIssueDocument,
@@ -133,6 +137,16 @@ export const issuesApi = {
     api.delete<IssueComment>(`/issues/${id}/comments/${commentId}`),
   listDocuments: (id: string) => api.get<IssueDocument[]>(`/issues/${id}/documents`),
   getMissionSummary: (id: string) => api.get<IssueBackedMissionSummary>(`/issues/${id}/mission-summary`),
+  initMission: (id: string) => api.post<MissionInitializationResult>(`/issues/${id}/mission/init`, {}),
+  decomposeMission: (id: string, data?: { dryRun?: boolean }) =>
+    api.post<MissionDecompositionResult>(`/issues/${id}/mission/decompose`, data ?? {}),
+  advanceMission: (id: string, data?: { budgetLimitCents?: number; maxValidationRounds?: number }) =>
+    api.post<MissionAdvanceResult>(`/issues/${id}/mission/advance`, data ?? {}),
+  waiveMissionFinding: (id: string, findingId: string, data: { rationale: string }) =>
+    api.post<MissionWaiveFindingResult>(
+      `/issues/${id}/mission/findings/${encodeURIComponent(findingId)}/waive`,
+      data,
+    ),
   getDocument: (id: string, key: string) => api.get<IssueDocument>(`/issues/${id}/documents/${encodeURIComponent(key)}`),
   upsertDocument: (id: string, key: string, data: UpsertIssueDocument) =>
     api.put<IssueDocument>(`/issues/${id}/documents/${encodeURIComponent(key)}`, data),

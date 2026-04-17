@@ -77,6 +77,26 @@ function makeSummary(overrides: Partial<IssueBackedMissionSummary> = {}): IssueB
     ],
     blockers: [],
     activeWork: [makeIssue()],
+    validationSummary: {
+      reports: [],
+      findings: [],
+      counts: {
+        total: 0,
+        bySeverity: {
+          blocking: 0,
+          non_blocking: 0,
+          suggestion: 0,
+        },
+        byStatus: {
+          open: 0,
+          fix_created: 0,
+          waived: 0,
+          resolved: 0,
+        },
+      },
+      assertions: [],
+      openBlockingFindingCount: 0,
+    },
     runSummary: {
       total: 0,
       active: 0,
@@ -174,7 +194,7 @@ describe("MissionSummaryPanel", () => {
     expect(container.textContent).toContain("Blocked");
     expect(container.textContent).toContain("Blockers");
     expect(container.textContent).toContain("Waiting on PAP-9");
-    expect(container.textContent).toContain("1 blocked item");
+    expect(container.textContent).toContain("1 blocked");
 
     await act(async () => root.unmount());
   });
@@ -187,8 +207,122 @@ describe("MissionSummaryPanel", () => {
     expect(container.textContent).toContain("Planning");
     expect(container.textContent).toContain("8/8");
     expect(container.textContent).toContain("Foundation");
-    expect(container.textContent).toContain("1 features - 0 validations - 0 fix loops");
+    expect(container.textContent).toContain("1 features");
+    expect(container.textContent).toContain("Validation rounds");
     expect(container.textContent).not.toContain("Document errors");
+
+    await act(async () => root.unmount());
+  });
+
+  it("calls mission controls and surfaces validation finding metrics", async () => {
+    const onAction = vi.fn();
+    const onWaiveFinding = vi.fn();
+    const summary = makeSummary({
+      validationSummary: {
+        reports: [
+          {
+            round: 1,
+            validator_role: "scrutiny_validator",
+            summary: "Found one issue.",
+            findings: [
+              {
+                id: "FINDING-MISSION-001",
+                severity: "non_blocking",
+                assertion_id: "VAL-MISSION-001",
+                title: "Evidence link missing",
+                evidence: ["/PAP/issues/PAP-1#comment-1"],
+                repro_steps: ["Open the mission."],
+                expected: "Evidence is linked.",
+                actual: "Evidence is text only.",
+                status: "open",
+              },
+            ],
+            documentKey: "validation-report-round-1",
+            documentTitle: "Validation round 1",
+            updatedAt: new Date("2026-04-17T22:30:00.000Z"),
+          },
+        ],
+        findings: [
+          {
+            id: "FINDING-MISSION-001",
+            severity: "non_blocking",
+            assertion_id: "VAL-MISSION-001",
+            title: "Evidence link missing",
+            evidence: ["/PAP/issues/PAP-1#comment-1"],
+            repro_steps: ["Open the mission."],
+            expected: "Evidence is linked.",
+            actual: "Evidence is text only.",
+            status: "open",
+            sourceReportKey: "validation-report-round-1",
+            sourceReportTitle: "Validation round 1",
+            round: 1,
+            validator_role: "scrutiny_validator",
+            computedStatus: "open",
+            fixIssue: null,
+            waiver: null,
+          },
+        ],
+        counts: {
+          total: 1,
+          bySeverity: {
+            blocking: 0,
+            non_blocking: 1,
+            suggestion: 0,
+          },
+          byStatus: {
+            open: 1,
+            fix_created: 0,
+            waived: 0,
+            resolved: 0,
+          },
+        },
+        assertions: [
+          {
+            assertion_id: "VAL-MISSION-001",
+            findingIds: ["FINDING-MISSION-001"],
+            severity: {
+              blocking: 0,
+              non_blocking: 1,
+              suggestion: 0,
+            },
+            statuses: {
+              open: 1,
+              fix_created: 0,
+              waived: 0,
+              resolved: 0,
+            },
+            evidence: ["/PAP/issues/PAP-1#comment-1"],
+          },
+        ],
+        openBlockingFindingCount: 0,
+      },
+    });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <MissionSummaryPanel
+          summary={summary}
+          issueStatus="in_progress"
+          onAction={onAction}
+          onWaiveFinding={onWaiveFinding}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain("Feature / assertion matrix");
+    expect(container.textContent).toContain("FINDING-MISSION-001");
+    expect(container.textContent).toContain("Scrutiny");
+
+    const advanceButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Advance"),
+    );
+    await act(async () => {
+      advanceButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onAction).toHaveBeenCalledWith("advance");
 
     await act(async () => root.unmount());
   });
