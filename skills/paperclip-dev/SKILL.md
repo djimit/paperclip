@@ -121,6 +121,44 @@ If any section is missing or empty, do NOT submit the PR. Go back and fill it in
 
 Only after completing Steps 1 and 2, run `gh pr create`. Use the template contents as the structure for `--body` — do not write a freeform summary.
 
+## Hard Rules — Do NOT Bypass
+
+These rules exist because agents have caused real damage by improvising around CLI failures. Follow them exactly.
+
+1. **CLI is the only interface to worktrees and databases.** All worktree and database operations MUST go through `npx paperclipai` / `pnpm paperclipai` commands. You MUST NOT:
+   - Run `pg_dump`, `pg_restore`, `psql`, `createdb`, `dropdb`, or any raw postgres commands
+   - Manually set `DATABASE_URL` to point a worktree server at another instance's database
+   - Run `rm -rf` on any `.paperclip/`, `.paperclip-worktrees/`, or `db/` directory
+   - Directly manipulate embedded postgres data directories
+   - Kill postgres processes by PID
+
+2. **If a CLI command fails, stop and report.** Do NOT attempt workarounds. If `worktree:make`, `worktree reseed`, `worktree init`, `worktree:cleanup`, or any other `paperclipai` command fails:
+   - Report the exact error message in your task comment
+   - Set the task to `blocked`
+   - Suggest running `npx paperclipai doctor --repair` or recreating the worktree from scratch
+   - Do NOT try to manually replicate what the CLI does
+
+3. **Never share databases between instances.** Each worktree instance gets its own isolated database. Never override `DATABASE_URL` to point one instance at another's database. This destroys isolation and can corrupt production data.
+
+4. **Starting a dev server in a worktree requires setup first.** The correct sequence is:
+   ```bash
+   # If the worktree already exists but has no running instance:
+   cd <worktree-path>
+   eval "$(npx paperclipai worktree env)"
+   pnpm install && pnpm build
+   npx paperclipai run          # or pnpm dev
+
+   # If the worktree needs a fresh database:
+   npx paperclipai worktree reseed --seed-mode full
+
+   # If the worktree is broken beyond repair:
+   npx paperclipai worktree:cleanup <name>
+   npx paperclipai worktree:make <name> --seed-mode full
+   ```
+   If any step fails, follow rule 2 — stop and report.
+
+5. **Seeding is a CLI operation.** When asked to seed a worktree database from the main instance, use `worktree reseed` or recreate with `worktree:make --seed-mode full`. Read `doc/DEVELOPING.md` for the full option tables. Never attempt manual database copying.
+
 ## Common Mistakes
 
 | Mistake | Fix |
@@ -132,3 +170,5 @@ Only after completing Steps 1 and 2, run `gh pr create`. Use the template conten
 | Reseeding while target DB is running | Stop the target server first, or use `--allow-live-target` |
 | Cleaning up with unmerged commits | Merge or push first, or use `--force` if intentionally discarding |
 | Running agents against wrong instance | Verify `PAPERCLIP_API_URL` points to the correct port |
+| CLI command fails | Do NOT work around it — report the error and block (see Hard Rules above) |
+| Agent tries manual postgres operations | NEVER do this — all DB ops go through the CLI (see Hard Rules above) |
