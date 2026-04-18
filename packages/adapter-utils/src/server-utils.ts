@@ -212,7 +212,6 @@ export function appendWithByteCap(prev: string, chunk: string, cap = MAX_CAPTURE
   while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start += 1;
   return buffer.subarray(start).toString("utf8");
 }
-
 function resumeReadable(readable: { resume: () => unknown; destroyed?: boolean } | null | undefined) {
   if (!readable || readable.destroyed) return;
   readable.resume();
@@ -1421,6 +1420,10 @@ export async function runChildProcess(
               maybeArmTerminalResultCleanup();
               resumeReadable(readable);
             });
+            .finally(() => {
+              maybeArmTerminalResultCleanup();
+              resumeReadable(readable);
+            });
         });
 
         child.stderr?.on("data", (chunk: unknown) => {
@@ -1433,6 +1436,10 @@ export async function runChildProcess(
           logChain = logChain
             .then(() => opts.onLog("stderr", text))
             .catch((err) => onLogError(err, runId, "failed to append stderr log chunk"))
+            .finally(() => {
+              maybeArmTerminalResultCleanup();
+              resumeReadable(readable);
+            });
             .finally(() => {
               maybeArmTerminalResultCleanup();
               resumeReadable(readable);
