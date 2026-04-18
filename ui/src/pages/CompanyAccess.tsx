@@ -348,37 +348,52 @@ export function CompanyAccess() {
           {members.length === 0 ? (
             <div className="px-4 py-8 text-sm text-muted-foreground">No user memberships found for this company yet.</div>
           ) : (
-            members.map((member) => (
-              <div
-                key={member.id}
-                className="grid grid-cols-[minmax(0,1.5fr)_120px_120px_minmax(0,1.2fr)_180px] gap-3 border-b border-border px-4 py-3 last:border-b-0"
-              >
-                <div className="min-w-0">
-                  <div className="truncate font-medium">{member.user?.name?.trim() || member.user?.email || member.principalId}</div>
-                  <div className="truncate text-xs text-muted-foreground">{member.user?.email || member.principalId}</div>
+            members.map((member) => {
+              const removalReason = member.removal?.reason ?? null;
+              const canArchive = member.removal?.canArchive ?? true;
+              return (
+                <div
+                  key={member.id}
+                  className="grid grid-cols-[minmax(0,1.5fr)_120px_120px_minmax(0,1.2fr)_180px] gap-3 border-b border-border px-4 py-3 last:border-b-0"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{member.user?.name?.trim() || member.user?.email || member.principalId}</div>
+                    <div className="truncate text-xs text-muted-foreground">{member.user?.email || member.principalId}</div>
+                  </div>
+                  <div className="text-sm">
+                    {member.membershipRole
+                      ? HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS[member.membershipRole]
+                      : "Unset"}
+                  </div>
+                  <div>
+                    <Badge variant={member.status === "active" ? "secondary" : member.status === "suspended" ? "destructive" : "outline"}>
+                      {member.status.replace("_", " ")}
+                    </Badge>
+                  </div>
+                  <div className="min-w-0 text-sm text-muted-foreground">{formatGrantSummary(member)}</div>
+                  <div className="space-y-1 text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button size="sm" variant="outline" onClick={() => setEditingMemberId(member.id)}>
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setRemovingMemberId(member.id)}
+                        disabled={!canArchive}
+                        title={removalReason ?? undefined}
+                      >
+                        <Trash2 className="mr-1 h-3.5 w-3.5" />
+                        Remove
+                      </Button>
+                    </div>
+                    {removalReason ? (
+                      <div className="text-xs text-muted-foreground">{removalReason}</div>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="text-sm">
-                  {member.membershipRole
-                    ? HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS[member.membershipRole]
-                    : "Unset"}
-                </div>
-                <div>
-                  <Badge variant={member.status === "active" ? "secondary" : member.status === "suspended" ? "destructive" : "outline"}>
-                    {member.status.replace("_", " ")}
-                  </Badge>
-                </div>
-                <div className="min-w-0 text-sm text-muted-foreground">{formatGrantSummary(member)}</div>
-                <div className="flex justify-end gap-2">
-                  <Button size="sm" variant="outline" onClick={() => setEditingMemberId(member.id)}>
-                    Edit
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setRemovingMemberId(member.id)}>
-                    <Trash2 className="mr-1 h-3.5 w-3.5" />
-                    Remove
-                  </Button>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </section>

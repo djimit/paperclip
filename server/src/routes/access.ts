@@ -39,7 +39,7 @@ import {
   updateUserCompanyAccessSchema,
   PERMISSION_KEYS
 } from "@paperclipai/shared";
-import type { DeploymentExposure, DeploymentMode, PermissionKey } from "@paperclipai/shared";
+import type { DeploymentExposure, DeploymentMode, HumanCompanyMembershipRole, PermissionKey } from "@paperclipai/shared";
 import {
   forbidden,
   conflict,
@@ -1045,6 +1045,87 @@ async function loadCompanyMemberRecords(
     user: userMap.get(member.principalId) ?? null,
     grants: grantsByPrincipalId.get(member.principalId) ?? [],
   }));
+}
+
+type CompanyMemberRecord = Awaited<ReturnType<typeof loadCompanyMemberRecords>>[number];
+
+const humanRoleRank: Record<HumanCompanyMembershipRole, number> = {
+  viewer: 1,
+  operator: 2,
+  admin: 3,
+  owner: 4,
+};
+
+async function resolveActorHumanRole(
+  req: Request,
+  access: ReturnType<typeof accessService>,
+  companyId: string,
+): Promise<HumanCompanyMembershipRole | null> {
+  if (req.actor.type !== "board") return null;
+  if (isLocalImplicit(req) || req.actor.isInstanceAdmin) return "owner";
+  const userId = req.actor.userId ?? null;
+  if (!userId) return null;
+  const membership = await access.getMembership(companyId, "user", userId);
+  if (membership?.status !== "active" || !membership.membershipRole) return null;
+  return normalizeHumanRole(membership.membershipRole, "operator");
+}
+
+async function getProtectedMemberReason(
+  req: Request,
+  access: ReturnType<typeof accessService>,
+  companyId: string,
+  member: { principalId: string; principalType: string; membershipRole: string | null },
+): Promise<string | null> {
+  if (member.principalType !== "user") return "Only human company members can be removed.";
+  if (req.actor.type !== "board") return "Board access is required to remove members.";
+  if (member.principalId === req.actor.userId) return "You cannot remove yourself.";
+  if (await access.isInstanceAdmin(member.principalId)) {
+    return "Instance admins cannot be removed from company access.";
+  }
+
+  const targetRole = member.membershipRole
+    ? normalizeHumanRole(member.membershipRole, "operator")
+    : "operator";
+  if (targetRole === "owner") return "Board owners cannot be removed from company access.";
+  if (targetRole === "admin") return "Company admins cannot be removed from company access.";
+
+  const actorRole = await resolveActorHumanRole(req, access, companyId);
+  if (!actorRole) return "Only active company members can remove users.";
+  if (humanRoleRank[targetRole] >= humanRoleRank[actorRole]) {
+    return "You can only remove users below your company role.";
+  }
+
+  return null;
+}
+
+async function assertCanManageCompanyMember(
+  req: Request,
+  access: ReturnType<typeof accessService>,
+  companyId: string,
+  member: { principalId: string; principalType: string; membershipRole: string | null },
+) {
+  const reason = await getProtectedMemberReason(req, access, companyId, member);
+  if (reason) throw forbidden(reason);
+}
+
+async function addCompanyMemberRemovalAccess(
+  req: Request,
+  access: ReturnType<typeof accessService>,
+  companyId: string,
+  members: CompanyMemberRecord[],
+) {
+  return Promise.all(
+    members.map(async (member) => {
+      const reason = await getProtectedMemberReason(req, access, companyId, member);
+      return {
+        ...member,
+        removal: {
+          canArchive: !reason,
+          reason,
+        },
+      };
+    }),
+  );
 }
 
 async function loadCompanyUserDirectory(db: Db, companyId: string) {
@@ -3610,7 +3691,7 @@ export function accessRoutes(
       loadCompanyAccessSummary(req, access, companyId),
     ]);
     res.json({
-      members,
+      members: await addCompanyMemberRemovalAccess(req, access, companyId, members),
       access: currentAccess,
     });
   });
@@ -3629,6 +3710,9 @@ export function accessRoutes(
       const companyId = req.params.companyId as string;
       const memberId = req.params.memberId as string;
       await assertCompanyPermission(req, companyId, "users:manage_permissions");
+      const memberToUpdate = await access.getMemberById(companyId, memberId);
+      if (!memberToUpdate) throw notFound("Member not found");
+      await assertCanManageCompanyMember(req, access, companyId, memberToUpdate);
 
       const updated = await db.transaction(async (tx) => {
         await tx.execute(sql`
@@ -3723,6 +3807,9 @@ export function accessRoutes(
       const companyId = req.params.companyId as string;
       const memberId = req.params.memberId as string;
       await assertCompanyPermission(req, companyId, "users:manage_permissions");
+      const memberToUpdate = await access.getMemberById(companyId, memberId);
+      if (!memberToUpdate) throw notFound("Member not found");
+      await assertCanManageCompanyMember(req, access, companyId, memberToUpdate);
 
       const updated = await db.transaction(async (tx) => {
         await tx.execute(sql`
@@ -3847,6 +3934,9 @@ export function accessRoutes(
       const companyId = req.params.companyId as string;
       const memberId = req.params.memberId as string;
       await assertCompanyPermission(req, companyId, "users:manage_permissions");
+      const memberToArchive = await access.getMemberById(companyId, memberId);
+      if (!memberToArchive) throw notFound("Member not found");
+      await assertCanManageCompanyMember(req, access, companyId, memberToArchive);
 
       const result = await access.archiveMember(companyId, memberId, {
         reassignment: req.body.reassignment ?? null,
@@ -3885,6 +3975,9 @@ export function accessRoutes(
       const companyId = req.params.companyId as string;
       const memberId = req.params.memberId as string;
       await assertCompanyPermission(req, companyId, "users:manage_permissions");
+      const memberToUpdate = await access.getMemberById(companyId, memberId);
+      if (!memberToUpdate) throw notFound("Member not found");
+      await assertCanManageCompanyMember(req, access, companyId, memberToUpdate);
       const updated = await access.setMemberPermissions(
         companyId,
         memberId,
@@ -4006,7 +4099,8 @@ export function accessRoutes(
       const userId = req.params.userId as string;
       await access.setUserCompanyAccess(
         userId,
-        req.body.companyIds ?? []
+        req.body.companyIds ?? [],
+        { actorUserId: req.actor.userId ?? null },
       );
       res.json(await loadUserCompanyAccessResponse(db, access, userId));
     }

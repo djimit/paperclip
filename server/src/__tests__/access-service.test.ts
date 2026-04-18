@@ -5,6 +5,7 @@ import {
   companies,
   companyMemberships,
   createDb,
+  instanceUserRoles,
   issues,
   principalPermissionGrants,
 } from "@paperclipai/db";
@@ -54,6 +55,7 @@ describeEmbeddedPostgres("access service", () => {
   afterEach(async () => {
     await db.delete(issues);
     await db.delete(principalPermissionGrants);
+    await db.delete(instanceUserRoles);
     await db.delete(companyMemberships);
     await db.delete(companies);
   });
@@ -173,5 +175,50 @@ describeEmbeddedPostgres("access service", () => {
       .where(eq(issues.id, doneIssue.id))
       .then((rows) => rows[0]!);
     expect(historicalIssue.assigneeUserId).toBe(member.principalId);
+  });
+
+  it("rejects instance-level company access removal for self and protected users", async () => {
+    const { company, owner } = await createCompanyWithOwner(db);
+    const access = accessService(db);
+
+    await expect(
+      access.setUserCompanyAccess(owner.principalId, [], { actorUserId: owner.principalId }),
+    ).rejects.toThrow("You cannot remove yourself");
+
+    const admin = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: `admin-${randomUUID()}`,
+        status: "active",
+        membershipRole: "admin",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    await expect(
+      access.setUserCompanyAccess(admin.principalId, [], { actorUserId: owner.principalId }),
+    ).rejects.toThrow("Owners and admins cannot be removed from company access");
+
+    const operator = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: `operator-${randomUUID()}`,
+        status: "active",
+        membershipRole: "operator",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    await db.insert(instanceUserRoles).values({
+      userId: operator.principalId,
+      role: "instance_admin",
+    });
+
+    await expect(
+      access.setUserCompanyAccess(operator.principalId, [], { actorUserId: owner.principalId }),
+    ).rejects.toThrow("Instance admins cannot be removed from company access");
   });
 });

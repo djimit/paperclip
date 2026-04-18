@@ -126,6 +126,10 @@ export type CompanyMember = {
   updatedAt: string;
   user: { id: string; email: string | null; name: string | null; image: string | null } | null;
   grants: CompanyMemberGrant[];
+  removal?: {
+    canArchive: boolean;
+    reason: string | null;
+  };
 };
 
 export type ArchiveCompanyMemberResponse = {

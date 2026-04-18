@@ -47,6 +47,10 @@ export interface CompanyMemberRecord extends CompanyMembership {
   membershipRole: HumanCompanyMembershipRole | null;
   user: AccessUserProfile | null;
   grants: PrincipalPermissionGrant[];
+  removal?: {
+    canArchive: boolean;
+    reason: string | null;
+  };
 }
 
 export interface CompanyMembersResponse {

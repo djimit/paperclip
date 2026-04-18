@@ -451,13 +451,27 @@ export function accessService(db: Db) {
       .orderBy(sql`${companyMemberships.createdAt} desc`);
   }
 
-  async function setUserCompanyAccess(userId: string, companyIds: string[]) {
+  async function setUserCompanyAccess(
+    userId: string,
+    companyIds: string[],
+    options: { actorUserId?: string | null } = {},
+  ) {
     const existing = await listUserCompanyAccess(userId);
     const existingByCompany = new Map(existing.map((row) => [row.companyId, row]));
     const target = new Set(companyIds);
 
     await db.transaction(async (tx) => {
       const toArchive = existing.filter((row) => !target.has(row.companyId) && row.status !== "archived");
+      if (toArchive.length > 0 && options.actorUserId && options.actorUserId === userId) {
+        throw conflict("You cannot remove yourself");
+      }
+      if (toArchive.length > 0 && (await isInstanceAdmin(userId))) {
+        throw conflict("Instance admins cannot be removed from company access");
+      }
+      const protectedArchives = toArchive.filter((row) => row.membershipRole === "owner" || row.membershipRole === "admin");
+      if (protectedArchives.length > 0) {
+        throw conflict("Owners and admins cannot be removed from company access");
+      }
       const activeOwnerArchives = toArchive.filter(
         (row) => row.status === "active" && row.membershipRole === "owner",
       );

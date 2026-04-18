@@ -322,4 +322,64 @@ describe("CompanyAccess", () => {
       root.unmount();
     });
   });
+
+  it("shows protected member removal reasons from the API", async () => {
+    listMembersMock.mockResolvedValueOnce({
+      members: [
+        {
+          id: "member-admin",
+          companyId: "company-1",
+          principalType: "user",
+          principalId: "admin-user",
+          status: "active",
+          membershipRole: "admin",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:00:00.000Z",
+          user: {
+            id: "admin-user",
+            email: "admin@paperclip.local",
+            name: "Admin User",
+            image: null,
+          },
+          grants: [],
+          removal: {
+            canArchive: false,
+            reason: "Company admins cannot be removed from company access.",
+          },
+        },
+      ],
+      access: {
+        currentUserRole: "owner",
+        canManageMembers: true,
+        canInviteUsers: true,
+        canApproveJoinRequests: false,
+      },
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyAccess />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).toContain("Company admins cannot be removed from company access.");
+    const removeButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Remove"),
+    );
+    expect(removeButton).toBeTruthy();
+    expect(removeButton).toHaveProperty("disabled", true);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
