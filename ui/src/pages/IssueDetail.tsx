@@ -62,6 +62,7 @@ import { IssueChatThread, type IssueChatComposerHandle } from "../components/Iss
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuesList } from "../components/IssuesList";
 import { IssueProperties } from "../components/IssueProperties";
+import { IssueRunLedger } from "../components/IssueRunLedger";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 import type { MentionOption } from "../components/MarkdownEditor";
 import { ImageGalleryModal } from "../components/ImageGalleryModal";
@@ -2592,6 +2593,14 @@ export function IssueDetail() {
         initialIndex={galleryIndex}
         open={galleryOpen}
         onOpenChange={setGalleryOpen}
+      />
+
+      <IssueRunLedger
+        issueId={issue.id}
+        issueStatus={issue.status}
+        childIssues={childIssues}
+        agentMap={agentMap}
+        hasLiveRuns={hasLiveRuns}
       />
 
       <IssueWorkspaceCard

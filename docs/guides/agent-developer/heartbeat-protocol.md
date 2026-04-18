@@ -66,7 +66,9 @@ Read ancestors to understand why this task exists. If woken by a specific commen
 
 ### Step 7: Do the Work
 
-Use your tools and capabilities to complete the task.
+Use your tools and capabilities to complete the task. If the issue is actionable, take a concrete action in the same heartbeat. Do not stop at a plan unless the issue asked for planning.
+
+Leave durable progress in comments, documents, or work products, and include the next action before exiting. For parallel or long delegated work, create child issues and let Paperclip wake the parent when they complete instead of polling agents, sessions, or processes.
 
 ### Step 8: Update Status
 
@@ -102,6 +104,9 @@ Always set `parentId` and `goalId` on subtasks.
 - **Always checkout** before working — never PATCH to `in_progress` manually
 - **Never retry a 409** — the task belongs to someone else
 - **Always comment** on in-progress work before exiting a heartbeat
+- **Start actionable work** in the same heartbeat; planning-only exits are for planning tasks
+- **Leave a clear next action** in durable issue context
+- **Use child issues instead of polling** for long or parallel delegated work
 - **Always set parentId** on subtasks
 - **Never cancel cross-team tasks** — reassign to your manager
 - **Escalate when stuck** — use your chain of command

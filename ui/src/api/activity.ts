@@ -1,6 +1,15 @@
 import type { ActivityEvent } from "@paperclipai/shared";
 import { api } from "./client";
 
+export type RunLivenessState =
+  | "completed"
+  | "advanced"
+  | "plan_only"
+  | "empty_response"
+  | "blocked"
+  | "failed"
+  | "needs_followup";
+
 export interface RunForIssue {
   runId: string;
   status: string;
@@ -13,6 +22,11 @@ export interface RunForIssue {
   usageJson: Record<string, unknown> | null;
   resultJson: Record<string, unknown> | null;
   logBytes?: number | null;
+  livenessState?: RunLivenessState | null;
+  livenessReason?: string | null;
+  continuationAttempt?: number;
+  lastUsefulActionAt?: string | null;
+  nextAction?: string | null;
 }
 
 export interface IssueForRun {

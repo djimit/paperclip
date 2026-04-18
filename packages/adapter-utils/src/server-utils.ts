@@ -66,6 +66,17 @@ const PAPERCLIP_SKILL_ROOT_RELATIVE_CANDIDATES = [
   "../../../../../skills",
 ];
 
+export const DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE = [
+  "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
+  "",
+  "Execution contract:",
+  "- Start actionable work in this heartbeat; do not stop at a plan unless the issue asks for planning.",
+  "- Leave durable progress in comments, documents, or work products with a clear next action.",
+  "- Use child issues for parallel or long delegated work instead of polling agents, sessions, or processes.",
+  "- If blocked, mark the issue blocked and name the unblock owner and action.",
+  "- Respect budget, pause/cancel, approval gates, and company boundaries.",
+].join("\n");
+
 export interface PaperclipSkillEntry {
   key: string;
   runtimeName: string;
@@ -250,11 +261,31 @@ type PaperclipWakeComment = {
   authorId: string | null;
 };
 
+type PaperclipWakeContinuationSummary = {
+  key: string | null;
+  title: string | null;
+  body: string;
+  bodyTruncated: boolean;
+  updatedAt: string | null;
+};
+
+type PaperclipWakeChildIssueSummary = {
+  id: string | null;
+  identifier: string | null;
+  title: string | null;
+  status: string | null;
+  priority: string | null;
+  summary: string | null;
+};
+
 type PaperclipWakePayload = {
   reason: string | null;
   issue: PaperclipWakeIssue | null;
   checkedOutByHarness: boolean;
   executionStage: PaperclipWakeExecutionStage | null;
+  continuationSummary: PaperclipWakeContinuationSummary | null;
+  childIssueSummaries: PaperclipWakeChildIssueSummary[];
+  childIssueSummaryTruncated: boolean;
   commentIds: string[];
   latestCommentId: string | null;
   comments: PaperclipWakeComment[];
@@ -296,6 +327,31 @@ function normalizePaperclipWakeComment(value: unknown): PaperclipWakeComment | n
     authorType: asString(author.type, "").trim() || null,
     authorId: asString(author.id, "").trim() || null,
   };
+}
+
+function normalizePaperclipWakeContinuationSummary(value: unknown): PaperclipWakeContinuationSummary | null {
+  const summary = parseObject(value);
+  const body = asString(summary.body, "").trim();
+  if (!body) return null;
+  return {
+    key: asString(summary.key, "").trim() || null,
+    title: asString(summary.title, "").trim() || null,
+    body,
+    bodyTruncated: asBoolean(summary.bodyTruncated, false),
+    updatedAt: asString(summary.updatedAt, "").trim() || null,
+  };
+}
+
+function normalizePaperclipWakeChildIssueSummary(value: unknown): PaperclipWakeChildIssueSummary | null {
+  const child = parseObject(value);
+  const id = asString(child.id, "").trim() || null;
+  const identifier = asString(child.identifier, "").trim() || null;
+  const title = asString(child.title, "").trim() || null;
+  const status = asString(child.status, "").trim() || null;
+  const priority = asString(child.priority, "").trim() || null;
+  const summary = asString(child.summary, "").trim() || null;
+  if (!id && !identifier && !title && !status && !summary) return null;
+  return { id, identifier, title, status, priority, summary };
 }
 
 function normalizePaperclipWakeExecutionPrincipal(value: unknown): PaperclipWakeExecutionPrincipal | null {
@@ -356,8 +412,14 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
         .map((entry) => entry.trim())
     : [];
   const executionStage = normalizePaperclipWakeExecutionStage(payload.executionStage);
+  const continuationSummary = normalizePaperclipWakeContinuationSummary(payload.continuationSummary);
+  const childIssueSummaries = Array.isArray(payload.childIssueSummaries)
+    ? payload.childIssueSummaries
+        .map((entry) => normalizePaperclipWakeChildIssueSummary(entry))
+        .filter((entry): entry is PaperclipWakeChildIssueSummary => Boolean(entry))
+    : [];
 
-  if (comments.length === 0 && commentIds.length === 0 && !executionStage && !normalizePaperclipWakeIssue(payload.issue)) {
+  if (comments.length === 0 && commentIds.length === 0 && childIssueSummaries.length === 0 && !executionStage && !continuationSummary && !normalizePaperclipWakeIssue(payload.issue)) {
     return null;
   }
 
@@ -366,6 +428,9 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
     issue: normalizePaperclipWakeIssue(payload.issue),
     checkedOutByHarness: asBoolean(payload.checkedOutByHarness, false),
     executionStage,
+    continuationSummary,
+    childIssueSummaries,
+    childIssueSummaryTruncated: asBoolean(payload.childIssueSummaryTruncated, false),
     commentIds,
     latestCommentId: asString(payload.latestCommentId, "").trim() || null,
     comments,
@@ -406,6 +471,8 @@ export function renderPaperclipWakePrompt(
         "Focus on the new wake delta below and continue the current task without restating the full heartbeat boilerplate.",
         "Fetch the API thread only when `fallbackFetchNeeded` is true or you need broader history than this batch.",
         "",
+        "Execution contract: take concrete action in this heartbeat when the issue is actionable; do not stop at a plan unless planning was requested. Leave durable progress with a clear next action, use child issues instead of polling for long or parallel work, and mark blocked work with the unblock owner/action.",
+        "",
         `- reason: ${normalized.reason ?? "unknown"}`,
         `- issue: ${normalized.issue?.identifier ?? normalized.issue?.id ?? "unknown"}${normalized.issue?.title ? ` ${normalized.issue.title}` : ""}`,
         `- pending comments: ${normalized.includedCount}/${normalized.requestedCount}`,
@@ -420,6 +487,8 @@ export function renderPaperclipWakePrompt(
         "Before generic repo exploration or boilerplate heartbeat updates, acknowledge the latest comment and explain how it changes your next action.",
         "Use this inline wake data first before refetching the issue thread.",
         "Only fetch the API thread when `fallbackFetchNeeded` is true or you need broader history than this batch.",
+        "",
+        "Execution contract: take concrete action in this heartbeat when the issue is actionable; do not stop at a plan unless planning was requested. Leave durable progress with a clear next action, use child issues instead of polling for long or parallel work, and mark blocked work with the unblock owner/action.",
         "",
         `- reason: ${normalized.reason ?? "unknown"}`,
         `- issue: ${normalized.issue?.identifier ?? normalized.issue?.id ?? "unknown"}${normalized.issue?.title ? ` ${normalized.issue.title}` : ""}`,
@@ -467,6 +536,33 @@ export function renderPaperclipWakePrompt(
         "Address the requested changes on this issue and resubmit when the work is ready.",
         "",
       );
+    }
+  }
+
+  if (normalized.continuationSummary) {
+    lines.push(
+      "",
+      "Issue continuation summary:",
+      normalized.continuationSummary.body,
+    );
+    if (normalized.continuationSummary.bodyTruncated) {
+      lines.push("[continuation summary truncated]");
+    }
+  }
+
+  if (normalized.childIssueSummaries.length > 0) {
+    lines.push("", "Direct child issue summaries:");
+    for (const child of normalized.childIssueSummaries) {
+      const label = child.identifier ?? child.id ?? "unknown";
+      lines.push(
+        `- ${label}${child.title ? ` ${child.title}` : ""}${child.status ? ` (${child.status})` : ""}`,
+      );
+      if (child.summary) {
+        lines.push(`  ${child.summary}`);
+      }
+    }
+    if (normalized.childIssueSummaryTruncated) {
+      lines.push("[child issue summaries truncated]");
     }
   }
 

@@ -74,7 +74,13 @@ export function activityService(db: Db) {
           ${heartbeatRuns.resultJson} -> 'total_cost_usd',
           ${heartbeatRuns.resultJson} -> 'cost_usd',
           ${heartbeatRuns.resultJson} -> 'costUsd'
-        )
+        ),
+        'stopReason', ${heartbeatRuns.resultJson} -> 'stopReason',
+        'effectiveTimeoutSec', ${heartbeatRuns.resultJson} -> 'effectiveTimeoutSec',
+        'effectiveTimeoutMs', ${heartbeatRuns.resultJson} -> 'effectiveTimeoutMs',
+        'timeoutConfigured', ${heartbeatRuns.resultJson} -> 'timeoutConfigured',
+        'timeoutSource', ${heartbeatRuns.resultJson} -> 'timeoutSource',
+        'timeoutFired', ${heartbeatRuns.resultJson} -> 'timeoutFired'
       ))
     end
   `.as("resultJson");
@@ -142,6 +148,11 @@ export function activityService(db: Db) {
           usageJson: summarizedUsageJson,
           resultJson: summarizedResultJson,
           logBytes: heartbeatRuns.logBytes,
+          livenessState: heartbeatRuns.livenessState,
+          livenessReason: heartbeatRuns.livenessReason,
+          continuationAttempt: heartbeatRuns.continuationAttempt,
+          lastUsefulActionAt: heartbeatRuns.lastUsefulActionAt,
+          nextAction: heartbeatRuns.nextAction,
         })
         .from(heartbeatRuns)
         .innerJoin(

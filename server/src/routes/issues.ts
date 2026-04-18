@@ -10,6 +10,7 @@ import {
   createIssueWorkProductSchema,
   createIssueLabelSchema,
   checkoutIssueSchema,
+  createChildIssueSchema,
   createIssueSchema,
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,
@@ -769,7 +770,7 @@ export function issueRoutes(
         ? req.query.wakeCommentId.trim()
         : null;
 
-    const [{ project, goal }, ancestors, commentCursor, wakeComment, relations, attachments] =
+    const [{ project, goal }, ancestors, commentCursor, wakeComment, relations, attachments, continuationSummary] =
       await Promise.all([
       resolveIssueProjectAndGoal(issue),
       svc.getAncestors(issue.id),
@@ -777,6 +778,7 @@ export function issueRoutes(
       wakeCommentId ? svc.getComment(wakeCommentId) : null,
       svc.getRelationSummaries(issue.id),
       svc.listAttachments(issue.id),
+      documentsSvc.getIssueDocumentByKey(issue.id, "continuation-summary"),
     ]);
 
     res.json({
@@ -833,6 +835,16 @@ export function issueRoutes(
         contentPath: withContentPath(a).contentPath,
         createdAt: a.createdAt,
       })),
+      continuationSummary: continuationSummary
+        ? {
+            key: continuationSummary.key,
+            title: continuationSummary.title,
+            body: continuationSummary.body,
+            latestRevisionId: continuationSummary.latestRevisionId,
+            latestRevisionNumber: continuationSummary.latestRevisionNumber,
+            updatedAt: continuationSummary.updatedAt,
+          }
+        : null,
     });
   });
 
@@ -1365,6 +1377,62 @@ export function issueRoutes(
       reason: "issue_assigned",
       mutation: "create",
       contextSource: "issue.create",
+      requestedByActorType: actor.actorType,
+      requestedByActorId: actor.actorId,
+    });
+
+    res.status(201).json(issue);
+  });
+
+  router.post("/issues/:id/children", validate(createChildIssueSchema), async (req, res) => {
+    const parentId = req.params.id as string;
+    const parent = await svc.getById(parentId);
+    if (!parent) {
+      res.status(404).json({ error: "Parent issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, parent.companyId);
+    assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
+    if (req.body.assigneeAgentId || req.body.assigneeUserId) {
+      await assertCanAssignTasks(req, parent.companyId);
+    }
+
+    const actor = getActorInfo(req);
+    const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+    const { issue, parentBlockerAdded } = await svc.createChild(parent.id, {
+      ...req.body,
+      executionPolicy,
+      createdByAgentId: actor.agentId,
+      createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+      actorAgentId: actor.agentId,
+      actorUserId: actor.actorType === "user" ? actor.actorId : null,
+    });
+
+    await logActivity(db, {
+      companyId: parent.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "issue.child_created",
+      entityType: "issue",
+      entityId: issue.id,
+      details: {
+        parentId: parent.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        inheritedExecutionWorkspaceFromIssueId: parent.id,
+        ...(Array.isArray(req.body.blockedByIssueIds) ? { blockedByIssueIds: req.body.blockedByIssueIds } : {}),
+        ...(parentBlockerAdded ? { parentBlockerAdded: true } : {}),
+      },
+    });
+
+    void queueIssueAssignmentWakeup({
+      heartbeat,
+      issue,
+      reason: "issue_assigned",
+      mutation: "create",
+      contextSource: "issue.child_create",
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
     });
@@ -1940,6 +2008,8 @@ export function issueRoutes(
               issueId: parent.id,
               completedChildIssueId: issue.id,
               childIssueIds: parent.childIssueIds,
+              childIssueSummaries: parent.childIssueSummaries,
+              childIssueSummaryTruncated: parent.childIssueSummaryTruncated,
             },
             requestedByActorType: actor.actorType,
             requestedByActorId: actor.actorId,
@@ -1950,6 +2020,8 @@ export function issueRoutes(
               source: "issue.children_completed",
               completedChildIssueId: issue.id,
               childIssueIds: parent.childIssueIds,
+              childIssueSummaries: parent.childIssueSummaries,
+              childIssueSummaryTruncated: parent.childIssueSummaryTruncated,
             },
           });
         }

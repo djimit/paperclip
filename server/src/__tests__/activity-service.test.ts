@@ -78,9 +78,17 @@ describeEmbeddedPostgres("activity service", () => {
       resultJson: {
         billing_type: "metered",
         total_cost_usd: 0.42,
+        stopReason: "timeout",
+        effectiveTimeoutSec: 30,
+        timeoutFired: true,
         summary: "done",
         nestedHuge: { payload: "y".repeat(256_000) },
       },
+      livenessState: "advanced",
+      livenessReason: "Run produced concrete action evidence: 1 issue comment(s)",
+      continuationAttempt: 2,
+      lastUsefulActionAt: new Date("2026-04-18T19:59:00.000Z"),
+      nextAction: "Review the completed output.",
     });
 
     const runs = await activityService(db).runsForIssue(companyId, issueId);
@@ -111,6 +119,16 @@ describeEmbeddedPostgres("activity service", () => {
       costUsd: 0.42,
       cost_usd: 0.42,
       total_cost_usd: 0.42,
+      stopReason: "timeout",
+      effectiveTimeoutSec: 30,
+      timeoutFired: true,
+    });
+    expect(runs[0]).toMatchObject({
+      livenessState: "advanced",
+      livenessReason: "Run produced concrete action evidence: 1 issue comment(s)",
+      continuationAttempt: 2,
+      lastUsefulActionAt: new Date("2026-04-18T19:59:00.000Z"),
+      nextAction: "Review the completed output.",
     });
   });
 });
