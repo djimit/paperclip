@@ -264,7 +264,7 @@ function ProjectWorkspacesContent({
   return (
     <>
       <div className="space-y-4">
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="space-y-3">
           {activeSummaries.map((summary) => (
             <ProjectWorkspaceSummaryCard
               key={summary.key}
@@ -282,7 +282,7 @@ function ProjectWorkspacesContent({
             <div className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
               Cleanup attention needed
             </div>
-            <div className="overflow-hidden rounded-xl border border-amber-500/20 bg-amber-500/5">
+            <div className="space-y-3">
               {cleanupFailedSummaries.map((summary) => (
                 <ProjectWorkspaceSummaryCard
                   key={summary.key}

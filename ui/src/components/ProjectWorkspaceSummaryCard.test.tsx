@@ -75,6 +75,7 @@ function createSummary(overrides: Partial<ProjectWorkspaceSummary> = {}): Projec
     serviceCount: overrides.serviceCount ?? 2,
     runningServiceCount: overrides.runningServiceCount ?? 0,
     primaryServiceUrl: overrides.primaryServiceUrl ?? "http://127.0.0.1:62474",
+    primaryServiceUrlRunning: overrides.primaryServiceUrlRunning ?? false,
     hasRuntimeConfig: overrides.hasRuntimeConfig ?? true,
     issues: overrides.issues ?? [
       createIssue({ id: "issue-1", identifier: "PAP-1364" }),
@@ -124,6 +125,9 @@ describe("ProjectWorkspaceSummaryCard", () => {
 
     const actions = container.querySelector('[data-testid="workspace-summary-actions"]');
     expect(actions?.className).toContain("flex-col");
+    const card = container.firstElementChild;
+    expect(card?.className).toContain("rounded-lg");
+    expect(card?.className).toContain("border");
 
     act(() => {
       root.unmount();
@@ -184,6 +188,34 @@ describe("ProjectWorkspaceSummaryCard", () => {
     });
 
     expect(container.textContent).toContain("Retry close");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("colors live service urls green", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <ProjectWorkspaceSummaryCard
+          projectRef="paperclip-app"
+          summary={createSummary({
+            primaryServiceUrl: "http://127.0.0.1:62475",
+            primaryServiceUrlRunning: true,
+            runningServiceCount: 1,
+          })}
+          runtimeActionKey={null}
+          runtimeActionPending={false}
+          onRuntimeAction={() => {}}
+          onCloseWorkspace={() => {}}
+        />,
+      );
+    });
+
+    const serviceLink = container.querySelector("a[href='http://127.0.0.1:62475']");
+    expect(serviceLink?.className).toContain("text-emerald");
 
     act(() => {
       root.unmount();
