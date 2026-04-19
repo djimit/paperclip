@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
+import { agents, companies, createDb, heartbeatRuns, issueComments, issues } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -26,6 +26,8 @@ describeEmbeddedPostgres("activity service", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(issueComments);
+    await db.delete(issues);
     await db.delete(heartbeatRuns);
     await db.delete(agents);
     await db.delete(companies);
@@ -129,6 +131,91 @@ describeEmbeddedPostgres("activity service", () => {
       continuationAttempt: 2,
       lastUsefulActionAt: new Date("2026-04-18T19:59:00.000Z"),
       nextAction: "Review the completed output.",
+    });
+  });
+
+  it("backfills missing liveness for completed issue runs before returning the ledger", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runId = randomUUID();
+    const completedAt = new Date("2026-04-18T20:04:00.000Z");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Fix run ledger",
+      description: "Make the run ledger answer whether a run advanced.",
+      status: "done",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      completedAt,
+    });
+
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "succeeded",
+      startedAt: new Date("2026-04-18T20:00:00.000Z"),
+      finishedAt: completedAt,
+      contextSnapshot: { issueId },
+      resultJson: {
+        summary: "Finished the implementation.",
+      },
+      livenessState: null,
+      livenessReason: null,
+      lastUsefulActionAt: null,
+      nextAction: null,
+    });
+
+    await db.insert(issueComments).values({
+      companyId,
+      issueId,
+      authorAgentId: agentId,
+      createdByRunId: runId,
+      body: "Done",
+      createdAt: completedAt,
+    });
+
+    const runs = await activityService(db).runsForIssue(companyId, issueId);
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      runId,
+      livenessState: "completed",
+      livenessReason: "Issue is done",
+      continuationAttempt: 0,
+      lastUsefulActionAt: completedAt,
+    });
+
+    const [persisted] = await db.select().from(heartbeatRuns);
+    expect(persisted).toMatchObject({
+      id: runId,
+      livenessState: "completed",
+      livenessReason: "Issue is done",
+      continuationAttempt: 0,
+      lastUsefulActionAt: completedAt,
     });
   });
 });
