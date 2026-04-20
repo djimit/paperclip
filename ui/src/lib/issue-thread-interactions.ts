@@ -1,120 +1,30 @@
-export type IssueThreadInteractionStatus =
-  | "pending"
-  | "accepted"
-  | "rejected"
-  | "answered"
-  | "expired"
-  | "failed";
-
-export type IssueThreadInteractionContinuationPolicy = "none" | "wake_assignee";
-
-export interface IssueThreadInteractionActorFields {
-  createdByAgentId?: string | null;
-  createdByUserId?: string | null;
-  resolvedByAgentId?: string | null;
-  resolvedByUserId?: string | null;
-}
-
-export interface IssueThreadInteractionBase extends IssueThreadInteractionActorFields {
-  id: string;
-  companyId: string;
-  issueId: string;
-  sourceCommentId?: string | null;
-  sourceRunId?: string | null;
-  title?: string | null;
-  summary?: string | null;
-  status: IssueThreadInteractionStatus;
-  continuationPolicy: IssueThreadInteractionContinuationPolicy;
-  createdAt: Date | string;
-  updatedAt: Date | string;
-  resolvedAt?: Date | string | null;
-}
-
-export interface SuggestedTaskDraft {
-  clientKey: string;
-  parentClientKey?: string | null;
-  parentId?: string | null;
-  title: string;
-  description?: string | null;
-  priority?: "critical" | "high" | "medium" | "low" | null;
-  assigneeAgentId?: string | null;
-  assigneeUserId?: string | null;
-  projectId?: string | null;
-  goalId?: string | null;
-  billingCode?: string | null;
-  labels?: string[];
-  hiddenInPreview?: boolean;
-}
-
-export interface SuggestTasksPayload {
-  version: 1;
-  defaultParentId?: string | null;
-  tasks: SuggestedTaskDraft[];
-}
-
-export interface SuggestTasksResultCreatedTask {
-  clientKey: string;
-  issueId: string;
-  identifier?: string | null;
-  title?: string | null;
-  parentIssueId?: string | null;
-  parentIdentifier?: string | null;
-}
-
-export interface SuggestTasksResult {
-  version: 1;
-  createdTasks?: SuggestTasksResultCreatedTask[];
-  rejectionReason?: string | null;
-}
-
-export interface SuggestTasksInteraction extends IssueThreadInteractionBase {
-  kind: "suggest_tasks";
-  payload: SuggestTasksPayload;
-  result?: SuggestTasksResult | null;
-}
-
-export interface AskUserQuestionsQuestionOption {
-  id: string;
-  label: string;
-  description?: string | null;
-}
-
-export interface AskUserQuestionsQuestion {
-  id: string;
-  prompt: string;
-  helpText?: string | null;
-  selectionMode: "single" | "multi";
-  required?: boolean;
-  options: AskUserQuestionsQuestionOption[];
-}
-
-export interface AskUserQuestionsPayload {
-  version: 1;
-  title?: string | null;
-  submitLabel?: string | null;
-  questions: AskUserQuestionsQuestion[];
-}
-
-export interface AskUserQuestionsAnswer {
-  questionId: string;
-  optionIds: string[];
-}
-
-export interface AskUserQuestionsResult {
-  version: 1;
-  answers: AskUserQuestionsAnswer[];
-  summaryMarkdown?: string | null;
-}
-
-export interface AskUserQuestionsInteraction extends IssueThreadInteractionBase {
-  kind: "ask_user_questions";
-  payload: AskUserQuestionsPayload;
-  result?: AskUserQuestionsResult | null;
-}
-
-export type IssueThreadInteraction =
-  | SuggestTasksInteraction
-  | AskUserQuestionsInteraction;
+export type {
+  AskUserQuestionsAnswer,
+  AskUserQuestionsInteraction,
+  AskUserQuestionsPayload,
+  AskUserQuestionsQuestion,
+  AskUserQuestionsQuestionOption,
+  AskUserQuestionsResult,
+  IssueThreadInteraction,
+  IssueThreadInteractionActorFields,
+  IssueThreadInteractionBase,
+  IssueThreadInteractionContinuationPolicy,
+  IssueThreadInteractionStatus,
+  SuggestedTaskDraft,
+  SuggestTasksInteraction,
+  SuggestTasksPayload,
+  SuggestTasksResult,
+  SuggestTasksResultCreatedTask,
+} from "@paperclipai/shared";
+import type {
+  AskUserQuestionsAnswer,
+  AskUserQuestionsInteraction,
+  AskUserQuestionsQuestion,
+  IssueThreadInteraction,
+  SuggestedTaskDraft,
+  SuggestTasksInteraction,
+  SuggestTasksResultCreatedTask,
+} from "@paperclipai/shared";
 
 export interface SuggestedTaskTreeNode {
   task: SuggestedTaskDraft;
