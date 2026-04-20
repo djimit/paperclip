@@ -993,7 +993,9 @@ export function IssueDetail() {
     queryKey: queryKeys.issues.deliverables(issueId!),
     queryFn: () => issuesApi.getDeliverables(issueId!),
     enabled: !!issueId,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForSameQueryTail<Awaited<ReturnType<typeof issuesApi.getDeliverables>>>(
+      issueId ?? "pending",
+    ),
   });
 
   const { data: liveRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>({
