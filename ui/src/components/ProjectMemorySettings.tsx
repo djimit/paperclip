@@ -1,29 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database } from "lucide-react";
 import { memoryApi } from "../api/memory";
+import { MemoryOverrideCard } from "./MemoryOverrideCard";
 import { useToast } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
 
-function sourceLabel(source: string | null | undefined) {
-  if (source === "project_override") return "Project override";
-  if (source === "company_default") return "Company default";
-  if (source === "agent_override") return "Agent override";
-  if (source === "binding_key") return "Direct binding key";
-  return "Unconfigured";
+function companyPath(companyPrefix: string | null | undefined, path: string) {
+  if (!companyPrefix) return path;
+  return `/${companyPrefix}${path}`;
 }
 
 export function ProjectMemorySettings({
   companyId,
   projectId,
+  companyPrefix,
 }: {
   companyId: string;
   projectId: string;
+  companyPrefix?: string | null;
 }) {
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
-  const [selectedBindingId, setSelectedBindingId] = useState("__inherit__");
 
   const bindingsQuery = useQuery({
     queryKey: queryKeys.memory.bindings(companyId),
@@ -35,31 +32,18 @@ export function ProjectMemorySettings({
     queryFn: () => memoryApi.getProjectBinding(projectId),
   });
 
-  useEffect(() => {
-    const resolved = resolvedBindingQuery.data;
-    if (!resolved) return;
-    if (resolved.targetType === "project" && resolved.binding) {
-      setSelectedBindingId(resolved.binding.id);
-      return;
-    }
-    setSelectedBindingId("__inherit__");
-  }, [resolvedBindingQuery.data]);
-
-  const currentSelection = useMemo(() => {
-    const resolved = resolvedBindingQuery.data;
-    if (!resolved) return "__inherit__";
-    if (resolved.targetType === "project" && resolved.binding) return resolved.binding.id;
-    return "__inherit__";
-  }, [resolvedBindingQuery.data]);
+  const targetsQuery = useQuery({
+    queryKey: queryKeys.memory.targets(companyId),
+    queryFn: () => memoryApi.listTargets(companyId),
+  });
 
   const saveOverride = useMutation({
-    mutationFn: () =>
-      memoryApi.setProjectBinding(projectId, selectedBindingId === "__inherit__" ? null : selectedBindingId),
-    onSuccess: async () => {
+    mutationFn: (bindingId: string | null) => memoryApi.setProjectBinding(projectId, bindingId),
+    onSuccess: async (_target, bindingId) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.memory.all });
       pushToast({
         title: "Project memory binding updated",
-        body: selectedBindingId === "__inherit__"
+        body: bindingId === null
           ? "This project now inherits the company default binding."
           : "The project override is active for subsequent memory operations.",
         tone: "success",
@@ -74,71 +58,35 @@ export function ProjectMemorySettings({
     },
   });
 
-  const loading = bindingsQuery.isLoading || resolvedBindingQuery.isLoading;
-  const error = bindingsQuery.error ?? resolvedBindingQuery.error ?? null;
-  const resolvedBinding = resolvedBindingQuery.data?.binding ?? null;
+  const loading = bindingsQuery.isLoading || resolvedBindingQuery.isLoading || targetsQuery.isLoading;
+  const error = bindingsQuery.error ?? resolvedBindingQuery.error ?? targetsQuery.error ?? null;
+  const agentOverrideCount = (targetsQuery.data ?? []).filter((target) => target.targetType === "agent").length;
+  const companySettingsHref = companyPath(companyPrefix, "/company/settings#memory");
+  const projectMemoriesHref = companyPath(companyPrefix, `/memories?projectId=${encodeURIComponent(projectId)}`);
 
   return (
     <div className="max-w-3xl space-y-4">
-      <div className="rounded-md border border-border px-4 py-4">
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-md bg-accent text-muted-foreground">
-            <Database className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1 space-y-4">
-            <div className="space-y-1">
-              <h2 className="text-sm font-medium">Project memory</h2>
-              {loading ? (
-                <p className="text-sm text-muted-foreground">Loading memory state...</p>
-              ) : error ? (
-                <p className="text-sm text-destructive">{error.message}</p>
-              ) : (
-                <>
-                  <p className="text-sm">
-                    {resolvedBinding ? `${resolvedBinding.name ?? resolvedBinding.key} (${resolvedBinding.providerKey})` : "No memory binding resolves for this project yet."}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Source: {sourceLabel(resolvedBindingQuery.data?.source ?? null)}
-                  </p>
-                </>
-              )}
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Project override</label>
-                <select
-                  value={selectedBindingId}
-                  onChange={(event) => setSelectedBindingId(event.target.value)}
-                  disabled={loading || Boolean(error)}
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none"
-                >
-                  <option value="__inherit__">Inherit company default</option>
-                  {(bindingsQuery.data ?? []).map((binding) => (
-                    <option key={binding.id} value={binding.id}>
-                      {binding.name ?? binding.key}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <Button
-                size="sm"
-                disabled={loading || Boolean(error) || saveOverride.isPending || selectedBindingId === currentSelection}
-                onClick={() => saveOverride.mutate()}
-              >
-                {saveOverride.isPending ? "Saving..." : "Save override"}
-              </Button>
-            </div>
-
-            {saveOverride.isError ? (
-              <p className="text-xs text-destructive">
-                {saveOverride.error instanceof Error ? saveOverride.error.message : "Failed to update project memory binding"}
-              </p>
-            ) : null}
-          </div>
-        </div>
-      </div>
+      <MemoryOverrideCard
+        targetType="project"
+        resolvedBinding={resolvedBindingQuery.data}
+        bindings={bindingsQuery.data ?? []}
+        source={resolvedBindingQuery.data?.source}
+        loading={loading}
+        error={error}
+        saving={saveOverride.isPending}
+        saveError={saveOverride.error instanceof Error ? saveOverride.error : null}
+        agentOverrideCount={agentOverrideCount}
+        companySettingsHref={companySettingsHref}
+        onRetry={() => {
+          void bindingsQuery.refetch();
+          void resolvedBindingQuery.refetch();
+          void targetsQuery.refetch();
+        }}
+        onSave={(bindingId) => saveOverride.mutate(bindingId)}
+      />
+      <Button asChild variant="link" className="h-auto px-0">
+        <a href={projectMemoriesHref}>See memories for this project</a>
+      </Button>
     </div>
   );
 }
-

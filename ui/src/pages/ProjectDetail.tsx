@@ -700,7 +700,11 @@ export function ProjectDetail() {
       )}
 
       {activeTab === "memory" && resolvedCompanyId ? (
-        <ProjectMemorySettings companyId={resolvedCompanyId} projectId={project.id} />
+        <ProjectMemorySettings
+          companyId={resolvedCompanyId}
+          projectId={project.id}
+          companyPrefix={companyPrefix ?? null}
+        />
       ) : null}
 
       {activeTab === "budget" && resolvedCompanyId ? (

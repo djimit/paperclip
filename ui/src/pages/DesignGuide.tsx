@@ -123,6 +123,7 @@ import { FilterBar, type FilterValue } from "@/components/FilterBar";
 import { InlineEditor } from "@/components/InlineEditor";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Identity } from "@/components/Identity";
+import { InheritanceChain } from "@/components/InheritanceChain";
 
 /* ------------------------------------------------------------------ */
 /*  Section wrapper                                                    */
@@ -465,6 +466,21 @@ export function DesignGuide() {
               </span>
             ))}
           </div>
+        </SubSection>
+      </Section>
+
+      {/* ============================================================ */}
+      {/*  INHERITANCE CHAIN                                           */}
+      {/* ============================================================ */}
+      <Section title="Inheritance Chain">
+        <SubSection title="Resolved scope">
+          <InheritanceChain
+            items={[
+              { label: "Company default", detail: "local_basic", href: "/company/settings#memory" },
+              { label: "Project override", detail: "Issue/project scope" },
+              { label: "Agent override", detail: "This agent", active: true },
+            ]}
+          />
         </SubSection>
       </Section>
 
