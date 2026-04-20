@@ -10,7 +10,10 @@ import { JsonSchemaForm, type JsonSchemaNode, getDefaultValues } from "@/compone
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { MarkdownEditor, type MentionOption } from "@/components/MarkdownEditor";
 import { ReportsToPicker } from "@/components/ReportsToPicker";
-import { RoutineRunVariablesDialog } from "@/components/RoutineRunVariablesDialog";
+import {
+  RoutineRunVariablesDialog,
+  type RoutineRunDialogSubmitData,
+} from "@/components/RoutineRunVariablesDialog";
 import { RoutineVariablesEditor, RoutineVariablesHint } from "@/components/RoutineVariablesEditor";
 import { ScheduleEditor, describeSchedule } from "@/components/ScheduleEditor";
 import { Badge } from "@/components/ui/badge";
@@ -642,7 +645,7 @@ function FormsEditorsShowcase() {
 
 function RoutineRunDialogStory() {
   const [open, setOpen] = useState(true);
-  const [submitted, setSubmitted] = useState<Record<string, unknown> | null>(null);
+  const [submitted, setSubmitted] = useState<RoutineRunDialogSubmitData | null>(null);
 
   return (
     <StoryShell>
