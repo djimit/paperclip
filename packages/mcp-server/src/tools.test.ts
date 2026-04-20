@@ -182,6 +182,36 @@ describe("paperclip MCP tools", () => {
     expect(response.content[0]?.text).toContain("http://127.0.0.1:5173");
   });
 
+  it("creates suggest_tasks interactions with the expected issue-scoped payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse({ id: "interaction-1", kind: "suggest_tasks" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = getTool("paperclipSuggestTasks");
+    await tool.execute({
+      issueId: "PAP-1135",
+      idempotencyKey: "run-1:suggest",
+      payload: {
+        version: 1,
+        tasks: [{ clientKey: "task-1", title: "One" }],
+      },
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("http://localhost:3100/api/issues/PAP-1135/interactions");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      kind: "suggest_tasks",
+      continuationPolicy: "wake_assignee",
+      idempotencyKey: "run-1:suggest",
+      payload: {
+        version: 1,
+        tasks: [{ clientKey: "task-1", title: "One" }],
+      },
+    });
+  });
+
   it("creates approvals with the expected company-scoped payload", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockJsonResponse({ id: "approval-1" }),

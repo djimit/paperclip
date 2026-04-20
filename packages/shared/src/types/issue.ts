@@ -348,6 +348,7 @@ export interface IssueThreadInteractionBase extends IssueThreadInteractionActorF
   companyId: string;
   issueId: string;
   kind: IssueThreadInteractionKind;
+  idempotencyKey?: string | null;
   sourceCommentId?: string | null;
   sourceRunId?: string | null;
   title?: string | null;

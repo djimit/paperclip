@@ -38,7 +38,11 @@ import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import type { PaperclipPluginManifestV1 } from "@paperclipai/shared";
+import type {
+  AskUserQuestionsInteraction,
+  PaperclipPluginManifestV1,
+  SuggestTasksInteraction,
+} from "@paperclipai/shared";
 
 import type { PaperclipPlugin } from "./define-plugin.js";
 import type {
@@ -690,6 +694,49 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
 
         async createComment(issueId: string, body: string, companyId: string, options?: { authorAgentId?: string }) {
           return callHost("issues.createComment", { issueId, body, companyId, authorAgentId: options?.authorAgentId });
+        },
+
+        async createInteraction(issueId: string, interaction, companyId: string, options?: { authorAgentId?: string }) {
+          return callHost("issues.createInteraction", {
+            issueId,
+            companyId,
+            interaction,
+            authorAgentId: options?.authorAgentId,
+          });
+        },
+
+        async suggestTasks(
+          issueId: string,
+          interaction,
+          companyId: string,
+          options?: { authorAgentId?: string },
+        ): Promise<SuggestTasksInteraction> {
+          return callHost("issues.createInteraction", {
+            issueId,
+            companyId,
+            interaction: {
+              ...interaction,
+              kind: "suggest_tasks",
+            },
+            authorAgentId: options?.authorAgentId,
+          }) as Promise<SuggestTasksInteraction>;
+        },
+
+        async askUserQuestions(
+          issueId: string,
+          interaction,
+          companyId: string,
+          options?: { authorAgentId?: string },
+        ): Promise<AskUserQuestionsInteraction> {
+          return callHost("issues.createInteraction", {
+            issueId,
+            companyId,
+            interaction: {
+              ...interaction,
+              kind: "ask_user_questions",
+            },
+            authorAgentId: options?.authorAgentId,
+          }) as Promise<AskUserQuestionsInteraction>;
         },
 
         documents: {

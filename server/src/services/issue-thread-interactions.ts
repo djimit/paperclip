@@ -31,17 +31,49 @@ type InteractionActor = {
   userId?: string | null;
 };
 
+const ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT =
+  "issue_thread_interactions_company_issue_idempotency_uq";
+
 type CreatedIssueWakeTarget = {
   id: string;
   assigneeAgentId: string | null;
   status: string;
 };
 
+type IssueThreadInteractionRow = typeof issueThreadInteractions.$inferSelect;
+
+function isIssueThreadInteractionIdempotencyConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const err = error as { code?: string; constraint?: string; constraint_name?: string };
+  const constraint = err.constraint ?? err.constraint_name;
+  return err.code === "23505" && constraint === ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT;
+}
+
+function isEquivalentCreateRequest(
+  row: IssueThreadInteractionRow,
+  input: CreateIssueThreadInteraction,
+  actor: InteractionActor,
+) {
+  return (
+    row.kind === input.kind
+    && row.continuationPolicy === input.continuationPolicy
+    && (row.idempotencyKey ?? null) === (input.idempotencyKey ?? null)
+    && (row.sourceCommentId ?? null) === (input.sourceCommentId ?? null)
+    && (row.sourceRunId ?? null) === (input.sourceRunId ?? null)
+    && (row.title ?? null) === (input.title ?? null)
+    && (row.summary ?? null) === (input.summary ?? null)
+    && (row.createdByAgentId ?? null) === (actor.agentId ?? null)
+    && (row.createdByUserId ?? null) === (actor.userId ?? null)
+    && JSON.stringify(row.payload) === JSON.stringify(input.payload)
+  );
+}
+
 function hydrateInteraction(
-  row: typeof issueThreadInteractions.$inferSelect,
+  row: IssueThreadInteractionRow,
 ): IssueThreadInteraction {
   const base = {
     ...row,
+    idempotencyKey: row.idempotencyKey ?? null,
     status: row.status as IssueThreadInteraction["status"],
     continuationPolicy: row.continuationPolicy as IssueThreadInteraction["continuationPolicy"],
   };
@@ -152,6 +184,22 @@ function normalizeQuestionAnswers(args: {
 }
 
 export function issueThreadInteractionService(db: Db) {
+  async function getIdempotentInteraction(args: {
+    issueId: string;
+    companyId: string;
+    idempotencyKey: string;
+  }) {
+    return db
+      .select()
+      .from(issueThreadInteractions)
+      .where(and(
+        eq(issueThreadInteractions.companyId, args.companyId),
+        eq(issueThreadInteractions.issueId, args.issueId),
+        eq(issueThreadInteractions.idempotencyKey, args.idempotencyKey),
+      ))
+      .then((rows) => rows[0] ?? null);
+  }
+
   return {
     listForIssue: async (issueId: string) => {
       const rows = await db
@@ -180,6 +228,22 @@ export function issueThreadInteractionService(db: Db) {
     ) => {
       const data = createIssueThreadInteractionSchema.parse(input);
 
+      if (data.idempotencyKey) {
+        const existing = await getIdempotentInteraction({
+          issueId: issue.id,
+          companyId: issue.companyId,
+          idempotencyKey: data.idempotencyKey,
+        });
+        if (existing) {
+          if (!isEquivalentCreateRequest(existing, data, actor)) {
+            throw conflict("Interaction idempotency key already exists for a different request", {
+              idempotencyKey: data.idempotencyKey,
+            });
+          }
+          return hydrateInteraction(existing);
+        }
+      }
+
       if (data.sourceCommentId) {
         const sourceComment = await db
           .select({
@@ -207,23 +271,43 @@ export function issueThreadInteractionService(db: Db) {
         }
       }
 
-      const [created] = await db
-        .insert(issueThreadInteractions)
-        .values({
-          companyId: issue.companyId,
+      let created: IssueThreadInteractionRow;
+      try {
+        [created] = await db
+          .insert(issueThreadInteractions)
+          .values({
+            companyId: issue.companyId,
+            issueId: issue.id,
+            kind: data.kind,
+            status: "pending",
+            continuationPolicy: data.continuationPolicy,
+            idempotencyKey: data.idempotencyKey ?? null,
+            sourceCommentId: data.sourceCommentId ?? null,
+            sourceRunId: data.sourceRunId ?? null,
+            title: data.title ?? null,
+            summary: data.summary ?? null,
+            createdByAgentId: actor.agentId ?? null,
+            createdByUserId: actor.userId ?? null,
+            payload: data.payload,
+          })
+          .returning();
+      } catch (error) {
+        if (!data.idempotencyKey || !isIssueThreadInteractionIdempotencyConflict(error)) {
+          throw error;
+        }
+        const existing = await getIdempotentInteraction({
           issueId: issue.id,
-          kind: data.kind,
-          status: "pending",
-          continuationPolicy: data.continuationPolicy,
-          sourceCommentId: data.sourceCommentId ?? null,
-          sourceRunId: data.sourceRunId ?? null,
-          title: data.title ?? null,
-          summary: data.summary ?? null,
-          createdByAgentId: actor.agentId ?? null,
-          createdByUserId: actor.userId ?? null,
-          payload: data.payload,
-        })
-        .returning();
+          companyId: issue.companyId,
+          idempotencyKey: data.idempotencyKey,
+        });
+        if (!existing) throw error;
+        if (!isEquivalentCreateRequest(existing, data, actor)) {
+          throw conflict("Interaction idempotency key already exists for a different request", {
+            idempotencyKey: data.idempotencyKey,
+          });
+        }
+        return hydrateInteraction(existing);
+      }
 
       await touchIssue(db, issue.id);
       return hydrateInteraction(created);

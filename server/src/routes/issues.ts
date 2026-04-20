@@ -193,7 +193,14 @@ function shouldImplicitlyMoveCommentedIssueToTodoForAgent(input: {
 function queueResolvedInteractionContinuationWakeup(input: {
   heartbeat: ReturnType<typeof heartbeatService>;
   issue: { id: string; assigneeAgentId: string | null; status: string };
-  interaction: { id: string; kind: string; status: string; continuationPolicy: string };
+  interaction: {
+    id: string;
+    kind: string;
+    status: string;
+    continuationPolicy: string;
+    sourceCommentId?: string | null;
+    sourceRunId?: string | null;
+  };
   actor: { actorType: "user" | "agent"; actorId: string };
   source: string;
 }) {
@@ -209,6 +216,8 @@ function queueResolvedInteractionContinuationWakeup(input: {
       interactionId: input.interaction.id,
       interactionKind: input.interaction.kind,
       interactionStatus: input.interaction.status,
+      sourceCommentId: input.interaction.sourceCommentId ?? null,
+      sourceRunId: input.interaction.sourceRunId ?? null,
       mutation: "interaction",
     },
     requestedByActorType: input.actor.actorType,
@@ -219,6 +228,8 @@ function queueResolvedInteractionContinuationWakeup(input: {
       interactionId: input.interaction.id,
       interactionKind: input.interaction.kind,
       interactionStatus: input.interaction.status,
+      sourceCommentId: input.interaction.sourceCommentId ?? null,
+      sourceRunId: input.interaction.sourceRunId ?? null,
       wakeReason: "issue_commented",
       source: input.source,
     },
@@ -2505,10 +2516,20 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    assertBoard(req);
+    if (req.actor.type === "agent") {
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    } else {
+      assertBoard(req);
+    }
 
     const actor = getActorInfo(req);
-    const interaction = await issueThreadInteractionService(db).create(issue, req.body, {
+    const agentSourceRunId = req.actor.type === "agent" ? requireAgentRunId(req, res) : null;
+    if (req.actor.type === "agent" && !agentSourceRunId) return;
+
+    const interaction = await issueThreadInteractionService(db).create(issue, {
+      ...req.body,
+      sourceRunId: req.actor.type === "agent" ? agentSourceRunId : req.body.sourceRunId ?? null,
+    }, {
       agentId: actor.agentId,
       userId: actor.actorType === "user" ? actor.actorId : null,
     });

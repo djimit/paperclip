@@ -132,6 +132,9 @@ describe("issue thread interaction routes", () => {
       kind: "suggest_tasks",
       status: "pending",
       continuationPolicy: "wake_assignee",
+      idempotencyKey: null,
+      sourceCommentId: null,
+      sourceRunId: "run-1",
       payload: {
         version: 1,
         tasks: [{ clientKey: "task-1", title: "One" }],
@@ -148,6 +151,9 @@ describe("issue thread interaction routes", () => {
         kind: "suggest_tasks",
         status: "accepted",
         continuationPolicy: "wake_assignee",
+        idempotencyKey: null,
+        sourceCommentId: "comment-1",
+        sourceRunId: "run-1",
         payload: {
           version: 1,
           tasks: [{ clientKey: "task-1", title: "One" }],
@@ -175,6 +181,9 @@ describe("issue thread interaction routes", () => {
       kind: "suggest_tasks",
       status: "rejected",
       continuationPolicy: "wake_assignee",
+      idempotencyKey: null,
+      sourceCommentId: "comment-1",
+      sourceRunId: "run-1",
       payload: {
         version: 1,
         tasks: [{ clientKey: "task-1", title: "One" }],
@@ -194,6 +203,9 @@ describe("issue thread interaction routes", () => {
       kind: "ask_user_questions",
       status: "answered",
       continuationPolicy: "wake_assignee",
+      idempotencyKey: null,
+      sourceCommentId: "comment-2",
+      sourceRunId: "run-2",
       payload: {
         version: 1,
         questions: [{
@@ -221,7 +233,9 @@ describe("issue thread interaction routes", () => {
 
     const listRes = await request(app).get("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions");
     expect(listRes.status).toBe(200);
-    expect(mockInteractionService.listForIssue).toHaveBeenCalledWith("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    expect(listRes.body).toEqual([
+      { id: "interaction-1", kind: "suggest_tasks", status: "pending" },
+    ]);
 
     const createRes = await request(app)
       .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions")
@@ -279,6 +293,8 @@ describe("issue thread interaction routes", () => {
           issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           interactionId: "interaction-1",
           interactionStatus: "accepted",
+          sourceCommentId: "comment-1",
+          sourceRunId: "run-1",
         }),
       }),
     );
@@ -303,6 +319,8 @@ describe("issue thread interaction routes", () => {
           interactionId: "interaction-2",
           interactionKind: "ask_user_questions",
           interactionStatus: "answered",
+          sourceCommentId: "comment-2",
+          sourceRunId: "run-2",
         }),
       }),
     );
@@ -314,7 +332,7 @@ describe("issue thread interaction routes", () => {
     );
   });
 
-  it("rejects mutation requests from non-board actors", async () => {
+  it("allows agent-authored interaction creation and stamps the active run id", async () => {
     const app = await createApp({
       type: "agent",
       agentId: CREATED_AGENT_ID,
@@ -326,13 +344,25 @@ describe("issue thread interaction routes", () => {
       .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions")
       .send({
         kind: "suggest_tasks",
+        idempotencyKey: "interaction:task-1",
         payload: {
           version: 1,
           tasks: [{ clientKey: "task-1", title: "One" }],
         },
       });
 
-    expect(res.status).toBe(403);
-    expect(mockInteractionService.create).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(mockInteractionService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+      expect.objectContaining({
+        kind: "suggest_tasks",
+        idempotencyKey: "interaction:task-1",
+        sourceRunId: "run-1",
+      }),
+      {
+        agentId: CREATED_AGENT_ID,
+        userId: null,
+      },
+    );
   });
 });

@@ -310,6 +310,7 @@ export const askUserQuestionsResultSchema = z.object({
 export const createIssueThreadInteractionSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("suggest_tasks"),
+    idempotencyKey: z.string().trim().max(255).nullable().optional(),
     sourceCommentId: z.string().uuid().nullable().optional(),
     sourceRunId: z.string().uuid().nullable().optional(),
     title: z.string().trim().max(240).nullable().optional(),
@@ -319,6 +320,7 @@ export const createIssueThreadInteractionSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("ask_user_questions"),
+    idempotencyKey: z.string().trim().max(255).nullable().optional(),
     sourceCommentId: z.string().uuid().nullable().optional(),
     sourceRunId: z.string().uuid().nullable().optional(),
     title: z.string().trim().max(240).nullable().optional(),

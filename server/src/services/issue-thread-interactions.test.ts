@@ -78,6 +78,65 @@ describe("issueThreadInteractionService", () => {
     vi.clearAllMocks();
   });
 
+  it("create reuses an existing interaction for the same idempotency key", async () => {
+    const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+
+    const existingRow = {
+      id: "interaction-1",
+      companyId: "company-1",
+      issueId: "11111111-1111-4111-8111-111111111111",
+      kind: "suggest_tasks",
+      status: "pending",
+      continuationPolicy: "wake_assignee",
+      idempotencyKey: "run-1:suggest",
+      sourceCommentId: null,
+      sourceRunId: "22222222-2222-4222-8222-222222222222",
+      title: "Break the work down",
+      summary: "Created from the current agent run.",
+      createdByAgentId: "agent-1",
+      createdByUserId: null,
+      resolvedByAgentId: null,
+      resolvedByUserId: null,
+      payload: {
+        version: 1,
+        tasks: [{ clientKey: "task-1", title: "One" }],
+      },
+      result: null,
+      resolvedAt: null,
+      createdAt: new Date("2026-04-20T10:00:00.000Z"),
+      updatedAt: new Date("2026-04-20T10:00:00.000Z"),
+    };
+
+    const db: any = {
+      select: vi.fn(() => createSelectChain([existingRow])),
+      insert: vi.fn(),
+      update: vi.fn(),
+    };
+
+    const svc = issueThreadInteractionService(db as never);
+    const created = await svc.create({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+    }, {
+      kind: "suggest_tasks",
+      idempotencyKey: "run-1:suggest",
+      sourceRunId: "22222222-2222-4222-8222-222222222222",
+      title: "Break the work down",
+      summary: "Created from the current agent run.",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        tasks: [{ clientKey: "task-1", title: "One" }],
+      },
+    }, {
+      agentId: "agent-1",
+    });
+
+    expect(created.id).toBe("interaction-1");
+    expect(created.idempotencyKey).toBe("run-1:suggest");
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
   it("answerQuestions normalizes duplicate option ids and persists answered results", async () => {
     const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
 

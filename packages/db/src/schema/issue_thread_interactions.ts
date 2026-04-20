@@ -2,7 +2,8 @@ import type {
   IssueThreadInteractionPayload,
   IssueThreadInteractionResult,
 } from "@paperclipai/shared";
-import { pgTable, uuid, text, timestamp, jsonb, index } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { companies } from "./companies.js";
 import { heartbeatRuns } from "./heartbeat_runs.js";
@@ -18,6 +19,7 @@ export const issueThreadInteractions = pgTable(
     kind: text("kind").notNull(),
     status: text("status").notNull().default("pending"),
     continuationPolicy: text("continuation_policy").notNull().default("wake_assignee"),
+    idempotencyKey: text("idempotency_key"),
     sourceCommentId: uuid("source_comment_id").references(() => issueComments.id, { onDelete: "set null" }),
     sourceRunId: uuid("source_run_id").references(() => heartbeatRuns.id, { onDelete: "set null" }),
     title: text("title"),
@@ -44,6 +46,9 @@ export const issueThreadInteractions = pgTable(
       table.issueId,
       table.status,
     ),
+    companyIssueIdempotencyUq: uniqueIndex("issue_thread_interactions_company_issue_idempotency_uq")
+      .on(table.companyId, table.issueId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} IS NOT NULL`),
     sourceCommentIdx: index("issue_thread_interactions_source_comment_idx").on(table.sourceCommentId),
   }),
 );
