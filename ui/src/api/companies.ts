@@ -47,7 +47,7 @@ export const companiesApi = {
     companyId: string,
     data: CompanyPortabilityExportRequest,
   ) =>
-    api.post<CompanyPortabilityExportResult>(`/companies/${companyId}/export`, data),
+    api.post<CompanyPortabilityExportResult>(`/companies/${companyId}/exports`, data),
   exportPreview: (
     companyId: string,
     data: CompanyPortabilityExportRequest,
