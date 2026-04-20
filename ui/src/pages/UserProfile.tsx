@@ -216,8 +216,8 @@ export function UserProfile() {
   const agentUsageRows = useMemo<UsageRow[]>(
     () =>
       (data?.topAgents ?? []).map((row) => ({
-        key: row.agentId,
-        label: row.agentName ?? row.agentId.slice(0, 8),
+        key: row.agentId ?? "unknown",
+        label: row.agentName ?? (row.agentId ? row.agentId.slice(0, 8) : "unknown"),
         sublabel: "Issue-linked usage",
         costCents: row.costCents,
         inputTokens: row.inputTokens,
