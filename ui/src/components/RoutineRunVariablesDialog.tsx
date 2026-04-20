@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Agent, IssueExecutionWorkspaceSettings, Project, RoutineVariable } from "@paperclipai/shared";
+import {
+  WORKSPACE_BRANCH_ROUTINE_VARIABLE,
+  type Agent,
+  type IssueExecutionWorkspaceSettings,
+  type Project,
+  type RoutineVariable,
+} from "@paperclipai/shared";
 import { useQuery } from "@tanstack/react-query";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
@@ -27,8 +33,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-
-const WORKSPACE_BRANCH_ROUTINE_VARIABLE = "workspaceBranch";
 
 function buildInitialValues(variables: RoutineVariable[]) {
   return Object.fromEntries(variables.map((variable) => [variable.name, variable.defaultValue ?? ""]));

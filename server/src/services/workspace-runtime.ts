@@ -2272,6 +2272,8 @@ export function buildWorkspaceRuntimeDesiredStatePatch(input: {
   const nextState: WorkspaceRuntimeDesiredState = input.action === "stop" ? "stopped" : "running";
   const applyActionState = (index: number) => {
     const key = String(index);
+    // Manual services are intentionally left under operator control even when
+    // an API action targets that individual service.
     if (nextServiceStates[key] === "manual") return;
     nextServiceStates[key] = nextState;
   };

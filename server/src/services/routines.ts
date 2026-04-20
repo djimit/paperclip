@@ -28,6 +28,7 @@ import type {
   UpdateRoutineTrigger,
 } from "@paperclipai/shared";
 import {
+  WORKSPACE_BRANCH_ROUTINE_VARIABLE,
   getBuiltinRoutineVariableValues,
   extractRoutineVariableNames,
   interpolateRoutineTemplate,
@@ -49,7 +50,6 @@ const OPEN_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blo
 const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running"];
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 const MAX_CATCH_UP_RUNS = 25;
-const WORKSPACE_BRANCH_ROUTINE_VARIABLE = "workspaceBranch";
 const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0,
   Mon: 1,
