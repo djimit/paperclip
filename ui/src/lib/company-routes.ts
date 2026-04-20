@@ -6,8 +6,10 @@ const BOARD_ROUTE_ROOTS = new Set([
   "org",
   "agents",
   "projects",
+  "workspaces",
   "execution-workspaces",
   "issues",
+  "memories",
   "routines",
   "goals",
   "approvals",
@@ -15,6 +17,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "usage",
   "activity",
   "inbox",
+  "u",
   "design-guide",
 ]);
 

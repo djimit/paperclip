@@ -1,6 +1,6 @@
 {
-  "id": "7489b6fa-6a53-4c30-a852-73761e7a3da9",
-  "prevId": "0cb92f3b-c1c4-454a-9ccd-e8d43aebbeda",
+  "id": "11957e00-fbcf-4021-9d6e-3a97126ff0f1",
+  "prevId": "58b07646-6b04-4945-b6d2-e3409d238235",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4654,6 +4654,125 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.company_user_sidebar_preferences": {
+      "name": "company_user_sidebar_preferences",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_order": {
+          "name": "project_order",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "company_user_sidebar_preferences_company_idx": {
+          "name": "company_user_sidebar_preferences_company_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "company_user_sidebar_preferences_user_idx": {
+          "name": "company_user_sidebar_preferences_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "company_user_sidebar_preferences_company_user_uq": {
+          "name": "company_user_sidebar_preferences_company_user_uq",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "company_user_sidebar_preferences_company_id_companies_id_fk": {
+          "name": "company_user_sidebar_preferences_company_id_companies_id_fk",
+          "tableFrom": "company_user_sidebar_preferences",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.cost_events": {
       "name": "cost_events",
       "schema": "",
@@ -7257,6 +7376,37 @@
           "primaryKey": false,
           "notNull": false
         },
+        "liveness_state": {
+          "name": "liveness_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "liveness_reason": {
+          "name": "liveness_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "continuation_attempt": {
+          "name": "continuation_attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_useful_action_at": {
+          "name": "last_useful_action_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "next_action": {
+          "name": "next_action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "context_snapshot": {
           "name": "context_snapshot",
           "type": "jsonb",
@@ -7296,6 +7446,33 @@
             },
             {
               "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "heartbeat_runs_company_liveness_idx": {
+          "name": "heartbeat_runs_company_liveness_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "liveness_state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -10548,6 +10725,50 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "join_requests_pending_human_user_uq": {
+          "name": "join_requests_pending_human_user_uq",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "requesting_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"join_requests\".\"request_type\" = 'human' AND \"join_requests\".\"status\" = 'pending_approval' AND \"join_requests\".\"requesting_user_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "join_requests_pending_human_email_uq": {
+          "name": "join_requests_pending_human_email_uq",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(\"request_email_snapshot\")",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"join_requests\".\"request_type\" = 'human' AND \"join_requests\".\"status\" = 'pending_approval' AND \"join_requests\".\"request_email_snapshot\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -15174,6 +15395,69 @@
           "onUpdate": "no action"
         }
       },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.user_sidebar_preferences": {
+      "name": "user_sidebar_preferences",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "company_order": {
+          "name": "company_order",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_sidebar_preferences_user_uq": {
+          "name": "user_sidebar_preferences_user_uq",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

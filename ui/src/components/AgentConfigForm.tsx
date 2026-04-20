@@ -6,6 +6,7 @@ import type {
   CompanySecret,
   EnvBinding,
 } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS } from "@paperclipai/shared";
 import type { AdapterModel } from "../api/agents";
 import { agentsApi } from "../api/agents";
 import { secretsApi } from "../api/secrets";
@@ -50,6 +51,7 @@ import { listAdapterOptions, listVisibleAdapterTypes } from "../adapters/metadat
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { buildAgentUpdatePatch, type AgentConfigOverlay } from "../lib/agent-config-patch";
+import { useAdapterCapabilities } from "../adapters/use-adapter-capabilities";
 
 /* ---- Create mode values ---- */
 
@@ -269,8 +271,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const adapterType = isCreate
     ? props.values.adapterType
     : overlay.adapterType ?? props.agent.adapterType;
-  const NONLOCAL_TYPES = new Set(["process", "http", "openclaw_gateway"]);
-  const isLocal = !NONLOCAL_TYPES.has(adapterType);
+  const getCapabilities = useAdapterCapabilities();
+  const adapterCaps = getCapabilities(adapterType);
+  const isLocal = adapterCaps.supportsInstructionsBundle || adapterCaps.supportsSkills || adapterCaps.supportsLocalAgentJwt;
   
   const showLegacyWorkingDirectoryField =
     isLocal && shouldShowLegacyWorkingDirectoryField({ isCreate, adapterConfig: config });
@@ -919,7 +922,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                   value={eff(
                     "heartbeat",
                     "maxConcurrentRuns",
-                    Number(heartbeat.maxConcurrentRuns ?? 1),
+                    Number(heartbeat.maxConcurrentRuns ?? AGENT_DEFAULT_MAX_CONCURRENT_RUNS),
                   )}
                   onCommit={(v) => mark("heartbeat", "maxConcurrentRuns", v)}
                   immediate
