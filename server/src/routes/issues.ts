@@ -2678,10 +2678,11 @@ export function issueRoutes(
       assertBoard(req);
 
       const actor = getActorInfo(req);
-      const { interaction, createdIssues } = await issueThreadInteractionService(db).acceptInteraction(issue, interactionId, req.body, {
+      const { interaction, createdIssues, continuationIssue } = await issueThreadInteractionService(db).acceptInteraction(issue, interactionId, req.body, {
         agentId: actor.agentId,
         userId: actor.actorType === "user" ? actor.actorId : null,
       });
+      const continuationWakeIssue = continuationIssue ?? issue;
 
       await logActivity(db, {
         companyId: issue.companyId,
@@ -2709,6 +2710,32 @@ export function issueRoutes(
         },
       });
 
+      if (continuationIssue) {
+        await logActivity(db, {
+          companyId: issue.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.updated",
+          entityType: "issue",
+          entityId: issue.id,
+          details: {
+            identifier: issue.identifier,
+            status: continuationIssue.status,
+            assigneeAgentId: continuationIssue.assigneeAgentId ?? null,
+            assigneeUserId: continuationIssue.assigneeUserId ?? null,
+            source: "request_confirmation_accept",
+            interactionId: interaction.id,
+            _previous: {
+              status: issue.status,
+              assigneeAgentId: issue.assigneeAgentId ?? null,
+              assigneeUserId: issue.assigneeUserId ?? null,
+            },
+          },
+        });
+      }
+
       for (const createdIssue of createdIssues) {
         void queueIssueAssignmentWakeup({
           heartbeat,
@@ -2723,7 +2750,7 @@ export function issueRoutes(
 
       queueResolvedInteractionContinuationWakeup({
         heartbeat,
-        issue,
+        issue: continuationWakeIssue,
         interaction,
         actor,
         source: "issue.interaction.accept",
