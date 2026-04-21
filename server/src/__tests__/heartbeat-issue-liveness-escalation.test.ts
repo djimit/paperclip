@@ -1,15 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
   agents,
-  agentRuntimeState,
   agentWakeupRequests,
   companies,
-  companySkills,
   createDb,
-  heartbeatRunEvents,
   heartbeatRuns,
   issueComments,
   issueRelations,
@@ -96,17 +93,7 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await db.delete(activityLog);
-    await db.delete(agentRuntimeState);
-    await db.delete(issueComments);
-    await db.delete(issueRelations);
-    await db.delete(heartbeatRunEvents);
-    await db.delete(heartbeatRuns);
-    await db.delete(agentWakeupRequests);
-    await db.delete(issues);
-    await db.delete(companySkills);
-    await db.delete(agents);
-    await db.delete(companies);
+    await db.execute(sql.raw(`TRUNCATE TABLE "companies" CASCADE`));
   });
 
   afterAll(async () => {
