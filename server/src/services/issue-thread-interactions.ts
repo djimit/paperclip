@@ -805,6 +805,26 @@ export function issueThreadInteractionService(db: Db) {
       const createdWakeTargets: IssueWakeTarget[] = [];
 
       await db.transaction(async (tx) => {
+        const resolvedAt = new Date();
+        const [claimed] = await tx
+          .update(issueThreadInteractions)
+          .set({
+            status: "accepted",
+            resolvedByAgentId: actor.agentId ?? null,
+            resolvedByUserId: actor.userId ?? null,
+            resolvedAt,
+            updatedAt: resolvedAt,
+          })
+          .where(and(
+            eq(issueThreadInteractions.id, interactionId),
+            eq(issueThreadInteractions.status, "pending"),
+          ))
+          .returning();
+
+        if (!claimed) {
+          throw conflict("Interaction has already been resolved");
+        }
+
         for (const task of orderedTasks) {
           const parentIssueId = task.parentClientKey
             ? createdByClientKey.get(task.parentClientKey)?.issueId ?? null
@@ -850,15 +870,11 @@ export function issueThreadInteractionService(db: Db) {
         const [updated] = await tx
           .update(issueThreadInteractions)
           .set({
-            status: "accepted",
             result: {
               version: 1,
               createdTasks: [...createdByClientKey.values()],
               ...(skippedClientKeys.length > 0 ? { skippedClientKeys } : {}),
             },
-            resolvedByAgentId: actor.agentId ?? null,
-            resolvedByUserId: actor.userId ?? null,
-            resolvedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(issueThreadInteractions.id, interactionId))
@@ -889,7 +905,7 @@ export function issueThreadInteractionService(db: Db) {
       const current = await getPendingInteractionForResolution({ issue, interactionId });
       switch (current.kind) {
         case "suggest_tasks":
-          return issueThreadInteractionService(db).rejectSuggestedTasks(issue, interactionId, data, actor);
+          return issueThreadInteractionService(db).rejectSuggestedTasks(issue, interactionId, data, actor, current);
         case "request_confirmation":
           return rejectRequestConfirmation({
             issue,
@@ -907,8 +923,9 @@ export function issueThreadInteractionService(db: Db) {
       interactionId: string,
       input: RejectIssueThreadInteraction,
       actor: InteractionActor,
+      currentRow?: IssueThreadInteractionRow,
     ) => {
-      const current = await db
+      const current = currentRow ?? await db
         .select()
         .from(issueThreadInteractions)
         .where(eq(issueThreadInteractions.id, interactionId))
@@ -938,8 +955,15 @@ export function issueThreadInteractionService(db: Db) {
           resolvedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(issueThreadInteractions.id, interactionId))
+        .where(and(
+          eq(issueThreadInteractions.id, interactionId),
+          eq(issueThreadInteractions.status, "pending"),
+        ))
         .returning();
+
+      if (!updated) {
+        throw conflict("Interaction has already been resolved");
+      }
 
       await touchIssue(db, issue.id);
       return hydrateInteraction(updated);

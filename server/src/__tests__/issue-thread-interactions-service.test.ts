@@ -166,6 +166,18 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     const listed = await interactionsSvc.listForIssue(issueId);
     expect(listed).toHaveLength(1);
     expect(listed[0]?.status).toBe("accepted");
+
+    await expect(interactionsSvc.acceptSuggestedTasks({
+      id: issueId,
+      companyId,
+      goalId,
+      projectId: null,
+    }, created.id, {}, {
+      userId: "local-board",
+    })).rejects.toThrow("Interaction has already been resolved");
+
+    const childrenAfterDuplicateAccept = await issuesSvc.list(companyId, { parentId: issueId });
+    expect(childrenAfterDuplicateAccept).toHaveLength(1);
   });
 
   it("accepts a selected subset of suggested tasks and records the skipped drafts", async () => {
