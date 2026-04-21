@@ -2041,6 +2041,30 @@ export function issueRoutes(
         ),
       };
     }
+
+    if (
+      actor.actorType === "agent" &&
+      actor.runId &&
+      (issue.status === "done" || issue.status === "cancelled") &&
+      !isClosedIssueStatus(existing.status)
+    ) {
+      const terminalIssueStatus = issue.status;
+      setTimeout(() => {
+        void heartbeat
+          .completeRunForTerminalIssue({
+            runId: actor.runId!,
+            issueId: issue.id,
+            issueStatus: terminalIssueStatus,
+          })
+          .catch((err) =>
+            logger.warn(
+              { err, issueId: issue.id, runId: actor.runId },
+              "failed to complete heartbeat run after terminal issue update",
+            ),
+          );
+      }, 0);
+    }
+
     const assigneeChanged =
       issue.assigneeAgentId !== existing.assigneeAgentId || issue.assigneeUserId !== existing.assigneeUserId;
     const statusChangedFromBacklog =

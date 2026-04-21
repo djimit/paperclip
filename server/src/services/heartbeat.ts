@@ -136,6 +136,7 @@ const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
 const execFile = promisify(execFileCallback);
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const CANCELLABLE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
+const HEARTBEAT_RUN_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
 export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
   2 * 60 * 1000,
@@ -1659,6 +1660,22 @@ function isSameTaskScope(left: string | null, right: string | null) {
 
 function isTrackedLocalChildProcessAdapter(adapterType: string) {
   return SESSIONED_LOCAL_ADAPTERS.has(adapterType);
+}
+
+function isHeartbeatRunTerminalStatus(
+  status: string | null | undefined,
+): status is (typeof HEARTBEAT_RUN_TERMINAL_STATUSES)[number] {
+  return HEARTBEAT_RUN_TERMINAL_STATUSES.includes(
+    status as (typeof HEARTBEAT_RUN_TERMINAL_STATUSES)[number],
+  );
+}
+
+function terminalIssueStatusToRunOutcome(
+  issueStatus: string | null | undefined,
+): "succeeded" | "cancelled" | null {
+  if (issueStatus === "done") return "succeeded";
+  if (issueStatus === "cancelled") return "cancelled";
+  return null;
 }
 
 // A positive liveness check means some process currently owns the PID.
@@ -5536,8 +5553,8 @@ export function heartbeatService(db: Db) {
 
       let outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
       const latestRun = await getRun(run.id);
-      if (latestRun?.status === "cancelled") {
-        outcome = "cancelled";
+      if (isHeartbeatRunTerminalStatus(latestRun?.status)) {
+        outcome = latestRun.status;
       } else if (adapterResult.timedOut) {
         outcome = "timed_out";
       } else if ((adapterResult.exitCode ?? 0) === 0 && !adapterResult.errorMessage) {
@@ -6884,6 +6901,98 @@ export function heartbeatService(db: Db) {
     return wakeupIds.length;
   }
 
+  async function completeRunForTerminalIssue(input: {
+    runId: string;
+    issueId: string;
+    issueStatus: "done" | "cancelled";
+  }) {
+    const outcome = terminalIssueStatusToRunOutcome(input.issueStatus);
+    if (!outcome) return { outcome: "not_terminal_issue" as const };
+
+    const run = await getRun(input.runId);
+    if (!run) return { outcome: "missing_run" as const };
+    if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) {
+      return { outcome: "run_not_active" as const, run };
+    }
+
+    const contextIssueId = readNonEmptyString(parseObject(run.contextSnapshot).issueId);
+    if (contextIssueId !== input.issueId) {
+      return { outcome: "issue_mismatch" as const };
+    }
+
+    const issue = await db
+      .select({
+        id: issues.id,
+        companyId: issues.companyId,
+        status: issues.status,
+        executionRunId: issues.executionRunId,
+      })
+      .from(issues)
+      .where(and(eq(issues.id, input.issueId), eq(issues.companyId, run.companyId)))
+      .then((rows) => rows[0] ?? null);
+    if (!issue) return { outcome: "missing_issue" as const };
+    if (issue.status !== input.issueStatus) return { outcome: "issue_status_changed" as const };
+    if (issue.executionRunId && issue.executionRunId !== run.id) {
+      return { outcome: "issue_owned_by_other_run" as const };
+    }
+
+    const agent = await getAgent(run.agentId);
+    const reason =
+      input.issueStatus === "done"
+        ? "Run completed because its issue was marked done."
+        : "Run cancelled because its issue was cancelled.";
+
+    const running = runningProcesses.get(run.id);
+    if (running) {
+      await terminateHeartbeatRunProcess({
+        pid: running.child.pid ?? run.processPid,
+        processGroupId: running.processGroupId ?? run.processGroupId,
+        graceMs: Math.max(1, running.graceSec) * 1000,
+      });
+    } else if (run.processPid || run.processGroupId) {
+      await terminateHeartbeatRunProcess({
+        pid: run.processPid,
+        processGroupId: run.processGroupId,
+      });
+    }
+
+    const completed = await setRunStatus(run.id, outcome, {
+      finishedAt: new Date(),
+      error: outcome === "cancelled" ? reason : null,
+      errorCode: outcome === "cancelled" ? "issue_cancelled" : null,
+      ...(agent ? {
+        resultJson: mergeRunStopMetadataForAgent(agent, outcome, {
+          resultJson: {
+            ...parseObject(run.resultJson),
+            summary: reason,
+          },
+          errorCode: outcome === "cancelled" ? "issue_cancelled" : null,
+          errorMessage: outcome === "cancelled" ? reason : null,
+        }),
+      } : {}),
+    });
+
+    await setWakeupStatus(run.wakeupRequestId, outcome === "succeeded" ? "completed" : outcome, {
+      finishedAt: new Date(),
+      error: outcome === "cancelled" ? reason : null,
+    });
+
+    if (completed) {
+      await appendRunEvent(completed, await nextRunEventSeq(completed.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: outcome === "succeeded" ? "info" : "warn",
+        message: reason,
+      });
+      await releaseIssueExecutionAndPromote(completed);
+    }
+
+    runningProcesses.delete(run.id);
+    await finalizeAgentStatus(run.agentId, outcome);
+    await startNextQueuedRunForAgent(run.agentId);
+    return { outcome: "completed" as const, run: completed };
+  }
+
   async function cancelRunInternal(runId: string, reason = "Cancelled by control plane") {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
@@ -7303,6 +7412,8 @@ export function heartbeatService(db: Db) {
     },
 
     cancelRun: (runId: string) => cancelRunInternal(runId),
+
+    completeRunForTerminalIssue,
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
 
