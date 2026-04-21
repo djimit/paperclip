@@ -73,6 +73,7 @@ import {
 } from "../services/issue-execution-policy.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
+const TERMINAL_ISSUE_RUN_COMPLETION_GRACE_MS = 10_000;
 const updateIssueRouteSchema = updateIssueSchema.extend({
   interrupt: z.boolean().optional(),
 });
@@ -2042,27 +2043,21 @@ export function issueRoutes(
       };
     }
 
-    if (
-      actor.actorType === "agent" &&
-      actor.runId &&
-      (issue.status === "done" || issue.status === "cancelled") &&
-      !isClosedIssueStatus(existing.status)
-    ) {
+    if ((issue.status === "done" || issue.status === "cancelled") && !isClosedIssueStatus(existing.status)) {
       const terminalIssueStatus = issue.status;
       setTimeout(() => {
         void heartbeat
-          .completeRunForTerminalIssue({
-            runId: actor.runId!,
+          .completeRunsForTerminalIssue({
             issueId: issue.id,
             issueStatus: terminalIssueStatus,
           })
           .catch((err) =>
             logger.warn(
-              { err, issueId: issue.id, runId: actor.runId },
-              "failed to complete heartbeat run after terminal issue update",
+              { err, issueId: issue.id },
+              "failed to complete heartbeat runs after terminal issue update",
             ),
           );
-      }, 0);
+      }, TERMINAL_ISSUE_RUN_COMPLETION_GRACE_MS);
     }
 
     const assigneeChanged =

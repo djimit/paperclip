@@ -604,6 +604,52 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(agent?.status).toBe("idle");
   });
 
+  it("completes active runs discovered by terminal issue context", async () => {
+    const { agentId, runId, wakeupRequestId, issueId } = await seedRunFixture({
+      agentStatus: "running",
+    });
+    await db
+      .update(issues)
+      .set({
+        status: "done",
+        completedAt: new Date("2026-03-19T00:05:00.000Z"),
+        checkoutRunId: null,
+        executionRunId: null,
+      })
+      .where(eq(issues.id, issueId));
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.completeRunsForTerminalIssue({
+      issueId,
+      issueStatus: "done",
+    });
+
+    expect(result.completed).toBe(1);
+    expect(result.results.map((item) => item.outcome)).toEqual(["completed"]);
+
+    const run = await heartbeat.getRun(runId, { unsafeFullResultJson: true });
+    expect(run?.status).toBe("succeeded");
+    expect(run?.finishedAt).toBeTruthy();
+    expect(run?.resultJson).toMatchObject({
+      summary: "Run completed because its issue was marked done.",
+      stopReason: "completed",
+    });
+
+    const wakeup = await db
+      .select()
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.id, wakeupRequestId))
+      .then((rows) => rows[0] ?? null);
+    expect(wakeup?.status).toBe("completed");
+
+    const agent = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .then((rows) => rows[0] ?? null);
+    expect(agent?.status).toBe("idle");
+  });
+
   it("queues exactly one retry when the recorded local pid is dead", async () => {
     const { agentId, runId, issueId } = await seedRunFixture({
       processPid: 999_999_999,

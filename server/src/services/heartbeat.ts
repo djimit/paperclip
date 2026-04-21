@@ -6993,6 +6993,41 @@ export function heartbeatService(db: Db) {
     return { outcome: "completed" as const, run: completed };
   }
 
+  async function completeRunsForTerminalIssue(input: {
+    issueId: string;
+    issueStatus: "done" | "cancelled";
+  }) {
+    const outcome = terminalIssueStatusToRunOutcome(input.issueStatus);
+    if (!outcome) return { completed: 0, results: [] };
+
+    const activeRuns = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          inArray(heartbeatRuns.status, [...CANCELLABLE_HEARTBEAT_RUN_STATUSES]),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${input.issueId}`,
+        ),
+      )
+      .orderBy(asc(heartbeatRuns.createdAt));
+
+    const results: Array<Awaited<ReturnType<typeof completeRunForTerminalIssue>>> = [];
+    for (const run of activeRuns) {
+      results.push(
+        await completeRunForTerminalIssue({
+          runId: run.id,
+          issueId: input.issueId,
+          issueStatus: input.issueStatus,
+        }),
+      );
+    }
+
+    return {
+      completed: results.filter((result) => result.outcome === "completed").length,
+      results,
+    };
+  }
+
   async function cancelRunInternal(runId: string, reason = "Cancelled by control plane") {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
@@ -7414,6 +7449,8 @@ export function heartbeatService(db: Db) {
     cancelRun: (runId: string) => cancelRunInternal(runId),
 
     completeRunForTerminalIssue,
+
+    completeRunsForTerminalIssue,
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
 
