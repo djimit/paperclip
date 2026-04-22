@@ -2564,6 +2564,16 @@ export function IssueDetail() {
     () => (treeControlPreview?.issues ?? []).filter((candidate) => !candidate.skipped),
     [treeControlPreview],
   );
+  const treePreviewDisplayIssues = useMemo(
+    () => {
+      const previewIssues = treeControlPreview?.issues ?? [];
+      if (treeControlMode !== "pause") {
+        return previewIssues.filter((candidate) => !candidate.skipped);
+      }
+      return previewIssues.filter((candidate) => !candidate.skipped || candidate.skipReason === "terminal_status");
+    },
+    [treeControlMode, treeControlPreview],
+  );
   const activePauseHold = treeControlState?.activePauseHold ?? null;
   const activeRootPauseHoldsForDisplay = useMemo(
     () => activePauseHold?.isRoot === true ? activeRootPauseHolds : [],
@@ -2656,7 +2666,7 @@ export function IssueDetail() {
       : treeControlMode === "restore"
           ? `Restore ${previewAffectedIssueCount} issues`
           : "Resume subtree";
-  const treePreviewAffectedIssueRows = treePreviewAffectedIssues.map((candidate) => ({
+  const treePreviewAffectedIssueRows = treePreviewDisplayIssues.map((candidate) => ({
     candidate,
     issue: {
       ...issue,
@@ -3527,13 +3537,19 @@ export function IssueDetail() {
                           <Link
                             to={createIssueDetailPath(candidate.identifier ?? candidate.id)}
                             issuePrefetch={previewIssue}
-                            className="group flex items-start gap-2 border-b border-border py-2 pl-1 pr-2 text-sm no-underline text-inherit transition-colors last:border-b-0 hover:bg-accent/50 sm:items-center"
+                            className={cn(
+                              "group flex items-start gap-2 border-b border-border py-2 pl-1 pr-2 text-sm no-underline text-inherit transition-colors last:border-b-0 hover:bg-accent/50 sm:items-center",
+                              candidate.skipped && "opacity-60",
+                            )}
                           >
                             <StatusIcon status={candidate.status} />
                             <span className="shrink-0 font-mono text-xs text-muted-foreground">
                               {candidate.identifier ?? candidate.id.slice(0, 8)}
                             </span>
                             <span className="min-w-0 flex-1 truncate">{candidate.title}</span>
+                            {candidate.skipped && candidate.skipReason === "terminal_status" ? (
+                              <span className="shrink-0 text-xs text-muted-foreground">Complete</span>
+                            ) : null}
                           </Link>
                         </div>
                       ))}

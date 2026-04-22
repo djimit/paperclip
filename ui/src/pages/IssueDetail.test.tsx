@@ -524,9 +524,9 @@ function createPausePreview(): IssueTreeControlPreview {
     generatedAt: new Date("2026-04-21T00:00:00.000Z"),
     releasePolicy: { strategy: "manual" },
     totals: {
-      totalIssues: 2,
+      totalIssues: 3,
       affectedIssues: 2,
-      skippedIssues: 0,
+      skippedIssues: 1,
       activeRuns: 1,
       queuedRuns: 0,
       affectedAgents: 0,
@@ -563,8 +563,39 @@ function createPausePreview(): IssueTreeControlPreview {
         skipped: false,
         skipReason: null,
       },
+      {
+        id: "child-2",
+        identifier: "PAP-3",
+        title: "Completed child",
+        status: "done",
+        parentId: "issue-1",
+        depth: 1,
+        assigneeAgentId: null,
+        assigneeUserId: null,
+        activeRun: null,
+        activeHoldIds: [],
+        action: "pause",
+        skipped: true,
+        skipReason: "terminal_status",
+      },
     ],
-    skippedIssues: [],
+    skippedIssues: [
+      {
+        id: "child-2",
+        identifier: "PAP-3",
+        title: "Completed child",
+        status: "done",
+        parentId: "issue-1",
+        depth: 1,
+        assigneeAgentId: null,
+        assigneeUserId: null,
+        activeRun: null,
+        activeHoldIds: [],
+        action: "pause",
+        skipped: true,
+        skipReason: "terminal_status",
+      },
+    ],
     activeRuns: [],
     affectedAgents: [],
     warnings: [],
@@ -953,6 +984,8 @@ describe("IssueDetail", () => {
     expect(container.textContent).not.toContain("Status breakdown");
     expect(container.textContent).not.toContain("Active runs cancelled");
     expect(container.textContent).toContain("Paused child");
+    expect(container.textContent).toContain("Completed child");
+    expect(container.textContent).toContain("Complete");
 
     const pauseApplyButton = Array.from(container.querySelectorAll("button"))
       .find((button) => button.textContent?.trim() === "Pause and stop work");
