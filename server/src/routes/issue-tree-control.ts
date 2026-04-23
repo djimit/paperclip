@@ -232,7 +232,7 @@ export function issueTreeControlRoutes(db: Db) {
       }
     }
 
-    res.status(201).json(result);
+    res.status(result.hold.mode === "restore" ? 200 : 201).json(result);
   });
 
   router.get("/issues/:id/tree-control/state", async (req, res) => {

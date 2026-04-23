@@ -240,7 +240,7 @@ describe("issue tree control routes", () => {
       .post("/api/issues/11111111-1111-4111-8111-111111111111/tree-holds")
       .send({ mode: "restore", reason: "restore subtree", metadata: { wakeAgents: true } });
 
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(200);
     expect(mockTreeControlService.restoreIssueStatusesForHold).toHaveBeenCalledWith(
       "company-2",
       "11111111-1111-4111-8111-111111111111",
