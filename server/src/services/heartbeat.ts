@@ -179,6 +179,17 @@ function resolveCodexTransientFallbackMode(attempt: number): CodexTransientFallb
   if (attempt === 3) return "fresh_session";
   return "fresh_session_safer_invocation";
 }
+
+function readCodexTransientRetryNotBefore(run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode" | "resultJson">) {
+  if (run.errorCode !== "codex_transient_upstream") return null;
+  const resultJson = parseObject(run.resultJson);
+  const value = resultJson.transientRetryNotBefore;
+  if (!(typeof value === "string" || typeof value === "number" || value instanceof Date)) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
 const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set(["approval_approved"]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
@@ -3267,13 +3278,17 @@ export function heartbeatService(db: Db) {
     const retryReason = opts?.retryReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON;
     const wakeReason = opts?.wakeReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON;
     const nextAttempt = (run.scheduledRetryAttempt ?? 0) + 1;
-    const schedule = computeBoundedTransientHeartbeatRetrySchedule(nextAttempt, now, opts?.random);
+    const baseSchedule = computeBoundedTransientHeartbeatRetrySchedule(nextAttempt, now, opts?.random);
     const codexTransientFallbackMode =
       agent.adapterType === "codex_local" && retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON && run.errorCode === "codex_transient_upstream"
         ? resolveCodexTransientFallbackMode(nextAttempt)
         : null;
+    const codexTransientRetryNotBefore =
+      agent.adapterType === "codex_local" && retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON
+        ? readCodexTransientRetryNotBefore(run)
+        : null;
 
-    if (!schedule) {
+    if (!baseSchedule) {
       await appendRunEvent(run, await nextRunEventSeq(run.id), {
         eventType: "lifecycle",
         stream: "system",
@@ -3291,6 +3306,14 @@ export function heartbeatService(db: Db) {
         maxAttempts: BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS,
       };
     }
+    const schedule =
+      codexTransientRetryNotBefore && codexTransientRetryNotBefore.getTime() > baseSchedule.dueAt.getTime()
+        ? {
+            ...baseSchedule,
+            dueAt: codexTransientRetryNotBefore,
+            delayMs: Math.max(0, codexTransientRetryNotBefore.getTime() - now.getTime()),
+          }
+        : baseSchedule;
 
     const contextSnapshot = parseObject(run.contextSnapshot);
     const issueId = readNonEmptyString(contextSnapshot.issueId);
@@ -3303,6 +3326,7 @@ export function heartbeatService(db: Db) {
       retryReason,
       scheduledRetryAttempt: schedule.attempt,
       scheduledRetryAt: schedule.dueAt.toISOString(),
+      ...(codexTransientRetryNotBefore ? { transientRetryNotBefore: codexTransientRetryNotBefore.toISOString() } : {}),
       ...(codexTransientFallbackMode ? { codexTransientFallbackMode } : {}),
     };
 
@@ -3321,6 +3345,7 @@ export function heartbeatService(db: Db) {
             retryReason,
             scheduledRetryAttempt: schedule.attempt,
             scheduledRetryAt: schedule.dueAt.toISOString(),
+            ...(codexTransientRetryNotBefore ? { transientRetryNotBefore: codexTransientRetryNotBefore.toISOString() } : {}),
             ...(codexTransientFallbackMode ? { codexTransientFallbackMode } : {}),
           },
           status: "queued",
@@ -3387,6 +3412,7 @@ export function heartbeatService(db: Db) {
         scheduledRetryAt: schedule.dueAt.toISOString(),
         baseDelayMs: schedule.baseDelayMs,
         delayMs: schedule.delayMs,
+        ...(codexTransientRetryNotBefore ? { transientRetryNotBefore: codexTransientRetryNotBefore.toISOString() } : {}),
         ...(codexTransientFallbackMode ? { codexTransientFallbackMode } : {}),
       },
     });

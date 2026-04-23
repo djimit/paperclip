@@ -57,6 +57,7 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     now: Date;
     errorCode: string;
     scheduledRetryAttempt?: number;
+    resultJson?: Record<string, unknown> | null;
   }) {
     await db.insert(companies).values({
       id: input.companyId,
@@ -93,6 +94,7 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
       finishedAt: input.now,
       scheduledRetryAttempt: input.scheduledRetryAttempt ?? 0,
       scheduledRetryReason: input.scheduledRetryAttempt ? "transient_failure" : null,
+      resultJson: input.resultJson ?? null,
       contextSnapshot: {
         issueId: randomUUID(),
         wakeReason: "issue_assigned",
@@ -334,5 +336,58 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
       await db.delete(agents);
       await db.delete(companies);
     }
+  });
+
+  it("honors codex retry-not-before timestamps when they exceed the default bounded backoff", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 3, 22, 22, 29, 0);
+    const retryNotBefore = new Date(2026, 3, 22, 23, 31, 0);
+
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "codex_transient_upstream",
+      resultJson: {
+        transientRetryNotBefore: retryNotBefore.toISOString(),
+      },
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, {
+      now,
+      random: () => 0.5,
+    });
+
+    expect(scheduled.outcome).toBe("scheduled");
+    if (scheduled.outcome !== "scheduled") return;
+    expect(scheduled.dueAt.getTime()).toBe(retryNotBefore.getTime());
+
+    const retryRun = await db
+      .select({
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+        scheduledRetryAt: heartbeatRuns.scheduledRetryAt,
+        wakeupRequestId: heartbeatRuns.wakeupRequestId,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, scheduled.run.id))
+      .then((rows) => rows[0] ?? null);
+
+    expect(retryRun?.scheduledRetryAt?.getTime()).toBe(retryNotBefore.getTime());
+    expect((retryRun?.contextSnapshot as Record<string, unknown> | null)?.transientRetryNotBefore).toBe(
+      retryNotBefore.toISOString(),
+    );
+
+    const wakeupRequest = await db
+      .select({ payload: agentWakeupRequests.payload })
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.id, retryRun?.wakeupRequestId ?? ""))
+      .then((rows) => rows[0] ?? null);
+
+    expect((wakeupRequest?.payload as Record<string, unknown> | null)?.transientRetryNotBefore).toBe(
+      retryNotBefore.toISOString(),
+    );
   });
 });

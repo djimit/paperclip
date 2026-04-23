@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractCodexRetryNotBefore,
   isCodexTransientUpstreamError,
   isCodexUnknownSessionError,
   parseCodexJsonl,
@@ -99,6 +100,16 @@ describe("isCodexTransientUpstreamError", () => {
         stderr: "We're currently experiencing high demand, which may cause temporary errors.",
       }),
     ).toBe(true);
+  });
+
+  it("classifies usage-limit windows as transient and extracts the retry time", () => {
+    const errorMessage = "You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at 11:31 PM.";
+    const now = new Date(2026, 3, 22, 22, 29, 2);
+
+    expect(isCodexTransientUpstreamError({ errorMessage })).toBe(true);
+    expect(extractCodexRetryNotBefore({ errorMessage }, now)?.getTime()).toBe(
+      new Date(2026, 3, 22, 23, 31, 0, 0).getTime(),
+    );
   });
 
   it("does not classify deterministic compaction errors as transient", () => {
