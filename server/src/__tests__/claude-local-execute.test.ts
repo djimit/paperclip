@@ -398,8 +398,10 @@ describe("claude execute", () => {
 
     const previousHome = process.env.HOME;
     const previousPaperclipHome = process.env.PAPERCLIP_HOME;
+    const previousPaperclipInstanceId = process.env.PAPERCLIP_INSTANCE_ID;
     process.env.HOME = root;
     process.env.PAPERCLIP_HOME = paperclipHome;
+    delete process.env.PAPERCLIP_INSTANCE_ID;
 
     try {
       const first = await execute({
@@ -534,6 +536,8 @@ describe("claude execute", () => {
       else process.env.HOME = previousHome;
       if (previousPaperclipHome === undefined) delete process.env.PAPERCLIP_HOME;
       else process.env.PAPERCLIP_HOME = previousPaperclipHome;
+      if (previousPaperclipInstanceId === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
+      else process.env.PAPERCLIP_INSTANCE_ID = previousPaperclipInstanceId;
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -553,8 +557,10 @@ describe("claude execute", () => {
 
     const previousHome = process.env.HOME;
     const previousPaperclipHome = process.env.PAPERCLIP_HOME;
+    const previousPaperclipInstanceId = process.env.PAPERCLIP_INSTANCE_ID;
     process.env.HOME = root;
     process.env.PAPERCLIP_HOME = paperclipHome;
+    delete process.env.PAPERCLIP_INSTANCE_ID;
 
     try {
       const first = await execute({
@@ -635,6 +641,8 @@ describe("claude execute", () => {
       else process.env.HOME = previousHome;
       if (previousPaperclipHome === undefined) delete process.env.PAPERCLIP_HOME;
       else process.env.PAPERCLIP_HOME = previousPaperclipHome;
+      if (previousPaperclipInstanceId === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
+      else process.env.PAPERCLIP_INSTANCE_ID = previousPaperclipInstanceId;
       await fs.rm(root, { recursive: true, force: true });
     }
   }, 15_000);
