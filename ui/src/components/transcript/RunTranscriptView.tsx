@@ -1,8 +1,7 @@
-import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useMemo, useState } from "react";
 import type { TranscriptEntry } from "../../adapters";
 import { MarkdownBody } from "../MarkdownBody";
-import { timeAgo } from "../../lib/timeAgo";
-import { cn, formatDateTime, formatTokens } from "../../lib/utils";
+import { cn, formatTokens } from "../../lib/utils";
 import {
   Check,
   ChevronDown,
@@ -135,18 +134,6 @@ function compactWhitespace(value: string): string {
 
 function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}…` : value;
-}
-
-function formatRawEntryTimestampTooltip(ts: string): string {
-  if (Number.isNaN(new Date(ts).getTime())) return ts;
-  return `Timestamp: ${formatDateTime(ts)}; Ago: ${timeAgo(ts)}`;
-}
-
-function handleRawTimestampLabelHover(event: ReactMouseEvent<HTMLSpanElement>) {
-  if (event.currentTarget.title) return;
-  const ts = event.currentTarget.dataset.timestamp;
-  if (!ts) return;
-  event.currentTarget.title = formatRawEntryTimestampTooltip(ts);
 }
 
 function humanizeLabel(value: string): string {
@@ -1378,11 +1365,7 @@ function RawTranscriptView({
             "grid-cols-[auto_1fr]",
           )}
         >
-          <span
-            className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground"
-            data-timestamp={entry.ts}
-            onMouseEnter={handleRawTimestampLabelHover}
-          >
+          <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
             {entry.kind}
           </span>
           <pre className="min-w-0 whitespace-pre-wrap break-words text-foreground/80">
