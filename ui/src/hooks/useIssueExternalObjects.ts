@@ -165,6 +165,7 @@ export function useIssueExternalObjectSummaries(
 ): {
   summaries: Map<string, ExternalObjectSummary>;
   isLoading: boolean;
+  isReady: boolean;
 } {
   const normalizedIssueIds = useMemo(
     () => [...new Set(issueIds.filter((issueId) => issueId.length > 0))].sort(),
@@ -184,6 +185,7 @@ export function useIssueExternalObjectSummaries(
   return {
     summaries,
     isLoading: enabled && query.isLoading,
+    isReady: !enabled || query.isSuccess,
   };
 }
 

@@ -1,4 +1,4 @@
-import type { Issue } from "@paperclipai/shared";
+import type { ExternalObjectSummary, Issue } from "@paperclipai/shared";
 
 export type IssueFilterWorkspaceLookup = {
   mode?: string | null;
@@ -8,6 +8,8 @@ export type IssueFilterWorkspaceLookup = {
 export type IssueFilterWorkspaceContext = {
   executionWorkspaceById?: ReadonlyMap<string, IssueFilterWorkspaceLookup>;
   defaultProjectWorkspaceIdByProjectId?: ReadonlyMap<string, string>;
+  externalObjectSummaryByIssueId?: ReadonlyMap<string, ExternalObjectSummary>;
+  externalObjectSummariesReady?: boolean;
 };
 
 export type IssueFilterState = {
@@ -159,6 +161,39 @@ export function shouldIncludeIssueFilterWorkspaceOption(
     && defaultProjectWorkspaceIds.has(workspace.projectWorkspaceId));
 }
 
+function summaryRecordCount(record: Record<string, number> | undefined, key: string): number {
+  return record?.[key] ?? 0;
+}
+
+function issueMatchesExternalObjectStatusFilter(
+  summary: ExternalObjectSummary | null | undefined,
+  value: string,
+): boolean {
+  const total = summary?.total ?? 0;
+  switch (value) {
+    case "failed":
+      return summaryRecordCount(summary?.byStatusCategory, "failed") > 0
+        || summaryRecordCount(summary?.byStatusCategory, "blocked") > 0;
+    case "waiting":
+      return summaryRecordCount(summary?.byStatusCategory, "waiting") > 0;
+    case "running":
+      return summaryRecordCount(summary?.byStatusCategory, "running") > 0;
+    case "auth_required":
+      return (summary?.authRequiredCount ?? 0) > 0
+        || summaryRecordCount(summary?.byLiveness, "auth_required") > 0;
+    case "unreachable":
+      return (summary?.unreachableCount ?? 0) > 0
+        || summaryRecordCount(summary?.byLiveness, "unreachable") > 0;
+    case "stale":
+      return (summary?.staleCount ?? 0) > 0
+        || summaryRecordCount(summary?.byLiveness, "stale") > 0;
+    case "none":
+      return total === 0;
+    default:
+      return false;
+  }
+}
+
 export function applyIssueFilters(
   issues: Issue[],
   state: IssueFilterState,
@@ -205,6 +240,16 @@ export function applyIssueFilters(
     result = result.filter((issue) => {
       const workspaceId = resolveIssueFilterWorkspaceId(issue, workspaceContext);
       return workspaceId != null && state.workspaces.includes(workspaceId);
+    });
+  }
+  if (state.externalObjectStatuses.length > 0) {
+    const summaries = workspaceContext.externalObjectSummaryByIssueId;
+    if (!summaries || workspaceContext.externalObjectSummariesReady !== true) return [];
+    result = result.filter((issue) => {
+      const summary = summaries.get(issue.id) ?? null;
+      return state.externalObjectStatuses.some((status) =>
+        issueMatchesExternalObjectStatusFilter(summary, status),
+      );
     });
   }
   return result;

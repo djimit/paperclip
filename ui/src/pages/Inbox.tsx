@@ -847,13 +847,49 @@ export function Inbox() {
 
   const mineIssues = useMemo(() => getRecentTouchedIssues(mineIssuesRaw), [mineIssuesRaw]);
   const touchedIssues = useMemo(() => getRecentTouchedIssues(touchedIssuesRaw), [touchedIssuesRaw]);
+  const shouldUseIssueSearchSupplement =
+    !!selectedCompanyId
+    && normalizedSearchQuery.length > 0;
+  const { data: remoteIssueSearchResults = [] } = useQuery({
+    queryKey: [
+      ...queryKeys.issues.search(selectedCompanyId!, normalizedSearchQuery, undefined, 25),
+      "inbox-supplement",
+    ],
+    queryFn: () =>
+      issuesApi.list(selectedCompanyId!, {
+        q: normalizedSearchQuery,
+        limit: 25,
+        includeRoutineExecutions: true,
+      }),
+    enabled: shouldUseIssueSearchSupplement,
+    placeholderData: (previousData) => previousData,
+  });
+  const inboxIssueIdsForExternalObjectSummaries = useMemo(() => {
+    const issueIds = new Set<string>();
+    for (const issue of mineIssues) issueIds.add(issue.id);
+    for (const issue of touchedIssues) issueIds.add(issue.id);
+    for (const issue of remoteIssueSearchResults) issueIds.add(issue.id);
+    return [...issueIds];
+  }, [mineIssues, remoteIssueSearchResults, touchedIssues]);
+  const {
+    summaries: externalObjectSummaryByIssueId,
+    isLoading: externalObjectSummariesLoading,
+    isReady: externalObjectSummariesReady,
+  } = useIssueExternalObjectSummaries(
+    selectedCompanyId,
+    inboxIssueIdsForExternalObjectSummaries,
+  );
+  const issueFilterContext = useMemo(() => ({
+    externalObjectSummaryByIssueId,
+    externalObjectSummariesReady: externalObjectSummariesReady && !externalObjectSummariesLoading,
+  }), [externalObjectSummariesLoading, externalObjectSummariesReady, externalObjectSummaryByIssueId]);
   const visibleMineIssues = useMemo(
-    () => applyIssueFilters(mineIssues, issueFilters, currentUserId, true, liveIssueIds),
-    [mineIssues, issueFilters, currentUserId, liveIssueIds],
+    () => applyIssueFilters(mineIssues, issueFilters, currentUserId, true, liveIssueIds, issueFilterContext),
+    [mineIssues, issueFilters, currentUserId, liveIssueIds, issueFilterContext],
   );
   const visibleTouchedIssues = useMemo(
-    () => applyIssueFilters(touchedIssues, issueFilters, currentUserId, true, liveIssueIds),
-    [touchedIssues, issueFilters, currentUserId, liveIssueIds],
+    () => applyIssueFilters(touchedIssues, issueFilters, currentUserId, true, liveIssueIds, issueFilterContext),
+    [touchedIssues, issueFilters, currentUserId, liveIssueIds, issueFilterContext],
   );
   const unreadTouchedIssues = useMemo(
     () => visibleTouchedIssues.filter((issue) => issue.isUnreadForMe),
@@ -1127,23 +1163,6 @@ export function Inbox() {
       visibleTouchedIssues,
     ],
   );
-  const shouldUseIssueSearchSupplement =
-    !!selectedCompanyId
-    && normalizedSearchQuery.length > 0;
-  const { data: remoteIssueSearchResults = [] } = useQuery({
-    queryKey: [
-      ...queryKeys.issues.search(selectedCompanyId!, normalizedSearchQuery, undefined, 25),
-      "inbox-supplement",
-    ],
-    queryFn: () =>
-      issuesApi.list(selectedCompanyId!, {
-        q: normalizedSearchQuery,
-        limit: 25,
-        includeRoutineExecutions: true,
-      }),
-    enabled: shouldUseIssueSearchSupplement,
-    placeholderData: (previousData) => previousData,
-  });
   const issueSearchSupplementResults = useMemo(
     () =>
       getInboxSearchSupplementIssues({
@@ -1155,11 +1174,13 @@ export function Inbox() {
         currentUserId,
         enableRoutineVisibilityFilter: true,
         liveIssueIds,
+        issueFilterContext,
       }),
     [
       archivedSearchIssues,
       currentUserId,
       filteredWorkItems,
+      issueFilterContext,
       issueFilters,
       liveIssueIds,
       normalizedSearchQuery,
@@ -1232,19 +1253,6 @@ export function Inbox() {
     issueSearchSupplementResults,
     nestingEnabled,
   ]);
-  const inboxIssueIdsForExternalObjectSummaries = useMemo(() => {
-    const issueIds = new Set<string>();
-    for (const section of groupedSections) {
-      for (const item of section.displayItems) {
-        if (item.kind === "issue") issueIds.add(item.issue.id);
-      }
-    }
-    return [...issueIds];
-  }, [groupedSections]);
-  const { summaries: externalObjectSummaryByIssueId } = useIssueExternalObjectSummaries(
-    selectedCompanyId,
-    inboxIssueIdsForExternalObjectSummaries,
-  );
   const totalVisibleWorkItems = useMemo(
     () => groupedSections.reduce((count, group) => count + group.displayItems.length, 0),
     [groupedSections],

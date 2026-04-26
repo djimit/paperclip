@@ -812,42 +812,56 @@ export function IssuesList({
     [boardIssueQueries, searchWithinLoadedIssues, viewState.viewMode],
   );
 
-  const filtered = useMemo(() => {
+  const sourceIssues = useMemo(() => {
     const useRemoteSearch = normalizedIssueSearch.length > 0 && !searchWithinLoadedIssues;
-    const sourceIssues = boardIssues ?? (useRemoteSearch ? searchedIssues : issues);
-    const searchScopedIssues = normalizedIssueSearch.length > 0 && searchWithinLoadedIssues
+    return boardIssues ?? (useRemoteSearch ? searchedIssues : issues);
+  }, [boardIssues, issues, normalizedIssueSearch, searchedIssues, searchWithinLoadedIssues]);
+
+  const searchScopedIssues = useMemo(
+    () => normalizedIssueSearch.length > 0 && searchWithinLoadedIssues
       ? sourceIssues.filter((issue) => issueMatchesLocalSearch(issue, normalizedIssueSearch))
-      : sourceIssues;
+      : sourceIssues,
+    [normalizedIssueSearch, searchWithinLoadedIssues, sourceIssues],
+  );
+  const hasExternalObjectStatusFilters = viewState.externalObjectStatuses.length > 0;
+  const issueIdsForExternalObjectSummaries = useMemo(
+    () => (viewState.viewMode === "list" || hasExternalObjectStatusFilters
+      ? searchScopedIssues.map((issue) => issue.id)
+      : []),
+    [hasExternalObjectStatusFilters, searchScopedIssues, viewState.viewMode],
+  );
+  const {
+    summaries: externalObjectSummaryByIssueId,
+    isLoading: externalObjectSummariesLoading,
+    isReady: externalObjectSummariesReady,
+  } = useIssueExternalObjectSummaries(
+    selectedCompanyId,
+    issueIdsForExternalObjectSummaries,
+  );
+  const issueFilterContext = useMemo(() => ({
+    ...issueFilterWorkspaceContext,
+    externalObjectSummaryByIssueId,
+    externalObjectSummariesReady: externalObjectSummariesReady && !externalObjectSummariesLoading,
+  }), [externalObjectSummariesLoading, externalObjectSummariesReady, externalObjectSummaryByIssueId, issueFilterWorkspaceContext]);
+
+  const filtered = useMemo(() => {
     const filteredByControls = applyIssueFilters(
       searchScopedIssues,
       viewState,
       currentUserId,
       enableRoutineVisibilityFilter,
       liveIssueIds,
-      issueFilterWorkspaceContext,
+      issueFilterContext,
     );
     return sortIssues(filteredByControls, viewState);
   }, [
-    boardIssues,
-    issues,
-    searchedIssues,
-    searchWithinLoadedIssues,
+    searchScopedIssues,
     viewState,
-    normalizedIssueSearch,
     currentUserId,
     enableRoutineVisibilityFilter,
     liveIssueIds,
-    issueFilterWorkspaceContext,
+    issueFilterContext,
   ]);
-
-  const issueIdsForExternalObjectSummaries = useMemo(
-    () => (viewState.viewMode === "list" ? filtered.map((issue) => issue.id) : []),
-    [filtered, viewState.viewMode],
-  );
-  const { summaries: externalObjectSummaryByIssueId } = useIssueExternalObjectSummaries(
-    selectedCompanyId,
-    issueIdsForExternalObjectSummaries,
-  );
 
   const progressSummary = useMemo(
     () => shouldRenderSubIssueProgressSummary(showProgressSummary, issues.length)
