@@ -590,6 +590,10 @@ describe("IssuesList", () => {
       expect(container.textContent).toContain("... and 2 more");
       expect(container.textContent).not.toContain("blocked by PAP-3");
       expect(container.textContent).not.toContain("blocked by PAP-4");
+      const blockerButtons = Array.from(container.querySelectorAll("button"))
+        .filter((button) => button.textContent?.includes("blocked by"));
+      expect(blockerButtons).toHaveLength(1);
+      expect(blockerButtons[0]?.textContent).toBe("blocked by PAP-2 · step 2 ... and 2 more");
     });
 
     act(() => {

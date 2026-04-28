@@ -1315,34 +1315,37 @@ export function IssuesList({
                     .filter((chip): chip is { blockerId: string; chipLabel: string } => chip !== null);
                   const firstVisibleBlockerChip = visibleBlockerChips[0] ?? null;
                   const additionalVisibleBlockerCount = Math.max(visibleBlockerChips.length - 1, 0);
+                  const additionalVisibleBlockerLabel = additionalVisibleBlockerCount > 0
+                    ? ` ... and ${additionalVisibleBlockerCount} more`
+                    : "";
+                  const firstVisibleBlockerDisplayLabel = firstVisibleBlockerChip
+                    ? `${firstVisibleBlockerChip.chipLabel}${additionalVisibleBlockerLabel}`
+                    : "";
+                  const hiddenVisibleBlockerLabels = visibleBlockerChips
+                    .slice(1)
+                    .map((chip) => chip.chipLabel)
+                    .join(", ");
+                  const firstVisibleBlockerTitle = additionalVisibleBlockerCount > 0
+                    ? `${firstVisibleBlockerDisplayLabel}: ${hiddenVisibleBlockerLabels}`
+                    : firstVisibleBlockerDisplayLabel;
                   const checklistDependencyChips = checklistMeta && firstVisibleBlockerChip ? (
-                    <>
-                      <button
-                        key={firstVisibleBlockerChip.blockerId}
-                        type="button"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          const target = document.getElementById(`issue-workflow-row-${firstVisibleBlockerChip.blockerId}`);
-                          if (!target) return;
-                          target.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                          target.focus?.();
-                        }}
-                        className="inline-flex items-center rounded-full border border-amber-400/45 bg-amber-50/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 hover:bg-amber-100/80 dark:border-amber-300/35 dark:bg-amber-400/10 dark:text-amber-300"
-                        title={firstVisibleBlockerChip.chipLabel}
-                        aria-label={firstVisibleBlockerChip.chipLabel}
-                      >
-                        {firstVisibleBlockerChip.chipLabel}
-                      </button>
-                      {additionalVisibleBlockerCount > 0 ? (
-                        <span
-                          className="inline-flex items-center rounded-full border border-amber-400/30 bg-amber-50/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-300"
-                          title={visibleBlockerChips.slice(1).map((chip) => chip.chipLabel).join(", ")}
-                        >
-                          ... and {additionalVisibleBlockerCount} more
-                        </span>
-                      ) : null}
-                    </>
+                    <button
+                      key={firstVisibleBlockerChip.blockerId}
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const target = document.getElementById(`issue-workflow-row-${firstVisibleBlockerChip.blockerId}`);
+                        if (!target) return;
+                        target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                        target.focus?.();
+                      }}
+                      className="inline-flex items-center rounded-full border border-amber-400/45 bg-amber-50/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 hover:bg-amber-100/80 dark:border-amber-300/35 dark:bg-amber-400/10 dark:text-amber-300"
+                      title={firstVisibleBlockerTitle}
+                      aria-label={firstVisibleBlockerTitle}
+                    >
+                      {firstVisibleBlockerDisplayLabel}
+                    </button>
                   ) : null;
 
                   return (
