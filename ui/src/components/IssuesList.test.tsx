@@ -968,6 +968,7 @@ describe("IssuesList", () => {
       }),
     );
     const onLoadMoreIssues = vi.fn();
+    setDocumentScrollMetrics({ innerHeight: 2000, scrollY: 0, scrollHeight: 1000 });
 
     const { root } = renderWithQueryClient(
       <IssuesList
@@ -985,6 +986,8 @@ describe("IssuesList", () => {
     await waitForAssertion(() => {
       expect(container.querySelectorAll('[data-testid="issue-row"]')).toHaveLength(100);
     });
+    await flush();
+    expect(onLoadMoreIssues).not.toHaveBeenCalled();
 
     act(() => {
       setDocumentScrollMetrics({ innerHeight: 600, scrollY: 1500, scrollHeight: 2000 });

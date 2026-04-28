@@ -79,10 +79,7 @@ function findIssuesScrollContainer(element: HTMLElement | null): HTMLElement | n
   let current = element.parentElement;
   while (current && current !== document.body && current !== document.documentElement) {
     const overflowY = window.getComputedStyle(current).overflowY;
-    if (
-      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay")
-      && current.scrollHeight > current.clientHeight
-    ) {
+    if (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") {
       return current;
     }
     current = current.parentElement;
@@ -1054,7 +1051,6 @@ export function IssuesList({
 
     scrollTarget.addEventListener("scroll", checkScrollPosition, { passive: true });
     window.addEventListener("resize", checkScrollPosition);
-    checkScrollPosition();
 
     return () => {
       scrollTarget.removeEventListener("scroll", checkScrollPosition);

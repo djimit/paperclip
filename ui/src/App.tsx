@@ -99,7 +99,9 @@ function boardRoutes() {
       <Route path="issues/done" element={<Navigate to="/issues" replace />} />
       <Route path="issues/recent" element={<Navigate to="/issues" replace />} />
       <Route path="issues/:issueId" element={<IssueDetail />} />
-      <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
+      {import.meta.env.DEV ? (
+        <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
+      ) : null}
       <Route path="routines" element={<Routines />} />
       <Route path="routines/:routineId" element={<RoutineDetail />} />
       <Route path="execution-workspaces/:workspaceId" element={<ExecutionWorkspaceDetail />} />

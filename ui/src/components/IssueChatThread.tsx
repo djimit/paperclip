@@ -2167,6 +2167,7 @@ type SimpleVirtualItem = {
   index: number;
   key: React.Key;
   start: number;
+  size: number;
 };
 
 function useIssueThreadVirtualizer({
@@ -2186,9 +2187,21 @@ function useIssueThreadVirtualizer({
   getItemKey: (index: number) => React.Key;
   mode: VirtualizedScrollMode;
 }) {
+  const measuredSizeByKeyRef = useRef(new Map<React.Key, number>());
   const [, rerender] = useState(0);
-  const itemSpan = estimateSize() + gap;
-  const totalSize = Math.max(0, count * itemSpan - gap);
+  const estimatedSize = estimateSize();
+
+  const itemStarts: number[] = [];
+  const itemSizes: number[] = [];
+  let nextStart = scrollMargin;
+  for (let index = 0; index < count; index += 1) {
+    const key = getItemKey(index);
+    const size = measuredSizeByKeyRef.current.get(key) ?? estimatedSize;
+    itemStarts.push(nextStart);
+    itemSizes.push(size);
+    nextStart += size + gap;
+  }
+  const totalSize = Math.max(0, nextStart - scrollMargin - gap);
 
   const viewportHeight = () => (mode.kind === "window" ? window.innerHeight : mode.element.clientHeight);
   const scrollOffset = () => (mode.kind === "window" ? window.scrollY : mode.element.scrollTop);
@@ -2211,15 +2224,29 @@ function useIssueThreadVirtualizer({
     };
   }, [mode]);
 
-  const rawStart = Math.max(0, scrollOffset() - scrollMargin);
-  const startIndex = Math.max(0, Math.floor(rawStart / itemSpan) - overscan);
-  const endIndex = Math.min(
-    count - 1,
-    Math.ceil((rawStart + viewportHeight()) / itemSpan) + overscan,
-  );
+  const rawStart = Math.max(scrollMargin, scrollOffset());
+  const rawEnd = rawStart + viewportHeight();
+  let visibleStartIndex = 0;
+  while (
+    visibleStartIndex < count - 1
+    && itemStarts[visibleStartIndex] + itemSizes[visibleStartIndex] < rawStart
+  ) {
+    visibleStartIndex += 1;
+  }
+  let visibleEndIndex = visibleStartIndex;
+  while (visibleEndIndex < count - 1 && itemStarts[visibleEndIndex] <= rawEnd) {
+    visibleEndIndex += 1;
+  }
+  const startIndex = Math.max(0, visibleStartIndex - overscan);
+  const endIndex = Math.min(count - 1, visibleEndIndex + overscan);
   const virtualItems: SimpleVirtualItem[] = [];
   for (let index = startIndex; index <= endIndex; index += 1) {
-    virtualItems.push({ index, key: getItemKey(index), start: index * itemSpan + scrollMargin });
+    virtualItems.push({
+      index,
+      key: getItemKey(index),
+      start: itemStarts[index] ?? scrollMargin,
+      size: itemSizes[index] ?? estimatedSize,
+    });
   }
 
   const scrollToIndex = (
@@ -2228,11 +2255,11 @@ function useIssueThreadVirtualizer({
   ) => {
     const clampedIndex = Math.max(0, Math.min(index, count - 1));
     const targetMax = maxScrollOffset();
-    let top = clampedIndex * itemSpan + scrollMargin;
+    let top = itemStarts[clampedIndex] ?? scrollMargin;
     if (options?.align === "center") {
-      top = top - viewportHeight() / 2 + itemSpan / 2;
+      top = top - viewportHeight() / 2 + (itemSizes[clampedIndex] ?? estimatedSize) / 2;
     } else if (options?.align === "end") {
-      top = count > 1 ? targetMax * (clampedIndex / (count - 1)) : targetMax;
+      top = top + (itemSizes[clampedIndex] ?? estimatedSize) - viewportHeight();
     }
     top = Math.max(0, Math.min(top, targetMax));
     if (mode.kind === "window") {
@@ -2248,7 +2275,18 @@ function useIssueThreadVirtualizer({
     getTotalSize: () => totalSize,
     scrollToIndex,
     measure: () => undefined,
-    measureElement: (_element?: HTMLElement | null) => undefined,
+    measureElement: (element?: HTMLElement | null) => {
+      if (!element) return;
+      const index = Number(element.dataset.index);
+      if (!Number.isInteger(index) || index < 0 || index >= count) return;
+      const measuredSize = element.getBoundingClientRect().height || element.offsetHeight;
+      if (!Number.isFinite(measuredSize) || measuredSize <= 0) return;
+      const key = getItemKey(index);
+      const previousSize = measuredSizeByKeyRef.current.get(key) ?? estimatedSize;
+      if (Math.abs(previousSize - measuredSize) < 1) return;
+      measuredSizeByKeyRef.current.set(key, measuredSize);
+      rerender((value) => value + 1);
+    },
   };
 }
 
