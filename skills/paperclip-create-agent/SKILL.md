@@ -85,7 +85,7 @@ curl -sS "$PAPERCLIP_API_URL/llms/agent-icons.txt" \
 - capabilities
 - managed instructions bundle (`AGENTS.md`) for adapters that support it; avoid durable `promptTemplate` config
 - for coding or execution agents, include the Paperclip execution contract: start actionable work in the same heartbeat; do not stop at a plan unless planning was requested; leave durable progress with a clear next action; use child issues for long or parallel delegated work instead of polling; mark blocked work with owner/action; respect budget, pause/cancel, approval gates, and company boundaries
-- instruction text such as `AGENTS.md` built from step 4; for local managed-bundle adapters, agent-authenticated hire requests may send the adapted `AGENTS.md` in `adapterConfig.promptTemplate` only as a creation-time transport because the server materializes it into managed `AGENTS.md` and removes the legacy field. Do not set `promptTemplate` when you are already setting an instructions bundle/path.
+- instruction text such as `AGENTS.md` built from step 4; for local managed-bundle adapters, send this as top-level `instructionsBundle.files["AGENTS.md"]`. Do not set `adapterConfig.promptTemplate` or `bootstrapPromptTemplate` for new agents.
 - source issue linkage (`sourceIssueId` or `sourceIssueIds`) when this hire came from an issue
 
 ### 7. Review the draft against the quality checklist
@@ -109,6 +109,7 @@ curl -sS -X POST "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/agent-h
     "desiredSkills": ["vercel-labs/agent-browser/agent-browser"],
     "adapterType": "codex_local",
     "adapterConfig": {"cwd": "/abs/path/to/repo", "model": "o4-mini"},
+    "instructionsBundle": {"files": {"AGENTS.md": "You are the CTO..."}},
     "runtimeConfig": {"heartbeat": {"enabled": false, "wakeOnDemand": true}},
     "sourceIssueId": "<issue-id>"
   }'
