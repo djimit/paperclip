@@ -472,6 +472,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     retryReason?: "assignment_recovery" | "issue_continuation_needed" | null;
     assignToUser?: boolean;
     activePauseHold?: boolean;
+    livenessState?: "completed" | "advanced" | "plan_only" | "empty_response" | "blocked" | "failed" | "needs_followup" | null;
     runErrorCode?: string | null;
     runError?: string | null;
   }) {
@@ -545,6 +546,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       error: input.runStatus === "succeeded"
         ? null
         : ("runError" in input ? input.runError : "run failed before issue advanced"),
+      livenessState: input.livenessState ?? null,
     });
 
     await db.insert(issues).values([
@@ -2019,18 +2021,21 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(wakeups).toHaveLength(1);
   });
 
-  it("re-enqueues continuation when the latest automatic continuation succeeded without closing the issue", async () => {
+  it("records productive continuation instead of recovery when the latest automatic continuation succeeded", async () => {
     const { agentId, issueId, runId } = await seedStrandedIssueFixture({
       status: "in_progress",
       runStatus: "succeeded",
       retryReason: "issue_continuation_needed",
+      livenessState: "advanced",
     });
     const heartbeat = heartbeatService(db);
 
     const result = await heartbeat.reconcileStrandedAssignedIssues();
-    expect(result.continuationRequeued).toBe(1);
+    expect(result.continuationRequeued).toBe(0);
+    expect(result.productiveContinuationObserved).toBe(1);
+    expect(result.successfulContinuationObserved).toBe(0);
     expect(result.escalated).toBe(0);
-    expect(result.issueIds).toEqual([issueId]);
+    expect(result.issueIds).toEqual([]);
 
     const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
     expect(issue?.status).toBe("in_progress");
@@ -2042,14 +2047,10 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .select()
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.agentId, agentId));
-    expect(runs).toHaveLength(2);
+    expect(runs.map((row) => row.id)).toEqual([runId]);
 
-    const retryRun = runs.find((row) => row.id !== runId);
-    expect(retryRun?.id).toBeTruthy();
-    expect((retryRun?.contextSnapshot as Record<string, unknown>)?.retryReason).toBe("issue_continuation_needed");
-    if (retryRun) {
-      await waitForRunToSettle(heartbeat, retryRun.id);
-    }
+    const wakeups = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
+    expect(wakeups).toHaveLength(1);
   });
 
   it("does not reconcile user-assigned work through the agent stranded-work recovery path", async () => {
