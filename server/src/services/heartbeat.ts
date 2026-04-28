@@ -80,6 +80,7 @@ import {
   sanitizeRuntimeServiceBaseEnv,
 } from "./workspace-runtime.js";
 import { issueService } from "./issues.js";
+import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { parseIssueExecutionState } from "./issue-execution-policy.js";
 import {
   ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS,
@@ -2774,6 +2775,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   async function hasExplicitIssueWait(companyId: string, issueId: string) {
+    await issueThreadInteractionService(db).expireInvalidPendingRequestConfirmationsForIssue(
+      { id: issueId, companyId },
+      { agentId: null, userId: null },
+    );
+
     const [interaction, approval] = await Promise.all([
       db
         .select({ id: issueThreadInteractions.id })

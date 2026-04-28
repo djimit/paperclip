@@ -32,6 +32,7 @@ import { budgetService } from "../budgets.js";
 import { instanceSettingsService } from "../instance-settings.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
 import { issueService } from "../issues.js";
+import { issueThreadInteractionService } from "../issue-thread-interactions.js";
 import { getRunLogStore } from "../run-log-store.js";
 import {
   RECOVERY_ORIGIN_KINDS,
@@ -398,6 +399,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     if (issue.status === "done" || issue.status === "cancelled") return true;
     if (issue.status === "blocked" || issue.status === "in_review") return true;
     if (issue.executionState) return true;
+    await issueThreadInteractionService(db).expireInvalidPendingRequestConfirmationsForIssue(
+      { id: issue.id, companyId: issue.companyId },
+      { agentId: null, userId: null },
+    );
 
     const [interaction, approval, recoveryIssue] = await Promise.all([
       db
@@ -1789,6 +1794,11 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       }
 
       if (await isAutomaticRecoverySuppressedByPauseHold(db, issue.companyId, issue.id, treeControlSvc)) {
+        result.skipped += 1;
+        continue;
+      }
+
+      if (await hasExplicitWaitingPath(issue)) {
         result.skipped += 1;
         continue;
       }

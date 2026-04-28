@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   documents,
@@ -444,6 +444,55 @@ async function expireStaleRequestConfirmationTarget(db: Db | any, args: {
         version: 1,
         outcome: "stale_target",
         staleTarget: target,
+      },
+      resolvedByAgentId: args.actor.agentId ?? null,
+      resolvedByUserId: args.actor.userId ?? null,
+      resolvedAt: now,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(issueThreadInteractions.id, args.row.id),
+      eq(issueThreadInteractions.status, "pending"),
+    ))
+    .returning();
+
+  if (!updated) {
+    throw conflict("Interaction has already been resolved");
+  }
+  await touchIssue(db, args.row.issueId);
+  return hydrateInteraction(updated);
+}
+
+async function expireRequestConfirmationSupersededByLatestUserComment(db: Db | any, args: {
+  row: IssueThreadInteractionRow;
+  actor: InteractionActor;
+}): Promise<IssueThreadInteraction | null> {
+  if (args.row.kind !== "request_confirmation" || args.row.status !== "pending") return null;
+  const interaction = hydrateInteraction(args.row) as RequestConfirmationInteraction;
+  if (interaction.payload.supersedeOnUserComment !== true) return null;
+
+  const [comment] = await db
+    .select({ id: issueComments.id })
+    .from(issueComments)
+    .where(and(
+      eq(issueComments.companyId, args.row.companyId),
+      eq(issueComments.issueId, args.row.issueId),
+      gt(issueComments.createdAt, args.row.createdAt),
+      sql`${issueComments.authorUserId} is not null`,
+    ))
+    .orderBy(asc(issueComments.createdAt))
+    .limit(1);
+  if (!comment) return null;
+
+  const now = new Date();
+  const [updated] = await db
+    .update(issueThreadInteractions)
+    .set({
+      status: "expired",
+      result: {
+        version: 1,
+        outcome: "superseded_by_comment",
+        commentId: comment.id,
       },
       resolvedByAgentId: args.actor.agentId ?? null,
       resolvedByUserId: args.actor.userId ?? null,
@@ -1129,6 +1178,33 @@ export function issueThreadInteractionService(db: Db) {
 
       if (expired.length > 0) {
         await touchIssue(db, issue.id);
+      }
+      return expired;
+    },
+
+    expireInvalidPendingRequestConfirmationsForIssue: async (
+      issue: { id: string; companyId: string },
+      actor: InteractionActor,
+    ) => {
+      const rows = await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(and(
+          eq(issueThreadInteractions.companyId, issue.companyId),
+          eq(issueThreadInteractions.issueId, issue.id),
+          eq(issueThreadInteractions.kind, "request_confirmation"),
+          eq(issueThreadInteractions.status, "pending"),
+        ));
+
+      const expired: IssueThreadInteraction[] = [];
+      for (const row of rows) {
+        const staleTarget = await expireStaleRequestConfirmationTarget(db, { row, actor });
+        if (staleTarget) {
+          expired.push(staleTarget);
+          continue;
+        }
+        const superseded = await expireRequestConfirmationSupersededByLatestUserComment(db, { row, actor });
+        if (superseded) expired.push(superseded);
       }
       return expired;
     },
