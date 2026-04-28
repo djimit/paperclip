@@ -214,14 +214,15 @@ function useLiveElapsed(startMs: number | null | undefined, active: boolean): st
 
 function useStableEvent<T extends (...args: never[]) => unknown>(callback: T | undefined): T | undefined {
   const callbackRef = useRef(callback);
+  const hasCallback = callback !== undefined;
   useLayoutEffect(() => {
     callbackRef.current = callback;
   }, [callback]);
 
   return useMemo(() => {
-    if (!callback) return undefined;
+    if (!hasCallback) return undefined;
     return ((...args: Parameters<T>) => callbackRef.current?.(...args)) as T;
-  }, [Boolean(callback)]);
+  }, [hasCallback]);
 }
 
 interface CommentReassignment {
