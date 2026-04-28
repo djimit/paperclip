@@ -141,6 +141,7 @@ function readSkillMarkdown(skillName: string): string | null {
     normalized !== "paperclip" &&
     normalized !== "paperclip-create-agent" &&
     normalized !== "paperclip-create-plugin" &&
+    normalized !== "paperclip-plan" &&
     normalized !== "para-memory-files"
   )
     return null;
@@ -2862,6 +2863,10 @@ export function accessRoutes(
         {
           name: "paperclip-create-agent",
           path: "/api/skills/paperclip-create-agent"
+        },
+        {
+          name: "paperclip-plan",
+          path: "/api/skills/paperclip-plan"
         }
       ]
     });
