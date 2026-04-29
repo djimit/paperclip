@@ -33,6 +33,7 @@ import type {
   IssueBlockerAttentionState,
   IssueBlockerNextActionHint,
   IssueBlockerNextActionOwner,
+  IssueStatus,
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
   IssueRelationIssueSummary,
@@ -59,6 +60,10 @@ import {
   isLiveExplicitApprovalWaitingPath,
   isLiveExplicitInteractionWaitingPath,
 } from "./recovery/explicit-waiting-paths.js";
+import {
+  classifyIssueExecutionDisposition,
+  type IssueExecutionRunLivenessState,
+} from "./issue-execution-disposition.js";
 import { assertIssueTransitionAllowed } from "./issue-transition-guard.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
@@ -884,6 +889,37 @@ function classifyLeafRecovery(input: {
   // If the leaf has no agent owner at all, fall through to needs_attention so
   // the existing "no owner" surface continues to apply.
   if (owner.type === "none") return null;
+
+  const disposition = classifyIssueExecutionDisposition({
+    issue: {
+      id: node.id,
+      status: node.status as IssueStatus,
+      assigneeAgentId: node.assigneeAgentId,
+      assigneeUserId: node.assigneeUserId,
+    },
+    agent: node.assigneeAgentId
+      ? {
+        id: node.assigneeAgentId,
+        status: agentInvokable ? "idle" : "paused",
+      }
+      : null,
+    execution: {
+      activeRun: hasActivePath,
+    },
+    waits: {
+      productivityReviewNeeded: hasProductivityReview,
+    },
+    latestRun: {
+      latestRunStatus: "succeeded",
+      livenessState: latestRun.livenessState as IssueExecutionRunLivenessState,
+      nextAction: "runnable",
+      continuationAttempt: latestRun.continuationAttempt,
+      maxContinuationAttempts,
+    },
+  });
+  if (disposition.kind !== "agent_continuable" && disposition.kind !== "human_escalation_required") {
+    return null;
+  }
 
   let reason: LeafRecoveryClassification["reason"];
   if (hasProductivityReview) {

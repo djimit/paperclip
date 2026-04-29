@@ -1,8 +1,14 @@
 import { buildIssueGraphLivenessIncidentKey } from "./origins.js";
+import type { IssueStatus } from "@paperclipai/shared";
 import {
   isLiveExplicitApprovalWaitingPath,
   isLiveExplicitInteractionWaitingPath,
 } from "./explicit-waiting-paths.js";
+import {
+  classifyIssueExecutionDisposition,
+  type IssueExecutionDispositionAgentInput,
+  type IssueExecutionParticipantState,
+} from "../issue-execution-disposition.js";
 
 export type IssueLivenessSeverity = "warning" | "critical";
 
@@ -142,6 +148,26 @@ function hasActiveExecutionPath(
   );
 }
 
+function hasActiveRunPath(
+  companyId: string,
+  issueId: string,
+  activeRuns: IssueLivenessExecutionPathInput[],
+) {
+  return activeRuns.some(
+    (entry) => entry.companyId === companyId && entry.issueId === issueId,
+  );
+}
+
+function hasQueuedWakePath(
+  companyId: string,
+  issueId: string,
+  queuedWakeRequests: IssueLivenessExecutionPathInput[],
+) {
+  return queuedWakeRequests.some(
+    (entry) => entry.companyId === companyId && entry.issueId === issueId,
+  );
+}
+
 function hasWaitingPath(
   issue: IssueLivenessIssueInput,
   waitingPaths: IssueLivenessWaitingPathInput[],
@@ -167,6 +193,23 @@ function principalIsResolvableUser(principal: unknown): boolean {
   if (!principal || typeof principal !== "object") return false;
   const value = principal as Record<string, unknown>;
   return value.type === "user" && typeof value.userId === "string" && value.userId.length > 0;
+}
+
+function participantStateForIssue(
+  issue: IssueLivenessIssueInput,
+  agentsById: Map<string, IssueLivenessAgentInput>,
+): IssueExecutionParticipantState {
+  if (!issue.executionState) return "none";
+  const participant = issue.executionState.currentParticipant;
+  const participantAgentId = readPrincipalAgentId(participant);
+  if (participantAgentId) {
+    const participantAgent = agentsById.get(participantAgentId);
+    return participantAgent && participantAgent.companyId === issue.companyId && isInvokableAgent(participantAgent)
+      ? "valid"
+      : "invalid";
+  }
+  if (principalIsResolvableUser(participant)) return "valid";
+  return "invalid";
 }
 
 function addOwnerCandidate(
@@ -373,13 +416,42 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
       openRecoveryIssues.some((entry) => entry.companyId === issue.companyId && entry.issueId === issue.id);
   }
 
+  function canonicalDisposition(issue: IssueLivenessIssueInput) {
+    const agent: IssueExecutionDispositionAgentInput | null = issue.assigneeAgentId
+      ? agentsById.get(issue.assigneeAgentId) ?? null
+      : null;
+
+    return classifyIssueExecutionDisposition({
+      issue: {
+        id: issue.id,
+        status: issue.status as IssueStatus,
+        assigneeAgentId: issue.assigneeAgentId,
+        assigneeUserId: issue.assigneeUserId,
+      },
+      agent,
+      execution: {
+        activeRun: hasActiveRunPath(issue.companyId, issue.id, activeRuns),
+        queuedWake: hasQueuedWakePath(issue.companyId, issue.id, queuedWakeRequests),
+      },
+      waits: {
+        participant: participantStateForIssue(issue, agentsById),
+        pendingInteraction: hasWaitingPath(issue, pendingInteractions, "interaction", now) ? "live" : "none",
+        pendingApproval: hasWaitingPath(issue, pendingApprovals, "approval", now) ? "live" : "none",
+        openRecoveryIssue: openRecoveryIssues.some((entry) =>
+          entry.companyId === issue.companyId && entry.issueId === issue.id
+        ),
+      },
+    });
+  }
+
   function reviewFinding(
     source: IssueLivenessIssueInput,
     reviewIssue: IssueLivenessIssueInput,
     dependencyPath: IssueLivenessIssueInput[],
   ): IssueLivenessFinding | null {
     if (reviewIssue.status !== "in_review") return null;
-    if (hasExplicitWaitingPath(reviewIssue)) return null;
+    const disposition = canonicalDisposition(reviewIssue);
+    if (disposition.kind !== "invalid") return null;
 
     const ownerCandidates = ownerCandidatesForRecoveryIssue(reviewIssue, input.agents, agentsById, {
       includeStalledAssignee: true,
@@ -387,9 +459,8 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
 
     const participant = reviewIssue.executionState?.currentParticipant;
     const participantAgentId = readPrincipalAgentId(participant);
-    if (participantAgentId) {
+    if (participantAgentId && disposition.reason === "invalid_review_participant") {
       const participantAgent = agentsById.get(participantAgentId);
-      if (isInvokableAgent(participantAgent) && participantAgent?.companyId === reviewIssue.companyId) return null;
 
       return finding({
         issue: source,
@@ -407,9 +478,7 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
       });
     }
 
-    if (principalIsResolvableUser(participant)) return null;
-
-    if (reviewIssue.executionState) {
+    if (disposition.reason === "invalid_review_participant") {
       return finding({
         issue: source,
         state: "invalid_review_participant",
@@ -423,7 +492,7 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
       });
     }
 
-    if (!reviewIssue.assigneeAgentId || reviewIssue.assigneeUserId) return null;
+    if (disposition.reason !== "in_review_without_action_path") return null;
 
     return finding({
       issue: source,
@@ -447,6 +516,7 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
     const ownerCandidates = ownerCandidatesForRecoveryIssue(blocker, input.agents, agentsById, {
       includeStalledAssignee: true,
     });
+    const disposition = canonicalDisposition(blocker);
 
     if (blocker.status === "cancelled") {
       return finding({
@@ -463,13 +533,21 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
       });
     }
 
-    if (hasExplicitWaitingPath(blocker)) return null;
+    if (
+      disposition.kind === "waiting" ||
+      disposition.kind === "live" ||
+      disposition.kind === "dispatchable" ||
+      disposition.kind === "agent_continuable" ||
+      disposition.kind === "recoverable_by_control_plane"
+    ) {
+      return null;
+    }
 
     if (blocker.status === "in_review") {
       return reviewFinding(source, blocker, dependencyPath);
     }
 
-    if (!blocker.assigneeAgentId && !blocker.assigneeUserId) {
+    if (disposition.kind === "resting" && !blocker.assigneeAgentId && !blocker.assigneeUserId) {
       return finding({
         issue: source,
         state: "blocked_by_unassigned_issue",
@@ -484,10 +562,12 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
       });
     }
 
-    if (!blocker.assigneeAgentId) return null;
-
-    const blockerAgent = agentsById.get(blocker.assigneeAgentId);
-    if (!blockerAgent || blockerAgent.companyId !== source.companyId || BLOCKING_AGENT_STATUSES.has(blockerAgent.status)) {
+    const blockerAgent = blocker.assigneeAgentId ? agentsById.get(blocker.assigneeAgentId) : null;
+    if (
+      disposition.kind === "human_escalation_required" &&
+      blocker.assigneeAgentId &&
+      (!blockerAgent || blockerAgent.companyId !== source.companyId || BLOCKING_AGENT_STATUSES.has(blockerAgent.status))
+    ) {
       return finding({
         issue: source,
         state: "blocked_by_uninvokable_assignee",

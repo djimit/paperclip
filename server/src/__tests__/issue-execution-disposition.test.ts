@@ -135,6 +135,20 @@ describe("issue execution disposition classifier", () => {
       { kind: "agent_continuable", continuationAttempt: 0, maxAttempts: 2 },
     ],
     [
+      "row 15b low-progress terminal run is continuable",
+      state({
+        issue: { status: "in_progress" },
+        latestRun: {
+          latestRunStatus: "succeeded",
+          livenessState: "plan_only",
+          nextAction: "none",
+          continuationAttempt: 0,
+          maxContinuationAttempts: 2,
+        },
+      }),
+      { kind: "agent_continuable", continuationAttempt: 0, maxAttempts: 2 },
+    ],
+    [
       "row 16 ambiguous successful progress escalates",
       state({
         issue: { status: "in_progress" },
@@ -228,6 +242,14 @@ describe("issue execution disposition classifier", () => {
       "row 26 recovery issue failure escalates to recovery owner",
       state({
         issue: { status: "in_progress", originKind: "stranded_issue_recovery" },
+        latestRun: { latestRunStatus: "failed", recoveryAttemptRemaining: true },
+      }),
+      { kind: "human_escalation_required", owner: "recovery_owner" },
+    ],
+    [
+      "row 27 todo recovery issue failure escalates in place",
+      state({
+        issue: { status: "todo", originKind: "stranded_issue_recovery" },
         latestRun: { latestRunStatus: "failed", recoveryAttemptRemaining: true },
       }),
       { kind: "human_escalation_required", owner: "recovery_owner" },

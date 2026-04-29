@@ -2,6 +2,7 @@ import type {
   AgentStatus,
   IssueOriginKind,
   IssueStatus,
+  RunLivenessState,
 } from "@paperclipai/shared";
 import type {
   IssueExecutionDisposition,
@@ -19,12 +20,7 @@ export type IssueExecutionRunStatus =
   | "failed"
   | "timed_out"
   | "cancelled";
-export type IssueExecutionRunLivenessState =
-  | "advanced"
-  | "plan_only"
-  | "empty_response"
-  | "no_progress"
-  | "unknown";
+export type IssueExecutionRunLivenessState = RunLivenessState | "unknown";
 export type IssueExecutionNextActionState =
   | "runnable"
   | "manager_review"
@@ -156,17 +152,26 @@ function runFailed(run: IssueExecutionRunEvidence | null | undefined) {
 function hasRunnableContinuation(run: IssueExecutionRunEvidence | null | undefined) {
   const attempt = run?.continuationAttempt ?? 0;
   const maxAttempts = run?.maxContinuationAttempts ?? 2;
+  const livenessState = run?.livenessState ?? null;
+  const actionableLowProgressState = livenessState === "plan_only" || livenessState === "empty_response";
+  const runnableFollowupState =
+    (livenessState === "advanced" || livenessState === "needs_followup") &&
+    run?.nextAction === "runnable";
   return (
     run?.latestRunStatus === "succeeded" &&
-    run.livenessState === "advanced" &&
-    run.nextAction === "runnable" &&
+    (actionableLowProgressState || runnableFollowupState) &&
     attempt < maxAttempts
   );
 }
 
 function hasExhaustedOrAmbiguousContinuation(run: IssueExecutionRunEvidence | null | undefined) {
   if (run?.latestRunStatus !== "succeeded") return false;
-  if (run.livenessState !== "advanced") return true;
+  if (run.livenessState === "completed") return true;
+  if (run.livenessState === "blocked" || run.livenessState === "failed") return true;
+  if (run.livenessState === "plan_only" || run.livenessState === "empty_response") {
+    return (run.continuationAttempt ?? 0) >= (run.maxContinuationAttempts ?? 2);
+  }
+  if (run.livenessState !== "advanced" && run.livenessState !== "needs_followup") return true;
   if (run.nextAction !== "runnable") return true;
   return (run.continuationAttempt ?? 0) >= (run.maxContinuationAttempts ?? 2);
 }
@@ -194,6 +199,13 @@ function classifyBlockedIssue(
   input: IssueExecutionStateVector,
   seen: Set<string>,
 ): IssueExecutionDisposition {
+  if (isRecoveryIssue(input.issue) && (hasAgentOwner(input.issue) || hasHumanOwner(input.issue))) {
+    return { kind: "waiting", path: "external_owner_action" };
+  }
+
+  const path = waitingPath(input.issue, input.waits);
+  if (path) return { kind: "waiting", path };
+
   const blockers = input.blockers ?? [];
   if (blockers.length > 0) {
     for (const blocker of blockers) {
@@ -221,9 +233,6 @@ function classifyBlockedIssue(
 
     return { kind: "waiting", path: "blocker_chain" };
   }
-
-  const path = waitingPath(input.issue, input.waits);
-  if (path) return { kind: "waiting", path };
 
   return invalid(
     "blocked_without_action_path",
@@ -266,14 +275,16 @@ export function classifyIssueExecutionDisposition(
   }
   if (status === "blocked") return classifyBlockedIssue(input, seen);
   if (hasHumanOwner(issue)) return { kind: "waiting", path: "human_owner" };
-  if (!hasAgentOwner(issue)) return { kind: "resting" };
   if (path) return { kind: "live", path };
-
-  if (!agentInvokable) {
-    return { kind: "human_escalation_required", owner: budgetBlocked ? "board" : "manager" };
-  }
+  if (!hasAgentOwner(issue)) return { kind: "resting" };
 
   if (status === "todo") {
+    if (isRecoveryIssue(issue) && runFailed(input.latestRun)) {
+      return { kind: "human_escalation_required", owner: "recovery_owner" };
+    }
+    if (!agentInvokable) {
+      return { kind: "human_escalation_required", owner: budgetBlocked ? "board" : "manager" };
+    }
     if (runFailed(input.latestRun) && input.latestRun?.recoveryAttemptRemaining !== false) {
       return { kind: "recoverable_by_control_plane", recovery: "dispatch" };
     }
@@ -287,6 +298,9 @@ export function classifyIssueExecutionDisposition(
   }
 
   if (status === "in_progress") {
+    if (!agentInvokable) {
+      return { kind: "human_escalation_required", owner: budgetBlocked ? "board" : "manager" };
+    }
     if (isRecoveryIssue(issue) && runFailed(input.latestRun)) {
       return { kind: "human_escalation_required", owner: "recovery_owner" };
     }

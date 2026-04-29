@@ -6,6 +6,7 @@ import {
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   type IssueGraphLivenessAutoRecoveryPreview,
   type IssueGraphLivenessAutoRecoveryPreviewItem,
+  type IssueStatus,
   type RunLivenessState,
 } from "@paperclipai/shared";
 import {
@@ -56,6 +57,11 @@ import {
   findExistingRunLivenessContinuationWake,
   readContinuationAttempt,
 } from "./run-liveness-continuations.js";
+import {
+  classifyIssueExecutionDisposition,
+  type IssueExecutionRunLivenessState,
+  type IssueExecutionRunStatus,
+} from "../issue-execution-disposition.js";
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
@@ -479,14 +485,47 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     issue: typeof issues.$inferSelect,
     latestRun: LatestIssueRun,
   ): Promise<PostRunIssueDisposition> {
-    if (issue.status === "done" || issue.status === "cancelled") return "terminal";
-    if (await hasActiveExecutionPath(issue.companyId, issue.id)) return "explicitly_live";
-    if (await hasExplicitWaitingPath(issue)) return "explicitly_waiting";
-    if (latestRun && EXECUTION_PATH_HEARTBEAT_RUN_STATUSES.includes(
-      latestRun.status as (typeof EXECUTION_PATH_HEARTBEAT_RUN_STATUSES)[number],
-    )) {
-      return "explicitly_live";
-    }
+    const [activePath, explicitWait, agent, budgetBlocked] = await Promise.all([
+      hasActiveExecutionPath(issue.companyId, issue.id),
+      hasExplicitWaitingPath(issue),
+      issue.assigneeAgentId ? getAgent(issue.assigneeAgentId) : Promise.resolve(null),
+      issue.assigneeAgentId ? isInvocationBudgetBlocked(issue, issue.assigneeAgentId) : Promise.resolve(false),
+    ]);
+    const activeRunFromLatest = Boolean(
+      latestRun &&
+      EXECUTION_PATH_HEARTBEAT_RUN_STATUSES.includes(
+        latestRun.status as (typeof EXECUTION_PATH_HEARTBEAT_RUN_STATUSES)[number],
+      ),
+    );
+    const disposition = classifyIssueExecutionDisposition({
+      issue: {
+        id: issue.id,
+        status: issue.status as IssueStatus,
+        assigneeAgentId: issue.assigneeAgentId,
+        assigneeUserId: issue.assigneeUserId,
+        originKind: issue.originKind,
+      },
+      agent,
+      execution: {
+        activeRun: activePath || activeRunFromLatest,
+      },
+      waits: {
+        openRecoveryIssue: explicitWait,
+      },
+      latestRun: latestRun
+        ? {
+          latestRunStatus: latestRun.status as IssueExecutionRunStatus,
+          livenessState: latestRun.livenessState as IssueExecutionRunLivenessState | null,
+          nextAction: latestRun.nextAction ? "runnable" : "none",
+          continuationAttempt: latestRun.continuationAttempt,
+        }
+        : null,
+      gates: { budgetBlocked },
+    });
+
+    if (disposition.kind === "terminal") return "terminal";
+    if (disposition.kind === "live") return "explicitly_live";
+    if (disposition.kind === "waiting") return "explicitly_waiting";
     return "invalid";
   }
 
