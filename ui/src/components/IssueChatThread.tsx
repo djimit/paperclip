@@ -36,6 +36,7 @@ import {
 } from "@tanstack/react-virtual";
 import type {
   Agent,
+  Approval,
   FeedbackDataSharingPreference,
   FeedbackVote,
   FeedbackVoteValue,
@@ -252,8 +253,11 @@ interface IssueChatComposerProps {
 }
 
 interface IssueChatThreadProps {
+  issueId?: string | null;
+  issueIdentifier?: string | null;
   comments: IssueChatComment[];
   interactions?: IssueThreadInteraction[];
+  approvals?: Approval[];
   feedbackVotes?: FeedbackVote[];
   feedbackDataSharingPreference?: FeedbackDataSharingPreference;
   feedbackTermsUrl?: string | null;
@@ -2947,8 +2951,11 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 });
 
 export function IssueChatThread({
+  issueId = null,
+  issueIdentifier = null,
   comments,
   interactions = [],
+  approvals = [],
   feedbackVotes = [],
   feedbackDataSharingPreference = "prompt",
   feedbackTermsUrl = null,
@@ -3514,9 +3521,16 @@ export function IssueChatThread({
               {showComposer ? (
                 <div data-testid="issue-chat-thread-notices" className="space-y-2">
                   <IssueBlockedNotice
+                    issueId={issueId}
+                    issueIdentifier={issueIdentifier}
                     issueStatus={issueStatus}
                     blockers={unresolvedBlockers}
                     blockerAttention={blockerAttention}
+                    interactions={interactions}
+                    approvals={approvals}
+                    agentMap={agentMap}
+                    userLabelMap={userLabelMap}
+                    currentUserId={currentUserId}
                   />
                   <IssueAssigneePausedNotice agent={assignedAgent} />
                 </div>

@@ -27,6 +27,7 @@ const mockIssuesApi = vi.hoisted(() => ({
   uploadAttachment: vi.fn(),
   deleteAttachment: vi.fn(),
   upsertDocument: vi.fn(),
+  listApprovals: vi.fn(),
 }));
 
 const mockActivityApi = vi.hoisted(() => ({
@@ -782,6 +783,7 @@ describe("IssueDetail", () => {
     mockIssuesApi.markRead.mockResolvedValue({ id: "issue-1", lastReadAt: new Date().toISOString() });
     mockIssuesApi.getTreeControlState.mockResolvedValue({ activePauseHold: null });
     mockIssuesApi.listTreeHolds.mockResolvedValue([]);
+    mockIssuesApi.listApprovals.mockResolvedValue([]);
     mockActivityApi.forIssue.mockResolvedValue([]);
     mockActivityApi.runsForIssue.mockResolvedValue([]);
     mockHeartbeatsApi.liveRunsForIssue.mockResolvedValue([]);
@@ -1173,8 +1175,9 @@ describe("IssueDetail", () => {
         </QueryClientProvider>,
       );
     });
-    await flushReact();
-    await flushReact();
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Paused by board.");
+    });
 
     expect(container.textContent).toContain("Paused by board.");
     expect(container.textContent).toContain("in_review");

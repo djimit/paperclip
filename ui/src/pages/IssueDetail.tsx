@@ -569,6 +569,7 @@ function InboxMobileToolbar({
 
 type IssueDetailChatTabProps = {
   issueId: string;
+  issueIdentifier: string | null;
   companyId: string;
   projectId: string | null;
   issueStatus: Issue["status"];
@@ -625,6 +626,7 @@ type IssueDetailChatTabProps = {
 
 const IssueDetailChatTab = memo(function IssueDetailChatTab({
   issueId,
+  issueIdentifier,
   companyId,
   projectId,
   issueStatus,
@@ -699,8 +701,14 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
     refetchInterval: hasLiveRuns ? 5000 : false,
     placeholderData: keepPreviousDataForSameQueryTail<RunForIssue[]>(issueId),
   });
+  const { data: linkedApprovals } = useQuery({
+    queryKey: queryKeys.issues.approvals(issueId),
+    queryFn: () => issuesApi.listApprovals(issueId),
+    placeholderData: keepPreviousDataForSameQueryTail<Awaited<ReturnType<typeof issuesApi.listApprovals>>>(issueId),
+  });
   const resolvedActivity = activity ?? [];
   const resolvedLinkedRuns = linkedRuns ?? [];
+  const resolvedLinkedApprovals = linkedApprovals ?? [];
 
   const runningIssueRun = useMemo(
     () => resolveRunningIssueRun(resolvedActiveRun, resolvedLiveRuns),
@@ -818,8 +826,11 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
       ) : null}
       <IssueChatThread
         composerRef={composerRef}
+        issueId={issueId}
+        issueIdentifier={issueIdentifier}
         comments={commentsWithRunMeta}
         interactions={interactions}
+        approvals={resolvedLinkedApprovals}
         feedbackVotes={feedbackVotes}
         feedbackDataSharingPreference={feedbackDataSharingPreference}
         feedbackTermsUrl={feedbackTermsUrl}
@@ -3556,6 +3567,7 @@ export function IssueDetail() {
           {detailTab === "chat" ? (
             <IssueDetailChatTab
               issueId={issue.id}
+              issueIdentifier={issue.identifier ?? null}
               companyId={issue.companyId}
               projectId={issue.projectId ?? null}
               issueStatus={issue.status}
