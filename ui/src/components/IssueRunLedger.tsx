@@ -460,6 +460,7 @@ export function IssueRunLedgerContent({
     [ledgerRuns],
   );
   const children = childIssueSummary(childIssues);
+  const canRenderActivityEvents = Boolean(renderActivityEvent);
   const feedItems = useMemo<LedgerFeedItem[]>(() => {
     const items: LedgerFeedItem[] = [];
     for (const run of ledgerRuns) {
@@ -470,7 +471,7 @@ export function IssueRunLedgerContent({
         run,
       });
     }
-    if (renderActivityEvent) {
+    if (canRenderActivityEvents) {
       for (const event of activityEvents ?? []) {
         items.push({
           kind: "activity",
@@ -489,7 +490,7 @@ export function IssueRunLedgerContent({
       if (a.kind !== b.kind) return a.kind === "run" ? -1 : 1;
       return b.id.localeCompare(a.id);
     });
-  }, [activityEvents, ledgerRuns, renderActivityEvent]);
+  }, [activityEvents, canRenderActivityEvents, ledgerRuns]);
 
   return (
     <section className="space-y-3" aria-label="Issue run ledger">
