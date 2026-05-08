@@ -109,7 +109,7 @@ export function buildLimitRange(input: BuildLimitRangeInput): V1LimitRange {
       limits: [
         {
           type: "Container",
-          default: o.default,
+          _default: o.default,
           defaultRequest: o.defaultRequest,
           max: o.max,
         },
