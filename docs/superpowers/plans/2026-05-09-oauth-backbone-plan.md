@@ -23,6 +23,12 @@
 - The migration number `0082` assumes this branch lands before any other migration-bearing PR. If M3b (`0085`) or M3a (`0084`) merge first, **rename `0082_…sql` to the next available number** before pushing.
 - The in-memory rate limiter in Task 8 will be replaced by M3b's `createSlidingWindowLimiter` once M3b merges; the plan includes a follow-up cleanup task (Task 53).
 
+## Plan amendments (2026-05-09)
+
+- **Task 2 SUPERSEDED.** While implementing T1, we discovered `company_secrets.kind` does not exist in this codebase — the table discriminates secrets via the `provider` column (encryption provider, e.g. `local_encrypted`) plus the implicit shape of the `material` jsonb on `company_secret_versions`. OAuth secrets do not need a separate `kind` value because the FKs from `oauth_connections.access_token_secret_id` / `.refresh_token_secret_id` already discriminate them. Task 2 is a no-op; **skip it**. Spec §9.4 has been amended accordingly.
+- **Tasks 20 and 23 follow-up.** Where the plan's draft code shows `secretService.persistSecret({ kind: "oauth_access_token", ... })`, the actual call uses the existing secret-creation API on `secretService` (likely `createCompanySecret(...)` plus `appendVersion(...)`). The implementer of these tasks must inspect `server/src/services/secrets.ts` for the real API and pass only the parameters that exist (no `kind`). The OAuth backbone reuses the existing secret pipeline as-is.
+- **`initiated_by_user_id` is `text`, not `uuid`.** Better Auth uses string user IDs in this codebase; the column type was adapted in T1. Downstream tasks treating `initiatedByUserId` must use `string`.
+
 ---
 
 ## File Structure

@@ -771,7 +771,7 @@ Every OAuth code path emits a structured pino log line with: `oauth.provider`, `
 ### 9.4 Token storage at rest
 
 - Stored as `company_secret_versions` rows, encrypted via the deployment's `SecretProvider`.
-- New `company_secrets.kind` values: `oauth_access_token`, `oauth_refresh_token`.
+- **Discrimination via FK, not via a `kind` column.** The `oauth_connections.access_token_secret_id` and `.refresh_token_secret_id` foreign keys are the source of truth for which `company_secrets` rows hold OAuth tokens. (The earlier plan to extend a `company_secrets.kind` column was dropped during implementation: that column does not exist in this codebase, and FK-based discrimination is sufficient. Audit queries like "all OAuth access tokens last rotated > 30 days ago" join through `oauth_connections`.)
 - Refresh writes a *new version* (atomic rollback on failure; preserves short history).
 
 ### 9.5 Token in transit
