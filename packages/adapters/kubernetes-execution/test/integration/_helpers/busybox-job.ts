@@ -23,6 +23,28 @@ export interface BuildBusyboxTestJobInput {
   /** Override the init container's command. Defaults to a no-op echo. */
   initScript?: string;
   activeDeadlineSeconds?: number;
+  /**
+   * Override the main container's image. Defaults to `busybox:1.36`. Used by
+   * the failure-modes test to inject a deliberately bogus image for the
+   * ImagePullBackOff case.
+   */
+  image?: string;
+  /**
+   * Override the init container's image. Defaults to `busybox:1.36`. Same
+   * rationale as `image` — lets the failure-modes test set a bogus init image
+   * if needed.
+   */
+  initImage?: string;
+  /**
+   * Override the main container's `resources.limits.memory`. Defaults to
+   * `64Mi`. Used by the OOMKilled test to drop the limit low enough that an
+   * intentional allocation overshoots it.
+   */
+  memoryLimit?: string;
+  /**
+   * Override the main container's `resources.limits.cpu`. Defaults to `200m`.
+   */
+  cpuLimit?: string;
 }
 
 export function buildBusyboxTestJob(input: BuildBusyboxTestJobInput): V1Job {
@@ -64,7 +86,7 @@ export function buildBusyboxTestJob(input: BuildBusyboxTestJobInput): V1Job {
           securityContext: restrictedSecurity,
           initContainers: [{
             name: "init",
-            image: "busybox:1.36",
+            image: input.initImage ?? "busybox:1.36",
             command: ["sh", "-c", input.initScript ?? "ls -la /workspace; echo init-done"],
             volumeMounts: [
               { name: "workspace", mountPath: "/workspace" },
@@ -78,7 +100,7 @@ export function buildBusyboxTestJob(input: BuildBusyboxTestJobInput): V1Job {
           }],
           containers: [{
             name: "agent",
-            image: "busybox:1.36",
+            image: input.image ?? "busybox:1.36",
             command: ["sh", "-c", input.agentScript ?? "echo hello from agent; sleep 1; exit 0"],
             volumeMounts: [
               { name: "workspace", mountPath: "/workspace" },
@@ -89,7 +111,10 @@ export function buildBusyboxTestJob(input: BuildBusyboxTestJobInput): V1Job {
             securityContext: containerSecurity,
             resources: {
               requests: { cpu: "50m", memory: "32Mi" },
-              limits: { cpu: "200m", memory: "64Mi" },
+              limits: {
+                cpu: input.cpuLimit ?? "200m",
+                memory: input.memoryLimit ?? "64Mi",
+              },
             },
           }],
           volumes: [
