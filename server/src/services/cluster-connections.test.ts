@@ -73,4 +73,34 @@ describe("clusterConnectionsService", () => {
     expect(resolved?.kind).toBe("in-cluster");
     expect(resolved?.kubeconfigYaml).toBeUndefined();
   });
+
+  it("surfaces imageAllowlist on read and accepts it on update", async () => {
+    const svc = clusterConnectionsService(db, {
+      resolveSecret: async (ref) => `fake-kubeconfig-yaml:${ref.provider}:${ref.name}`,
+    });
+    const created = await svc.create({
+      label: "img-allowlist-test",
+      kind: "in-cluster",
+      capabilities: { cilium: false, storageClass: "standard", architectures: ["amd64"] },
+      createdBy: "sys",
+    });
+    expect(created.imageAllowlist).toEqual([]);
+
+    await svc.update(created.id, {
+      imageAllowlist: ["ghcr.io/paperclipai/", "internal.acme.com/agents/"],
+    });
+    const fetched = await svc.get(created.id);
+    expect(fetched?.imageAllowlist).toEqual([
+      "ghcr.io/paperclipai/",
+      "internal.acme.com/agents/",
+    ]);
+
+    // Omitted on a subsequent update preserves the existing value.
+    await svc.update(created.id, { label: "renamed" });
+    const after = await svc.get(created.id);
+    expect(after?.imageAllowlist).toEqual([
+      "ghcr.io/paperclipai/",
+      "internal.acme.com/agents/",
+    ]);
+  });
 });

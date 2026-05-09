@@ -17,6 +17,8 @@ export interface ResolvedClusterConnection {
   paperclipPublicUrl?: string | null;
   imageRegistry?: string | null;
   allowAgentImageOverride: boolean;
+  /** Per-cluster image allow-list: image must string-start-with one of these prefixes. Empty = preserve M2 behavior (allowAgentImageOverride boolean alone governs). */
+  imageAllowlist: string[];
   capabilities: ClusterCapabilities;
 }
 

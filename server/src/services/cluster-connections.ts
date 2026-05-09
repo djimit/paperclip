@@ -14,6 +14,7 @@ export interface ClusterConnectionRow {
   paperclipPublicUrl: string | null;
   imageRegistry: string | null;
   allowAgentImageOverride: boolean;
+  imageAllowlist: string[];
   createdAt: Date;
   createdBy: string;
 }
@@ -35,10 +36,23 @@ export interface ClusterConnectionsServiceDeps {
   resolveSecret: (ref: { provider: string; name: string }) => Promise<string>;
 }
 
+export interface UpdateClusterConnectionInput {
+  label?: string;
+  kubeconfigSecretRef?: { provider: string; name: string } | null;
+  apiServerUrl?: string | null;
+  defaultNamespacePrefix?: string;
+  capabilities?: ClusterCapabilities;
+  paperclipPublicUrl?: string | null;
+  imageRegistry?: string | null;
+  allowAgentImageOverride?: boolean;
+  imageAllowlist?: string[];
+}
+
 export interface ClusterConnectionsService {
   create(input: CreateClusterConnectionInput): Promise<ClusterConnectionRow>;
   list(): Promise<ClusterConnectionRow[]>;
   get(id: string): Promise<ClusterConnectionRow | null>;
+  update(id: string, input: UpdateClusterConnectionInput): Promise<ClusterConnectionRow | null>;
   delete(id: string): Promise<void>;
   resolve(id: string): Promise<ResolvedClusterConnection | null>;
 }
@@ -78,6 +92,21 @@ export function clusterConnectionsService(db: Db, deps: ClusterConnectionsServic
       return row ? mapRow(row) : null;
     },
 
+    async update(id, input) {
+      const [row] = await db.update(clusterConnections).set({
+        ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(input.kubeconfigSecretRef !== undefined ? { kubeconfigSecretRef: input.kubeconfigSecretRef } : {}),
+        ...(input.apiServerUrl !== undefined ? { apiServerUrl: input.apiServerUrl } : {}),
+        ...(input.defaultNamespacePrefix !== undefined ? { defaultNamespacePrefix: input.defaultNamespacePrefix } : {}),
+        ...(input.capabilities !== undefined ? { capabilities: input.capabilities } : {}),
+        ...(input.paperclipPublicUrl !== undefined ? { paperclipPublicUrl: input.paperclipPublicUrl } : {}),
+        ...(input.imageRegistry !== undefined ? { imageRegistry: input.imageRegistry } : {}),
+        ...(input.allowAgentImageOverride !== undefined ? { allowAgentImageOverride: input.allowAgentImageOverride ? "true" : "false" } : {}),
+        ...(input.imageAllowlist !== undefined ? { imageAllowlist: input.imageAllowlist } : {}),
+      }).where(eq(clusterConnections.id, id)).returning();
+      return row ? mapRow(row) : null;
+    },
+
     async delete(id) {
       await db.delete(clusterConnections).where(eq(clusterConnections.id, id));
     },
@@ -99,6 +128,7 @@ export function clusterConnectionsService(db: Db, deps: ClusterConnectionsServic
         paperclipPublicUrl: row.paperclipPublicUrl,
         imageRegistry: row.imageRegistry,
         allowAgentImageOverride: row.allowAgentImageOverride,
+        imageAllowlist: row.imageAllowlist ?? [],
         capabilities: row.capabilities,
       };
     },
@@ -117,6 +147,7 @@ function mapRow(row: typeof clusterConnections.$inferSelect): ClusterConnectionR
     paperclipPublicUrl: row.paperclipPublicUrl ?? null,
     imageRegistry: row.imageRegistry ?? null,
     allowAgentImageOverride: row.allowAgentImageOverride === "true",
+    imageAllowlist: row.imageAllowlist ?? [],
     createdAt: row.createdAt,
     createdBy: row.createdBy,
   };
