@@ -52,6 +52,8 @@ import { createExecutionTargetRegistry } from "./adapters/execution-target-regis
 import { registerKubernetesExecutionTargetDriver } from "./adapters/execution-targets/kubernetes.js";
 import { clusterConnectionsService } from "./services/cluster-connections.js";
 import { getSecretProvider } from "./secrets/provider-registry.js";
+import { bootstrapTokensService } from "./services/bootstrap-tokens.js";
+import { setKubernetesExecutionDispatcher } from "@paperclipai/adapter-claude-local/server";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -624,9 +626,54 @@ export async function startServer(): Promise<StartedServer> {
     },
   });
   const executionTargetRegistry = createExecutionTargetRegistry();
-  registerKubernetesExecutionTargetDriver(executionTargetRegistry, {
+  const bootstrapTokens = bootstrapTokensService(db as any);
+  const k8sDriver = registerKubernetesExecutionTargetDriver(executionTargetRegistry, {
     resolveConnection: (id) => clusterConnections.resolve(id),
+    bootstrapTokenMinter: {
+      mint: async (req) => {
+        const minted = await bootstrapTokens.mint({
+          agentId: req.agentId,
+          companyId: req.companyId,
+          runId: req.runId,
+          jobUid: req.jobUid,
+          ttlSeconds: req.ttlSeconds ?? 600,
+        });
+        return { token: minted.token, expiresAt: minted.expiresAt };
+      },
+    },
+    // Per-run context resolver — looks up the company name to derive a
+    // namespace-safe slug, then fills in image/init image and other defaults.
+    // M2 Tasks 25–27 will replace the hard-coded image tags with real
+    // operator-controlled cluster policy lookups (image pinning per cluster
+    // connection); for now we point at the freshly built v1 multi-arch tags.
+    resolveRunContext: async ({ agent, target, connection }) => {
+      const [company] = await (db as any)
+        .select({ name: companies.name })
+        .from(companies)
+        .where(eq(companies.id, agent.companyId))
+        .limit(1);
+      if (!company) return null;
+      const companySlug = (company.name as string)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 32) || "company";
+      const imageRegistry = connection.imageRegistry?.replace(/\/+$/, "") ?? "ghcr.io/paperclipai";
+      return {
+        companySlug,
+        image: target.imageOverride ?? `${imageRegistry}/agent-runtime-claude:v1`,
+        initImage: `${imageRegistry}/agent-runtime-base:v1`,
+        paperclipPublicUrl: connection.paperclipPublicUrl ?? process.env.PAPERCLIP_API_URL ?? "",
+        workspaceStrategyJson: JSON.stringify({ kind: "ephemeral" }),
+        workspaceStrategyKey: "ephemeral",
+      };
+    },
   });
+
+  // Register the Kubernetes execution dispatcher with adapters that opt into
+  // routing kubernetes targets through the cluster driver. For M2, only
+  // claude_local is wired; codex/gemini/etc. land in M3.
+  setKubernetesExecutionDispatcher(({ ctx, target }) => k8sDriver.run({ ctx, target }));
 
   const app = await createApp(db as any, {
     uiMode,
