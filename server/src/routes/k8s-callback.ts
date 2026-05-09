@@ -15,6 +15,9 @@ import {
   createWorkspaceGitCredentialsRoute,
   type IssueGitCredentialsResult,
 } from "./workspace-git-credentials.js";
+import type { SlidingWindowLimiter } from "./_limiter-types.js";
+import { createRedisSlidingWindowLimiter } from "./_limiter-redis.js";
+import { createClient as createRedisClient } from "redis";
 
 const RUN_JWT_TTL_SECONDS = 3600;
 
@@ -26,11 +29,7 @@ const RUN_JWT_TTL_SECONDS = 3600;
 // Without periodic eviction the `hits` Map would grow unboundedly: keys for
 // run IDs and client IPs that were active once but never again would persist
 // for the lifetime of the process. We sweep idle keys every windowMs.
-export interface SlidingWindowLimiter {
-  consume(key: string): { allowed: boolean; retryAfterSeconds: number };
-  /** Stop the eviction interval. Tests must call this to let the process exit. */
-  stop(): void;
-}
+export type { SlidingWindowLimiter } from "./_limiter-types.js";
 
 function createSlidingWindowLimiter(opts: { windowMs: number; max: number }): SlidingWindowLimiter {
   const hits = new Map<string, number[]>();
@@ -158,7 +157,7 @@ export interface K8sCallbackRoutesOptions {
   runJwt?: RunJwtService;
 }
 
-export function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOptions = {}) {
+export async function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOptions = {}) {
   const router = Router();
 
   const runJwt = options.runJwt ?? (() => {
@@ -212,13 +211,40 @@ export function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOptions = {}
     },
   });
 
-  // Rate limiters per spec note in the task plan.
-  const exchangeLimiter = createSlidingWindowLimiter({ windowMs: 60_000, max: 10 });
-  const eventsLimiter = createSlidingWindowLimiter({ windowMs: 60_000, max: 1000 });
-  const gitCredsLimiter = createSlidingWindowLimiter({ windowMs: 60_000, max: 30 });
+  // Factory picks Redis-backed limiter when PAPERCLIP_REDIS_URL is set;
+  // otherwise falls back to in-memory (suitable for dev / single-replica).
+  // Production multi-replica deployments MUST configure Redis or the limits
+  // are per-process and each replica grants the full quota independently.
+  const redisUrl = process.env["PAPERCLIP_REDIS_URL"]?.trim();
+  let redisClient: Awaited<ReturnType<typeof createRedisClient>> | null = null;
+  if (redisUrl) {
+    redisClient = createRedisClient({ url: redisUrl });
+    redisClient.on("error", (err: unknown) => logger.error({ err }, "redis client error"));
+    await redisClient.connect();
+  } else {
+    logger.warn("PAPERCLIP_REDIS_URL not set; rate limits enforced per-process only");
+  }
+
+  const makeLimiter = (name: string, opts: { windowMs: number; max: number }): SlidingWindowLimiter => {
+    if (redisClient) {
+      const client = redisClient;
+      return createRedisSlidingWindowLimiter({
+        client: {
+          eval: (script, evalOpts) => client.eval(script, evalOpts) as Promise<unknown>,
+          quit: () => client.quit() as Promise<unknown>,
+        },
+        name, windowMs: opts.windowMs, max: opts.max,
+      });
+    }
+    return createSlidingWindowLimiter(opts);
+  };
+
+  const exchangeLimiter = makeLimiter("exchange", { windowMs: 60_000, max: 10 });
+  const eventsLimiter = makeLimiter("events", { windowMs: 60_000, max: 1000 });
+  const gitCredsLimiter = makeLimiter("gitcreds", { windowMs: 60_000, max: 30 });
 
   router.post("/agent-auth/exchange", async (req: Request, res: Response) => {
-    const limit = exchangeLimiter.consume(clientIp(req));
+    const limit = await exchangeLimiter.consume(clientIp(req));
     if (!limit.allowed) {
       res
         .status(429)
@@ -238,7 +264,7 @@ export function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOptions = {}
   router.post("/runs/:runId/events", async (req: Request, res: Response) => {
     const rawRunId = req.params.runId;
     const runId = typeof rawRunId === "string" ? rawRunId : "";
-    const limit = eventsLimiter.consume(`run:${runId}`);
+    const limit = await eventsLimiter.consume(`run:${runId}`);
     if (!limit.allowed) {
       res
         .status(429)
@@ -277,7 +303,7 @@ export function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOptions = {}
       const v = runJwt.verify(auth.slice("Bearer ".length));
       if (v.ok) key = `run:${v.claims.runId}`;
     }
-    const limit = gitCredsLimiter.consume(key);
+    const limit = await gitCredsLimiter.consume(key);
     if (!limit.allowed) {
       res
         .status(429)

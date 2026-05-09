@@ -289,7 +289,7 @@ export async function createApp(
   // K8s callback routes (agent-shim → server). Skipped if PAPERCLIP_RUN_JWT_SECRET
   // is unset so existing deployments without k8s execution continue to boot.
   if (process.env.PAPERCLIP_RUN_JWT_SECRET?.trim()) {
-    api.use(k8sCallbackRoutes(db));
+    api.use(await k8sCallbackRoutes(db));
   }
   api.use(
     accessRoutes(db, {
