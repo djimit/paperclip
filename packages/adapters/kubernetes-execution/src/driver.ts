@@ -56,6 +56,16 @@ export interface ResolveRunContextInput {
   agent: AdapterExecutionContext["agent"];
   target: AdapterKubernetesExecutionTarget;
   connection: ResolvedClusterConnection;
+  /**
+   * The runtime-resolved adapter config for this run (`ctx.config`). The
+   * server has already passed the persisted `agents.adapter_config` through
+   * `secretService.resolveAdapterConfigForRuntime`, so `config.env` (when
+   * present) is a flat `Record<string, string>` of provider env vars. The
+   * server uses this to populate `ResolvedRunContext.adapterEnv`; the driver
+   * then narrows that map to `getAdapterDefaults(adapterType).envKeys` before
+   * writing the per-Job Secret.
+   */
+  config: AdapterExecutionContext["config"];
 }
 
 export interface ResolvedRunContext {
@@ -286,6 +296,7 @@ export function createKubernetesExecutionDriver(deps: KubernetesDriverDeps): Kub
         agent: ctx.agent,
         target,
         connection,
+        config: ctx.config,
       });
       if (!runContext) {
         return {

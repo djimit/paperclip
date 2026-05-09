@@ -646,7 +646,7 @@ export async function startServer(): Promise<StartedServer> {
     // M2 Tasks 25–27 will replace the hard-coded image tags with real
     // operator-controlled cluster policy lookups (image pinning per cluster
     // connection); for now we point at the freshly built v1 multi-arch tags.
-    resolveRunContext: async ({ agent, target, connection }) => {
+    resolveRunContext: async ({ agent, target, connection, config }) => {
       const [company] = await (db as any)
         .select({ name: companies.name })
         .from(companies)
@@ -659,6 +659,22 @@ export async function startServer(): Promise<StartedServer> {
         .replace(/^-+|-+$/g, "")
         .slice(0, 32) || "company";
       const imageRegistry = connection.imageRegistry?.replace(/\/+$/, "") ?? "ghcr.io/paperclipai";
+      // Source the per-run provider env from the runtime-resolved adapter
+      // config. Heartbeat already calls secretService.resolveAdapterConfigForRuntime
+      // upstream of adapter.execute, so by the time we land here `config.env`
+      // is a flat Record<string, string> with secret refs materialized to
+      // their plaintext values. The driver narrows this map to
+      // getAdapterDefaults(adapterType).envKeys before writing the per-Job
+      // Secret, so even if the agent's adapterConfig.env contains additional
+      // user-defined keys only the registry-declared provider creds reach the
+      // pod (BOOTSTRAP_TOKEN is added unconditionally inside the driver).
+      const adapterEnv: Record<string, string> = {};
+      const rawEnv = (config as { env?: unknown }).env;
+      if (rawEnv && typeof rawEnv === "object" && !Array.isArray(rawEnv)) {
+        for (const [key, value] of Object.entries(rawEnv as Record<string, unknown>)) {
+          if (typeof value === "string") adapterEnv[key] = value;
+        }
+      }
       return {
         companySlug,
         image: target.imageOverride ?? `${imageRegistry}/agent-runtime-claude:v1`,
@@ -666,6 +682,7 @@ export async function startServer(): Promise<StartedServer> {
         paperclipPublicUrl: connection.paperclipPublicUrl ?? process.env.PAPERCLIP_API_URL ?? "",
         workspaceStrategyJson: JSON.stringify({ kind: "ephemeral" }),
         workspaceStrategyKey: "ephemeral",
+        adapterEnv,
       };
     },
   });

@@ -496,4 +496,47 @@ describe("KubernetesExecutionDriver.run()", () => {
     // BOOTSTRAP_TOKEN must always be present regardless of the envKeys filter.
     expect(secretData.BOOTSTRAP_TOKEN).toBe(b64("bst_x"));
   });
+
+  it("forwards ctx.config to resolveRunContext so the server can pluck adapterEnv", async () => {
+    // Greptile P1 regression guard: the server's resolveRunContext closure
+    // sources adapterEnv from the runtime-resolved adapter config. The driver
+    // must therefore pass ctx.config through to resolveRunContext so the
+    // server has access to it. Without this plumbing the per-Job Secret would
+    // contain only BOOTSTRAP_TOKEN and provider auth would fail in-pod.
+    const scenario: JobScenario = {
+      jobs: [
+        { metadata: { name: "j" }, status: { succeeded: 1 } } as V1Job,
+      ],
+      pod: {
+        metadata: { name: "pod-x" },
+        status: {
+          containerStatuses: [
+            { name: "agent", state: { terminated: { exitCode: 0 } } },
+          ],
+        },
+      } as V1Pod,
+    };
+    const { client } = buildFakeClient(scenario);
+    installFakeApiClient(client);
+
+    let receivedConfig: unknown = undefined;
+    const driver = createKubernetesExecutionDriver({
+      resolveConnection: async () => sampleConnection,
+      bootstrapTokenMinter: {
+        mint: async () => ({ token: "bst_y", expiresAt: new Date(Date.now() + 600_000) }),
+      },
+      resolveRunContext: async (input) => {
+        receivedConfig = input.config;
+        return baseRunContext;
+      },
+      pollIntervalMs: 5,
+    });
+
+    const ctx = makeCtx({
+      config: { env: { ANTHROPIC_API_KEY: "test-key" }, model: "claude" },
+    });
+    await driver.run({ ctx, target });
+
+    expect(receivedConfig).toEqual({ env: { ANTHROPIC_API_KEY: "test-key" }, model: "claude" });
+  });
 });
