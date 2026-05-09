@@ -288,8 +288,16 @@ export async function createApp(
   api.use(adapterRoutes());
   // K8s callback routes (agent-shim → server). Skipped if PAPERCLIP_RUN_JWT_SECRET
   // is unset so existing deployments without k8s execution continue to boot.
+  //
+  // The router exposes a `dispose()` hook to quit its Redis client; we surface
+  // it on `app.locals.disposeK8sCallback` so a future graceful-shutdown handler
+  // can drain it. Wiring it into the existing `process.once("exit")` collector
+  // is a follow-up — that collector is sync and `redis.quit()` returns a
+  // Promise, so doing it correctly needs `beforeExit` or an async drain loop.
   if (process.env.PAPERCLIP_RUN_JWT_SECRET?.trim()) {
-    api.use(await k8sCallbackRoutes(db));
+    const k8sRouter = await k8sCallbackRoutes(db);
+    api.use(k8sRouter);
+    (app.locals as Record<string, unknown>)["disposeK8sCallback"] = k8sRouter.dispose;
   }
   api.use(
     accessRoutes(db, {

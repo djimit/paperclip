@@ -92,4 +92,14 @@ describe("deriveNamespaceName", () => {
     expect(isValidDns1123Label(r)).toBe(true);
     expect(r).toMatch(/-[0-9a-z]{8}$/);
   });
+
+  it("guards against absurdly long prefixes by truncating prefix and emitting a placeholder slug", () => {
+    const r = deriveNamespaceName({
+      companySlug: "acme-corp",
+      companyId: "11111111-1111-1111-1111-111111111111",
+      prefix: "x".repeat(60),
+    });
+    expect(r.length).toBeLessThanOrEqual(63);
+    expect(isValidDns1123Label(r)).toBe(true);
+  });
 });

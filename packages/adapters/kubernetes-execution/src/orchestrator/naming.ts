@@ -39,6 +39,16 @@ export function deriveNamespaceName(input: DeriveNamespaceNameInput): string {
   // guard, which only blocked the failure rather than preventing collision.
   const suffix = `-${shortHash(companyId)}`;
   const room = MAX_LABEL - prefix.length - suffix.length;
-  const truncatedSlug = slug.slice(0, Math.max(1, room)).replace(/-+$/g, "");
+  if (room <= 0) {
+    // Pathological: caller passed an absurdly long prefix (> 53 chars) such
+    // that prefix + suffix already meets or exceeds MAX_LABEL. Truncate the
+    // prefix and replace the slug with a single placeholder character so the
+    // result still fits MAX_LABEL. The companyId hash remains the unique
+    // discriminator. This branch is defensive — operators using the default
+    // "paperclip-" prefix (10 chars) never hit it.
+    const safePrefixLen = Math.max(0, MAX_LABEL - suffix.length - 1);
+    return `${prefix.slice(0, safePrefixLen)}x${suffix}`;
+  }
+  const truncatedSlug = slug.slice(0, room).replace(/-+$/g, "") || "x";
   return `${prefix}${truncatedSlug}${suffix}`;
 }

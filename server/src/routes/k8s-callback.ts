@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type Response, type Router as RouterType } from "express";
 import type { Db } from "@paperclipai/db";
 import { clusterTenantPolicies, companySecrets, companySecretVersions, heartbeatRunEvents, heartbeatRuns } from "@paperclipai/db";
 import type { SecretProvider } from "@paperclipai/shared";
@@ -157,7 +157,17 @@ export interface K8sCallbackRoutesOptions {
   runJwt?: RunJwtService;
 }
 
-export async function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOptions = {}) {
+/**
+ * Express Router augmented with a `dispose()` hook so callers can quit the
+ * Redis client during graceful shutdown. `redis@4` keeps an internal reconnect
+ * timer that prevents a clean `process.exit` if the client is left open.
+ *
+ * Express routers are plain objects, so attaching a property is safe and the
+ * existing call site `api.use(await k8sCallbackRoutes(db))` continues to work.
+ */
+export type K8sCallbackRouter = RouterType & { dispose: () => Promise<void> };
+
+export async function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOptions = {}): Promise<K8sCallbackRouter> {
   const router = Router();
 
   const runJwt = options.runJwt ?? (() => {
@@ -218,9 +228,25 @@ export async function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOption
   const redisUrl = process.env["PAPERCLIP_REDIS_URL"]?.trim();
   let redisClient: Awaited<ReturnType<typeof createRedisClient>> | null = null;
   if (redisUrl) {
-    redisClient = createRedisClient({ url: redisUrl });
-    redisClient.on("error", (err: unknown) => logger.error({ err }, "redis client error"));
-    await redisClient.connect();
+    const client = createRedisClient({ url: redisUrl });
+    client.on("error", (err: unknown) => logger.error({ err }, "redis client error"));
+    try {
+      await client.connect();
+      redisClient = client;
+    } catch (err) {
+      // Fail-open: the in-memory limiter remains accurate per-replica even
+      // when Redis is unreachable at boot. We log a loud error so operators
+      // know cross-replica enforcement is silently downgraded. Without this
+      // catch, a Redis outage at startup would reject k8sCallbackRoutes()
+      // and prevent the agent-auth/exchange, run-events, and git-credentials
+      // routes from registering at all.
+      logger.error(
+        { err },
+        "Redis unreachable at startup; falling back to in-memory rate limiting (per-replica only). Multi-replica deployments will not enforce cross-replica limits until Redis recovers — restart the server after Redis is healthy to re-establish the cross-replica path.",
+      );
+      redisClient = null;
+      try { await client.quit(); } catch { /* best-effort cleanup */ }
+    }
   } else {
     logger.warn("PAPERCLIP_REDIS_URL not set; rate limits enforced per-process only");
   }
@@ -323,7 +349,18 @@ export async function k8sCallbackRoutes(db: Db, options: K8sCallbackRoutesOption
     }
   });
 
-  return router;
+  const disposable = router as K8sCallbackRouter;
+  disposable.dispose = async () => {
+    if (redisClient) {
+      try {
+        await redisClient.quit();
+      } catch (err) {
+        logger.warn({ err }, "redis quit() failed during k8sCallbackRoutes dispose");
+      }
+      redisClient = null;
+    }
+  };
+  return disposable;
 }
 
 class RunNotFoundError extends Error {
