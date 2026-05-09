@@ -292,6 +292,32 @@ export function createKubernetesExecutionDriver(deps: KubernetesDriverDeps): Kub
       const cancellation = buildRunCancellation(ctx);
       const { signal: cancelSignal } = cancellation;
 
+      // Image allow-list enforcement (M3b). Empty list preserves M2 behavior:
+      // the existing `allowAgentImageOverride` boolean (handled below) governs.
+      // Non-empty list requires both default + override to string-start-with
+      // one of the prefixes.
+      const allowlist = connection.imageAllowlist ?? [];
+      if (allowlist.length > 0) {
+        const matchesAllowlist = (img: string): boolean =>
+          allowlist.some((prefix) => img.startsWith(prefix));
+        if (!matchesAllowlist(runContext.image)) {
+          cancellation.dispose();
+          return {
+            exitCode: null, signal: null, timedOut: false,
+            errorCode: "image_not_allowed",
+            errorMessage: `Adapter image "${runContext.image}" not in cluster image_allowlist`,
+          };
+        }
+        if (target.imageOverride != null && !matchesAllowlist(target.imageOverride)) {
+          cancellation.dispose();
+          return {
+            exitCode: null, signal: null, timedOut: false,
+            errorCode: "image_not_allowed",
+            errorMessage: `Override image "${target.imageOverride}" not in cluster image_allowlist`,
+          };
+        }
+      }
+
       // 1. PVC (idempotent — reused across runs for the same agent).
       const pvc = buildAgentWorkspacePvc({
         namespace,

@@ -37,6 +37,7 @@ users:
 `,
   defaultNamespacePrefix: "paperclip-",
   allowAgentImageOverride: false,
+  imageAllowlist: [],
   capabilities: { cilium: false, storageClass: "standard", architectures: ["amd64"] },
 };
 
@@ -167,6 +168,62 @@ const baseRunContext = {
   workspaceStrategyJson: '{"kind":"git-clone","url":"https://github.com/acme/repo.git","ref":"main"}',
   workspaceStrategyKey: "git-clone",
 };
+
+// ---------------------------------------------------------------------------
+// makeFakeDriver helper
+// ---------------------------------------------------------------------------
+
+interface FakeDriverOptions {
+  /**
+   * Per-cluster image allow-list injected onto the resolved connection.
+   * Defaults to [] (empty = M2 behavior preserved).
+   */
+  connectionImageAllowlist?: string[];
+  /**
+   * The image that resolveRunContext returns as the default adapter image.
+   * Defaults to the same value as baseRunContext.image.
+   */
+  resolvedImage?: string;
+}
+
+function makeFakeDriver(opts: FakeDriverOptions = {}) {
+  const {
+    connectionImageAllowlist = [],
+    resolvedImage = baseRunContext.image,
+  } = opts;
+
+  // Build a fake connection with the requested allowlist.
+  const fakeConnection: ResolvedClusterConnection = {
+    ...sampleConnection,
+    imageAllowlist: connectionImageAllowlist,
+  };
+
+  // A minimal succeeding scenario so tests that reach job creation don't hang.
+  const scenario: JobScenario = {
+    jobs: [
+      { metadata: { name: "j" }, status: { succeeded: 1 } } as V1Job,
+    ],
+    pod: {
+      metadata: { name: "pod-x" },
+      status: {
+        containerStatuses: [
+          { name: "agent", state: { terminated: { exitCode: 0 } } },
+        ],
+      },
+    } as V1Pod,
+  };
+  const { client } = buildFakeClient(scenario);
+  installFakeApiClient(client);
+
+  return createKubernetesExecutionDriver({
+    resolveConnection: async () => fakeConnection,
+    bootstrapTokenMinter: {
+      mint: async () => ({ token: "bst_fake", expiresAt: new Date(Date.now() + 600_000) }),
+    },
+    resolveRunContext: async () => ({ ...baseRunContext, image: resolvedImage }),
+    pollIntervalMs: 5,
+  });
+}
 
 describe("KubernetesExecutionDriver.run()", () => {
   it("happy path: succeeded Job + exit 0 → exitCode 0", async () => {
@@ -330,5 +387,55 @@ describe("KubernetesExecutionDriver.run()", () => {
     for (const chunk of captured) {
       expect(chunk).not.toContain("bst_super_secret_value_long_enough");
     }
+  });
+
+  it("rejects a run when default adapter image is not in cluster allow-list", async () => {
+    const driver = makeFakeDriver({
+      connectionImageAllowlist: ["internal.acme.com/agents/"],
+      resolvedImage: "ghcr.io/paperclipai/agent-runtime-claude:v1",
+    });
+    const result = await driver.run({ ctx: makeCtx(), target: { clusterConnectionId: "c-1" } });
+    expect(result.errorCode).toBe("image_not_allowed");
+    expect(result.errorMessage).toMatch(/ghcr.io\/paperclipai\/agent-runtime-claude/);
+  });
+
+  it("rejects a run when the override image is not in the allow-list", async () => {
+    const driver = makeFakeDriver({
+      connectionImageAllowlist: ["ghcr.io/paperclipai/"],
+      resolvedImage: "ghcr.io/paperclipai/agent-runtime-claude:v1",
+    });
+    const result = await driver.run({
+      ctx: makeCtx(),
+      target: { clusterConnectionId: "c-1", imageOverride: "evil.example.com/x:latest" },
+    });
+    expect(result.errorCode).toBe("image_not_allowed");
+    expect(result.errorMessage).toMatch(/evil\.example\.com/);
+  });
+
+  it("permits a run whose default and override images both match the allow-list", async () => {
+    const driver = makeFakeDriver({
+      connectionImageAllowlist: ["ghcr.io/paperclipai/"],
+      resolvedImage: "ghcr.io/paperclipai/agent-runtime-claude:v1",
+    });
+    const result = await driver.run({
+      ctx: makeCtx(),
+      target: { clusterConnectionId: "c-1", imageOverride: "ghcr.io/paperclipai/custom:v2" },
+    });
+    expect(result.errorCode).not.toBe("image_not_allowed");
+  });
+
+  it("with empty allowlist preserves M2 behavior (allowAgentImageOverride alone governs)", async () => {
+    const driver = makeFakeDriver({
+      connectionImageAllowlist: [],
+      resolvedImage: "ghcr.io/paperclipai/agent-runtime-claude:v1",
+    });
+    const result = await driver.run({
+      ctx: makeCtx(),
+      target: { clusterConnectionId: "c-1", imageOverride: "anywhere/at/all:v1" },
+    });
+    // With empty allowlist, the M3b enforcement is skipped. Whatever
+    // happens next is M2-era behavior — we only assert the new code path
+    // didn't fire.
+    expect(result.errorCode).not.toBe("image_not_allowed");
   });
 });
