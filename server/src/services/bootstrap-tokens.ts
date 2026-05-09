@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { bootstrapTokens } from "@paperclipai/db";
 
@@ -51,15 +51,31 @@ export function bootstrapTokensService(db: Db): BootstrapTokensService {
 
     async validateAndConsume(token) {
       const hash = hashToken(token);
+      // Atomic claim: only one concurrent caller can flip consumed_at from NULL.
+      // The unique index on token_hash + the WHERE consumed_at IS NULL clause guarantees
+      // RETURNING yields a row exactly once across concurrent callers. Expired tokens
+      // are not claimed so consumed_at stays NULL for diagnostics.
+      const now = new Date();
+      const [claimed] = await db
+        .update(bootstrapTokens)
+        .set({ consumedAt: now })
+        .where(and(
+          eq(bootstrapTokens.tokenHash, hash),
+          isNull(bootstrapTokens.consumedAt),
+          gt(bootstrapTokens.expiresAt, now),
+        ))
+        .returning();
+      if (claimed) {
+        return {
+          ok: true,
+          binding: { agentId: claimed.agentId, companyId: claimed.companyId, runId: claimed.runId, jobUid: claimed.jobUid },
+        };
+      }
+      // Claim failed: distinguish not_found / expired / already_consumed for diagnostics.
       const [row] = await db.select().from(bootstrapTokens).where(eq(bootstrapTokens.tokenHash, hash));
       if (!row) return { ok: false, reason: "not_found" };
       if (row.consumedAt) return { ok: false, reason: "already_consumed" };
-      if (row.expiresAt.getTime() <= Date.now()) return { ok: false, reason: "expired" };
-      await db.update(bootstrapTokens).set({ consumedAt: new Date() }).where(eq(bootstrapTokens.id, row.id));
-      return {
-        ok: true,
-        binding: { agentId: row.agentId, companyId: row.companyId, runId: row.runId, jobUid: row.jobUid },
-      };
+      return { ok: false, reason: "expired" };
     },
   };
 }

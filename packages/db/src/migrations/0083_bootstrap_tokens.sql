@@ -10,6 +10,6 @@ CREATE TABLE "bootstrap_tokens" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX "bootstrap_tokens_token_hash_idx" ON "bootstrap_tokens" USING btree ("token_hash");--> statement-breakpoint
+CREATE UNIQUE INDEX "bootstrap_tokens_token_hash_idx" ON "bootstrap_tokens" USING btree ("token_hash");--> statement-breakpoint
 CREATE INDEX "bootstrap_tokens_run_id_idx" ON "bootstrap_tokens" USING btree ("run_id");--> statement-breakpoint
 CREATE INDEX "bootstrap_tokens_expires_idx" ON "bootstrap_tokens" USING btree ("expires_at");

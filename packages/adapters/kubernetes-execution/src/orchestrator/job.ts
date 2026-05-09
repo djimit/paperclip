@@ -94,9 +94,10 @@ export function buildAgentJob(input: BuildJobInput): V1Job {
     env: [
       { name: "PAPERCLIP_RUN_ID", value: input.runId },
       { name: "PAPERCLIP_PUBLIC_URL", value: input.paperclipPublicUrl },
-      { name: "BOOTSTRAP_TOKEN", valueFrom: { secretKeyRef: { name: input.envSecretName, key: "BOOTSTRAP_TOKEN" } } },
       ...(input.traceparent ? [{ name: "TRACEPARENT", value: input.traceparent }] : []),
     ],
+    // BOOTSTRAP_TOKEN (and any other agent-shim secrets) are loaded from the
+    // tenant env Secret; envFrom is the single source of truth for those keys.
     envFrom: [{ secretRef: { name: input.envSecretName } }],
     volumeMounts: [
       { name: "workspace", mountPath: "/workspace" },

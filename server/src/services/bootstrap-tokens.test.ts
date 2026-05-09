@@ -55,4 +55,26 @@ describe("bootstrapTokensService", () => {
     expect(v.ok).toBe(false);
     if (!v.ok) expect(v.reason).toBe("not_found");
   });
+
+  it("under concurrent consume, exactly one caller wins", async () => {
+    // The previous SELECT-then-UPDATE shape allowed both concurrent calls to
+    // pass the consumed_at check and both to issue the UPDATE, returning ok:true
+    // twice. With the atomic conditional UPDATE, only one caller is granted the
+    // claim and the other observes already_consumed.
+    const svc = bootstrapTokensService(db);
+    const minted = await svc.mint({
+      agentId: "11111111-1111-1111-1111-111111111113",
+      companyId: "22222222-2222-2222-2222-222222222224",
+      runId: "r-3", jobUid: "job-uid-3",
+      ttlSeconds: 600,
+    });
+    const N = 8;
+    const results = await Promise.all(
+      Array.from({ length: N }, () => svc.validateAndConsume(minted.token)),
+    );
+    const oks = results.filter((r) => r.ok);
+    const consumedRejections = results.filter((r) => !r.ok && r.reason === "already_consumed");
+    expect(oks.length).toBe(1);
+    expect(consumedRejections.length).toBe(N - 1);
+  });
 });

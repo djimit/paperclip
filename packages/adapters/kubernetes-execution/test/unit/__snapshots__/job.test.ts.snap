@@ -80,15 +80,6 @@ exports[`buildAgentJob > matches the golden snapshot 1`] = `
                 "name": "PAPERCLIP_PUBLIC_URL",
                 "value": "https://paperclip.example.com",
               },
-              {
-                "name": "BOOTSTRAP_TOKEN",
-                "valueFrom": {
-                  "secretKeyRef": {
-                    "key": "BOOTSTRAP_TOKEN",
-                    "name": "agent-a-acme-run-01HZZZ-env",
-                  },
-                },
-              },
             ],
             "envFrom": [
               {
