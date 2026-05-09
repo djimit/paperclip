@@ -180,4 +180,21 @@ export function registerClusterCommands(program: Command): void {
       const code = await createClusterCommand(deps).run(args);
       if (code !== 0) process.exit(code);
     });
+
+  clusterCmd
+    .command("set-image-allowlist")
+    .description("Set the per-cluster image prefix allow-list (empty clears)")
+    .requiredOption("--cluster <id>", "Cluster connection ID")
+    .option("--prefixes <list>", "Comma-separated image prefix list (empty string clears)")
+    .action(async (opts, cmd) => {
+      const globalOpts = cmd.parent?.parent?.opts() as { config?: string };
+      const deps = buildDeps(globalOpts);
+      const args = [
+        "set-image-allowlist",
+        "--cluster", opts.cluster,
+        ...(opts.prefixes !== undefined ? ["--prefixes", opts.prefixes] : []),
+      ];
+      const code = await createClusterCommand(deps).run(args);
+      if (code !== 0) process.exit(code);
+    });
 }
