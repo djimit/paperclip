@@ -68,3 +68,40 @@ export async function deleteEphemeralSecret(client: KubernetesApiClient, namespa
     throw err;
   }
 }
+
+/**
+ * Patch an ephemeral Secret with an OwnerReference back to the owning Job.
+ * Used by the two-phase commit flow in driver.run(): create Secret first
+ * (no OwnerRef), create Job referencing the Secret, then patch the Secret
+ * with OwnerRef pointing at the now-known Job UID. After the patch the
+ * Secret is GC'd automatically when the Job is deleted (TTLSecondsAfterFinished
+ * or Foreground delete).
+ */
+export async function patchEphemeralSecretOwnerReference(
+  client: KubernetesApiClient,
+  namespace: string,
+  name: string,
+  ownerJob: { name: string; uid: string },
+): Promise<void> {
+  const patch = {
+    metadata: {
+      ownerReferences: [
+        {
+          apiVersion: "batch/v1",
+          kind: "Job",
+          name: ownerJob.name,
+          uid: ownerJob.uid,
+          controller: true,
+          blockOwnerDeletion: true,
+        },
+      ],
+    },
+  };
+  await client.core.patchNamespacedSecret(
+    name,
+    namespace,
+    patch,
+    undefined, undefined, undefined, undefined, undefined,
+    { headers: { "Content-Type": "application/strategic-merge-patch+json" } },
+  );
+}

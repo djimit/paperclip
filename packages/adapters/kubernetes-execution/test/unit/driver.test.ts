@@ -46,7 +46,7 @@ describe("KubernetesExecutionDriver", () => {
       .rejects.toThrow(/clusterConnectionId/);
   });
 
-  it("returns NOT_YET_SUPPORTED from run() in M1", async () => {
+  it("returns execution_target_not_yet_supported when minter/run-context resolver are not wired", async () => {
     const driver = createKubernetesExecutionDriver({ resolveConnection: async () => null });
     const result = await driver.run({
       ctx: {
@@ -61,7 +61,7 @@ describe("KubernetesExecutionDriver", () => {
     });
     expect(result.errorCode).toBe("execution_target_not_yet_supported");
     expect(result.exitCode).toBeNull();
-    expect(result.errorMessage).toMatch(/M2/);
+    expect(result.errorMessage).toMatch(/bootstrap token minter|run-context resolver/i);
   });
 
   it("validates a kubernetes target when the connection resolves", async () => {

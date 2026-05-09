@@ -5,7 +5,15 @@ export type {
   KubernetesExecutionDriver,
   KubernetesDriverDeps,
   EnsureTenantDriverInput,
+  ResolveRunContextInput,
+  ResolvedRunContext,
 } from "./driver.js";
+
+export type {
+  BootstrapTokenMinter,
+  BootstrapTokenMintRequest,
+  BootstrapTokenMintResult,
+} from "./bootstrap/token.js";
 
 export {
   ensureTenantNamespace,
