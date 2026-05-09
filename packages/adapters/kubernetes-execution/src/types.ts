@@ -36,4 +36,10 @@ export interface KubernetesApiClient {
   describe: () => string;
   /** Throwaway dynamic client used for arbitrary CRDs (Cilium). */
   request: <T = unknown>(method: string, path: string, body?: unknown) => Promise<T>;
+  /**
+   * Streaming variant of `request`. Returns the raw `Response` so the caller can
+   * drive `body.getReader()` for endpoints like `pods/log` and `events?watch=true`
+   * that emit chunked, line-delimited output. Auth is applied identically to `request`.
+   */
+  requestStream: (method: string, path: string, body?: unknown) => Promise<Response>;
 }

@@ -51,9 +51,9 @@ export function createKubernetesApiClient(connection: ResolvedClusterConnection)
   const ctx = kc.getCurrentContext();
 
   // Build an https.Agent once per client carrying the kubeconfig's TLS material
-  // (CA bundle + optional client cert/key). This is required for kind/EKS-style
+  // (CA bundle + optional client cert/key). Required for kind/EKS-style
   // kubeconfigs that authenticate via mTLS rather than a bearer token.
-  // @kubernetes/client-node@0.21 exposes `applyHTTPSOptions`, which writes
+  // @kubernetes/client-node@0.21 exposes applyHTTPSOptions which writes
   // ca/cert/key/rejectUnauthorized onto a plain object; we hand that object to
   // https.Agent. Lazily materialised so in-cluster paths without TLS material
   // still work.
@@ -86,6 +86,55 @@ export function createKubernetesApiClient(connection: ResolvedClusterConnection)
     return httpsAgent;
   }
 
+  /**
+   * Build a node:https request configuration with full TLS + auth material.
+   * Centralised so `request` and `requestStream` share the exact same path.
+   */
+  async function buildAuthedRequest(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<{ options: HttpsRequestOptions; payload: string | undefined }> {
+    const cluster = kc.getCurrentCluster();
+    if (!cluster) throw new Error(`No current cluster in kubeconfig`);
+    const url = new URL(path, cluster.server);
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+    const payload = body !== undefined ? JSON.stringify(body) : undefined;
+    if (payload !== undefined) {
+      headers["Content-Length"] = Buffer.byteLength(payload).toString();
+    }
+
+    // Authorization header: for token-based and exec-credential users, the SDK
+    // exposes applyAuthorizationHeader which writes Authorization onto a plain
+    // headers object. For cert-based users it's a no-op — the auth is the mTLS
+    // handshake itself, not a header — and the https.Agent above carries the
+    // cert/key.
+    const kcAny = kc as unknown as {
+      applyAuthorizationHeader?: (opts: { headers: Record<string, string> }) => Promise<void>;
+    };
+    if (typeof kcAny.applyAuthorizationHeader === "function") {
+      await kcAny.applyAuthorizationHeader({ headers });
+    } else {
+      const user = kc.getCurrentUser();
+      if (user?.token) headers["Authorization"] = `Bearer ${user.token}`;
+    }
+
+    const agent = getHttpsAgent();
+    const options: HttpsRequestOptions = {
+      method,
+      hostname: url.hostname,
+      port: url.port || (url.protocol === "https:" ? 443 : 80),
+      path: `${url.pathname}${url.search}`,
+      headers,
+    };
+    if (agent) options.agent = agent;
+    return { options, payload };
+  }
+
   return {
     core,
     batch,
@@ -94,53 +143,15 @@ export function createKubernetesApiClient(connection: ResolvedClusterConnection)
     apiext,
     describe: () => `${connection.label} (context=${ctx})`,
     async request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
-      const cluster = kc.getCurrentCluster();
-      if (!cluster) throw new Error(`No current cluster in kubeconfig`);
-      const url = new URL(path, cluster.server);
-
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      };
-      const payload = body !== undefined ? JSON.stringify(body) : undefined;
-      if (payload !== undefined) {
-        headers["Content-Length"] = Buffer.byteLength(payload).toString();
-      }
-
-      // Authorization header: for token-based and exec-credential users, the SDK
-      // exposes `applyAuthorizationHeader` which writes Authorization onto a plain
-      // headers object. For cert-based users it's a no-op — the auth is the mTLS
-      // handshake itself, not a header — and the https.Agent above carries the
-      // cert/key.
-      const kcAny = kc as unknown as {
-        applyAuthorizationHeader?: (opts: { headers: Record<string, string> }) => Promise<void>;
-      };
-      if (typeof kcAny.applyAuthorizationHeader === "function") {
-        await kcAny.applyAuthorizationHeader({ headers });
-      } else {
-        const user = kc.getCurrentUser();
-        if (user?.token) headers["Authorization"] = `Bearer ${user.token}`;
-      }
-
-      const agent = getHttpsAgent();
+      const { options, payload } = await buildAuthedRequest(method, path, body);
       // 30s socket timeout. Without this the request could hang for tens of
       // minutes if the API server stops responding mid-handshake (Node's
       // default keep-alive socket has no upper bound). 30s is well above
       // realistic API server tail latency but short enough that ensureTenant
       // surfaces an actionable error rather than appearing to stall.
       const REQUEST_TIMEOUT_MS = 30_000;
-      const options: HttpsRequestOptions = {
-        method,
-        hostname: url.hostname,
-        port: url.port || (url.protocol === "https:" ? 443 : 80),
-        path: `${url.pathname}${url.search}`,
-        headers,
-        timeout: REQUEST_TIMEOUT_MS,
-      };
-      if (agent) options.agent = agent;
-
       const incoming = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
-        const req = httpsRequest(options, (res) => resolve(res));
+        const req = httpsRequest({ ...options, timeout: REQUEST_TIMEOUT_MS }, (res) => resolve(res));
         req.once("error", reject);
         req.once("timeout", () => {
           req.destroy(new Error(`k8s API ${method} ${path} timed out after ${REQUEST_TIMEOUT_MS}ms`));
@@ -160,6 +171,39 @@ export function createKubernetesApiClient(connection: ResolvedClusterConnection)
       }
       if (status === 204 || text.length === 0) return undefined as T;
       return JSON.parse(text) as T;
+    },
+    async requestStream(method: string, path: string, body?: unknown): Promise<Response> {
+      const { options, payload } = await buildAuthedRequest(method, path, body);
+      // Streaming endpoints (pods/log, events?watch=true) deliver chunked
+      // bodies driven by the caller via Response.body.getReader(). No socket
+      // timeout: pod-log streams are intentionally long-lived; the caller is
+      // responsible for reconnect/cancellation policy.
+      const incoming = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
+        const req = httpsRequest(options, (res) => resolve(res));
+        req.once("error", reject);
+        if (payload !== undefined) req.write(payload);
+        req.end();
+      });
+
+      const status = incoming.statusCode ?? 0;
+      // Wrap the IncomingMessage as a WHATWG Response so callers can use
+      // response.body.getReader() / response.text() uniformly.
+      const responseHeaders = new Headers();
+      for (const [k, v] of Object.entries(incoming.headers)) {
+        if (typeof v === "string") responseHeaders.append(k, v);
+        else if (Array.isArray(v)) for (const vv of v) responseHeaders.append(k, vv);
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          incoming.on("data", (chunk) => controller.enqueue(chunk as Uint8Array));
+          incoming.on("end", () => controller.close());
+          incoming.on("error", (err) => controller.error(err));
+        },
+        cancel() {
+          incoming.destroy();
+        },
+      });
+      return new Response(stream, { status, headers: responseHeaders });
     },
   };
 }
