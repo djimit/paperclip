@@ -1745,7 +1745,7 @@ export function IssueDetail() {
     mutationFn: (data: {
       actionId?: string;
       outcome: ResolveRecoveryActionOutcome;
-      sourceIssueStatus?: "done" | "in_review" | "blocked";
+      sourceIssueStatus: "done" | "in_review" | "blocked";
       resolutionNote?: string | null;
     }) => issuesApi.resolveRecoveryAction(issueId!, data),
     onSuccess: ({ issue: nextIssue }) => {
