@@ -27,7 +27,12 @@ export async function runRefreshTick(deps: RefreshWorkerDeps): Promise<void> {
   const lockResult = await deps.db.execute(
     sql`SELECT pg_try_advisory_lock(${ADVISORY_LOCK_KEY}::bigint) as result`,
   );
-  const acquired = Boolean(lockResult.rows?.[0]?.result);
+  // postgres-js returns an iterable RowList directly; node-postgres wraps in {rows}.
+  // Read both shapes so the worker is portable across drizzle drivers.
+  const lockRows = Array.isArray(lockResult)
+    ? lockResult
+    : ((lockResult as { rows?: unknown[] }).rows ?? []);
+  const acquired = Boolean((lockRows[0] as { result?: unknown } | undefined)?.result);
   if (!acquired) return;
 
   try {

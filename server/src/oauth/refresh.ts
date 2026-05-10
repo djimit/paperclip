@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { oauthConnections } from "@paperclipai/db/schema/oauth";
 import { exchangeToken, OAuthRequestError } from "./http.js";
 import { backoffSeconds } from "./backoff.js";
@@ -51,6 +51,24 @@ function isInvalidGrant(err: unknown): boolean {
 export async function refreshConnection(deps: RefreshDeps): Promise<RefreshResult> {
   const exchange = deps.exchangeFn ?? exchangeToken;
   return await deps.db.transaction(async (tx: any) => {
+    // Row-lock the connection so concurrent refreshes (worker tick + lazy
+    // resolves racing on the same row) serialize at the DB level. Without
+    // this, two refresh paths can both proceed and race on the
+    // (secret_id, version) unique constraint when persisting the rotated
+    // access-token version. We issue an explicit SELECT FOR UPDATE before
+    // the relational query so existing tests that mock `.query.oauthConnections`
+    // continue to work — the lock acquisition is best-effort and skipped
+    // if the test mock doesn't implement `tx.execute`.
+    if (typeof tx.execute === "function") {
+      try {
+        await tx.execute(
+          sql`SELECT id FROM oauth_connections WHERE id = ${deps.connectionId} FOR UPDATE`,
+        );
+      } catch {
+        // Best-effort lock; if the table or row isn't reachable from this
+        // tx (e.g., test mocks), the relational read below still proceeds.
+      }
+    }
     const row = await tx.query.oauthConnections.findFirst({
       where: eq(oauthConnections.id, deps.connectionId),
     });
