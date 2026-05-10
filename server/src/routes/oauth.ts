@@ -6,6 +6,24 @@ import { generateCodeVerifier, deriveCodeChallenge } from "../oauth/pkce.js";
 import { validateReturnUrl } from "../oauth/redirect-allowlist.js";
 import { oauthAuthorizationStates, oauthConnections } from "@paperclipai/db/schema/oauth";
 import { and, eq } from "drizzle-orm";
+import { revokeUpstreamToken } from "../oauth/revoke.js";
+import { oauthLogger } from "../oauth/logger.js";
+
+// Narrow method-bag used by OAuth routes — keep this loose so route code does
+// not pull the full secretService type, and so tests can substitute a stub.
+export interface OAuthRouteSecretService {
+  upsertSecretByName: (
+    companyId: string,
+    input: { name: string; value: string },
+  ) => Promise<{ id: string }>;
+  resolveSecretValue: (
+    companyId: string,
+    secretId: string,
+    version: number | "latest",
+  ) => Promise<string>;
+  remove: (secretId: string) => Promise<unknown>;
+  getById: (id: string) => Promise<{ id: string; latestVersion: number } | null>;
+}
 
 export interface OAuthRouteDeps {
   registry: ProviderRegistry;
@@ -14,9 +32,9 @@ export interface OAuthRouteDeps {
   db: any;
   publicUrl: string;
   rateLimiter: SlidingWindowLimiter;
-  // secretService is consumed by upcoming tasks (T20 callback, T22 disconnect).
-  // Typed as `unknown` for now so the binding exists without forcing a helper API.
-  secretService: unknown;
+  // The connect route does not use secretService, so the bag is partial here.
+  // Routes that need a method assert it at call time.
+  secretService: Partial<OAuthRouteSecretService>;
 }
 
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -156,6 +174,120 @@ export function oauthRoutes(deps: OAuthRouteDeps): Router {
       return;
     }
     res.json(publicConnection(row));
+  });
+
+  r.delete("/connections/:id", async (req, res) => {
+    if (!ensureMember(req, res)) return;
+    const companyId = (req.params as unknown as { companyId: string; id: string }).companyId;
+    const row = await deps.db.query.oauthConnections.findFirst({
+      where: and(
+        eq(oauthConnections.id, req.params.id),
+        eq(oauthConnections.companyId, companyId),
+      ),
+    });
+    if (!row) {
+      res.status(404).end();
+      return;
+    }
+
+    const conn = row as {
+      id: string;
+      providerId: string;
+      accessTokenSecretId: string | null;
+      refreshTokenSecretId: string | null;
+    };
+
+    const svc = deps.secretService;
+    let accessToken: string | undefined;
+    let refreshToken: string | undefined;
+
+    if (conn.accessTokenSecretId && svc.resolveSecretValue && svc.getById) {
+      try {
+        const secret = await svc.getById(conn.accessTokenSecretId);
+        const version = secret?.latestVersion ?? "latest";
+        accessToken = await svc.resolveSecretValue(
+          companyId,
+          conn.accessTokenSecretId,
+          version,
+        );
+      } catch (err) {
+        oauthLogger.warn(
+          {
+            providerId: conn.providerId,
+            err: { message: (err as Error).message },
+          },
+          "failed to resolve access token for upstream revoke; continuing",
+        );
+      }
+    }
+
+    if (conn.refreshTokenSecretId && svc.resolveSecretValue && svc.getById) {
+      try {
+        const secret = await svc.getById(conn.refreshTokenSecretId);
+        const version = secret?.latestVersion ?? "latest";
+        refreshToken = await svc.resolveSecretValue(
+          companyId,
+          conn.refreshTokenSecretId,
+          version,
+        );
+      } catch (err) {
+        oauthLogger.warn(
+          {
+            providerId: conn.providerId,
+            err: { message: (err as Error).message },
+          },
+          "failed to resolve refresh token for upstream revoke; continuing",
+        );
+      }
+    }
+
+    const provider = deps.registry.get(conn.providerId);
+    if (provider?.config.endpoints.revoke) {
+      try {
+        await revokeUpstreamToken({ provider, accessToken, refreshToken });
+      } catch (err) {
+        oauthLogger.warn(
+          {
+            providerId: conn.providerId,
+            err: { message: (err as Error).message },
+          },
+          "upstream revoke failed; continuing local delete",
+        );
+      }
+    }
+
+    await deps.db.transaction(async (tx: any) => {
+      await tx.delete(oauthConnections).where(eq(oauthConnections.id, conn.id));
+    });
+
+    if (conn.accessTokenSecretId && svc.remove) {
+      try {
+        await svc.remove(conn.accessTokenSecretId);
+      } catch (err) {
+        oauthLogger.warn(
+          {
+            secretId: conn.accessTokenSecretId,
+            err: { message: (err as Error).message },
+          },
+          "secret remove failed during disconnect; continuing",
+        );
+      }
+    }
+    if (conn.refreshTokenSecretId && svc.remove) {
+      try {
+        await svc.remove(conn.refreshTokenSecretId);
+      } catch (err) {
+        oauthLogger.warn(
+          {
+            secretId: conn.refreshTokenSecretId,
+            err: { message: (err as Error).message },
+          },
+          "secret remove failed during disconnect; continuing",
+        );
+      }
+    }
+
+    res.status(204).end();
   });
 
   return r;
