@@ -8,6 +8,8 @@ import { oauthAuthorizationStates, oauthConnections } from "@paperclipai/db/sche
 import { and, eq } from "drizzle-orm";
 import { revokeUpstreamToken } from "../oauth/revoke.js";
 import { oauthLogger } from "../oauth/logger.js";
+import { refreshConnection } from "../oauth/refresh.js";
+import { backoffSeconds } from "../oauth/backoff.js";
 
 // Narrow method-bag used by OAuth routes — keep this loose so route code does
 // not pull the full secretService type, and so tests can substitute a stub.
@@ -35,6 +37,8 @@ export interface OAuthRouteDeps {
   // The connect route does not use secretService, so the bag is partial here.
   // Routes that need a method assert it at call time.
   secretService: Partial<OAuthRouteSecretService>;
+  // Optional injection for tests; defaults to the real refreshConnection.
+  refreshFn?: typeof refreshConnection;
 }
 
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -174,6 +178,78 @@ export function oauthRoutes(deps: OAuthRouteDeps): Router {
       return;
     }
     res.json(publicConnection(row));
+  });
+
+  r.post("/connections/:id/refresh", async (req, res) => {
+    if (!ensureMember(req, res)) return;
+    const companyId = (req.params as unknown as { companyId: string; id: string }).companyId;
+    const conn = await deps.db.query.oauthConnections.findFirst({
+      where: and(
+        eq(oauthConnections.id, req.params.id),
+        eq(oauthConnections.companyId, companyId),
+      ),
+    });
+    if (!conn) {
+      res.status(404).end();
+      return;
+    }
+    const row = conn as {
+      id: string;
+      lastErrorAt: Date | null;
+      refreshAttemptCount: number;
+    };
+
+    if (row.lastErrorAt) {
+      const minRetryAt = new Date(
+        row.lastErrorAt.getTime() + backoffSeconds(row.refreshAttemptCount) * 1000,
+      );
+      if (minRetryAt > new Date()) {
+        const retryAfter = Math.ceil((minRetryAt.getTime() - Date.now()) / 1000);
+        res.setHeader("retry-after", String(retryAfter));
+        res.status(429).json({
+          errorCode: "in_backoff",
+          retryAfterSeconds: retryAfter,
+        });
+        return;
+      }
+    }
+
+    const ok = await deps.rateLimiter.check(`refresh:${row.id}`);
+    if (!ok) {
+      res.status(429).json({ errorCode: "rate_limited" });
+      return;
+    }
+
+    const refreshFn = deps.refreshFn ?? refreshConnection;
+    // refreshConnection requires the full RefreshSecretService surface — at
+    // wire time (T28) the real secretService satisfies this; tests inject a
+    // stubbed refreshFn so the cast here is safe.
+    const result = await refreshFn({
+      connectionId: row.id,
+      db: deps.db,
+      registry: deps.registry,
+      secretService: deps.secretService as unknown as Parameters<
+        typeof refreshConnection
+      >[0]["secretService"],
+    });
+    const updated = await deps.db.query.oauthConnections.findFirst({
+      where: eq(oauthConnections.id, row.id),
+    });
+    if (result.outcome === "success") {
+      res.json(publicConnection(updated));
+      return;
+    }
+    if (result.outcome === "revoked") {
+      res.status(409).json({
+        errorCode: "connection_revoked",
+        connection: publicConnection(updated),
+      });
+      return;
+    }
+    res.status(503).json({
+      errorCode: "refresh_failed",
+      connection: publicConnection(updated),
+    });
   });
 
   r.delete("/connections/:id", async (req, res) => {
