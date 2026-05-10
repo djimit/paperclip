@@ -62,7 +62,12 @@ function summary(p: RegisteredProvider) {
 function ensureMember(req: Request, res: Response): boolean {
   const actor = (req as Request & { actor?: { type: string; memberships?: Array<{ companyId: string }> } }).actor;
   const companyId = req.params.companyId;
-  if (!actor || actor.type === "none") {
+  // Whitelist (not blacklist) the legitimate human-admin actor type. The
+  // OAuth admin routes are board-only; allowing any other actor (e.g. an
+  // `agent` token without `memberships`) past the type check would let it
+  // reach the membership lookup and surface a 404 — leaking resource
+  // existence — instead of being rejected with 401. Be strict here.
+  if (!actor || actor.type !== "board") {
     res.status(401).json({ errorCode: "unauthenticated" });
     return false;
   }
