@@ -512,7 +512,14 @@ async function cmdSetImageAllowlist(argv: string[], deps: ClusterCommandDeps): P
   const raw = flags["prefixes"] ?? "";
   // Comma-list parsing: split, trim, drop empty entries.
   const imageAllowlist = raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
-  await deps.clusterConnections.update(clusterId, { imageAllowlist });
+  // update() returns null when the cluster id does not match a row. Without
+  // checking, an operator passing a stale id would see "Updated …" while
+  // nothing was written.
+  const updated = await deps.clusterConnections.update(clusterId, { imageAllowlist });
+  if (!updated) {
+    deps.print(`Cluster connection ${clusterId} not found`);
+    return 1;
+  }
   if (imageAllowlist.length === 0) {
     deps.print(`Cleared image_allowlist for cluster ${clusterId}`);
   } else {

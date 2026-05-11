@@ -455,4 +455,19 @@ describe("cluster commands", () => {
     const code = await cmd.run(["set-image-allowlist", "--prefixes", "x/"]);
     expect(code).not.toBe(0);
   });
+
+  it("set-image-allowlist: errors when the cluster id does not match a row", async () => {
+    // update() returns null when no row matches. Without the not-found
+    // check, an operator with a stale id would see "Updated …" while
+    // nothing was persisted.
+    const m = mocks();
+    (m.clusterConnections.update as any) = vi.fn(async () => null);
+    const cmd = createClusterCommand(m);
+    const code = await cmd.run([
+      "set-image-allowlist",
+      "--cluster", "missing",
+      "--prefixes", "ghcr.io/paperclipai/",
+    ]);
+    expect(code).toBe(1);
+  });
 });
