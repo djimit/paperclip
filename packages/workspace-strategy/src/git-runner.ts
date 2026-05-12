@@ -14,6 +14,10 @@ export interface GitRunner {
   ): Promise<GitRunResult>;
 }
 
+type ChildProcessCloseEmitter = {
+  on(event: "close", listener: (code: number | null) => void): void;
+};
+
 export const realGitRunner: GitRunner = {
   async run(cmd, args, opts) {
     return new Promise((resolve) => {
@@ -29,7 +33,7 @@ export const realGitRunner: GitRunner = {
       child.stderr.on("data", (d) => {
         stderr += d.toString();
       });
-      (child as NodeJS.EventEmitter).on("close", (code: number | null) =>
+      (child as unknown as ChildProcessCloseEmitter).on("close", (code) =>
         resolve({ exitCode: code ?? -1, stdout, stderr }),
       );
     });
