@@ -18,19 +18,18 @@
  * without real DB or Kubernetes connectivity.
  */
 
+import type {
+  ClusterCapabilities,
+  ResolvedClusterConnection,
+  TenantPolicy as KubernetesTenantPolicy,
+} from "@paperclipai/execution-target-kubernetes";
+
 // ---------------------------------------------------------------------------
 // Dependency interfaces (mirroring the real service shapes without importing
 // from server sub-paths that don't exist in the package exports map)
 // ---------------------------------------------------------------------------
 
 export type ClusterKind = "in-cluster" | "kubeconfig";
-export type ClusterArch = "amd64" | "arm64";
-
-export interface ClusterCapabilities {
-  cilium: boolean;
-  storageClass: string;
-  architectures: ClusterArch[];
-}
 
 export interface ClusterConnectionRow {
   id: string;
@@ -43,12 +42,9 @@ export interface ClusterConnectionRow {
   paperclipPublicUrl: string | null;
   imageRegistry: string | null;
   allowAgentImageOverride: boolean;
+  imageAllowlist: string[];
   createdAt: Date;
   createdBy: string;
-}
-
-export interface ResolvedClusterConnection extends ClusterConnectionRow {
-  kubeconfigYaml?: string;
 }
 
 export interface CreateClusterConnectionInput {
@@ -76,8 +72,8 @@ export interface ClusterConnectionsService {
 }
 
 export interface TenantPolicy {
-  quota: Record<string, string | number | undefined> | null;
-  limitRange: Record<string, unknown> | null;
+  quota: KubernetesTenantPolicy["quota"];
+  limitRange: KubernetesTenantPolicy["limitRange"];
   additionalAllowFqdns: string[];
   imageOverrides: Record<string, string> | null;
   /** Cilium DSL: tenant-restrictive FQDN allow-list, intersected with M1 baseline. */
@@ -94,8 +90,8 @@ export interface TenantPolicyRow extends TenantPolicy {
 export interface UpsertTenantPolicyInput {
   clusterConnectionId: string;
   companyId: string;
-  quota: Record<string, string | number | undefined> | null;
-  limitRange: Record<string, unknown> | null;
+  quota: KubernetesTenantPolicy["quota"];
+  limitRange: KubernetesTenantPolicy["limitRange"];
   additionalAllowFqdns: string[];
   imageOverrides: Record<string, string> | null;
   gitCredentialsSecretId?: string;
