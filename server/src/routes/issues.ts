@@ -636,6 +636,8 @@ function queueResolvedInteractionContinuationWakeup(input: {
   };
   actor: { actorType: "user" | "agent"; actorId: string };
   source: string;
+  forceFreshSession?: boolean;
+  workspaceRefreshReason?: string | null;
 }) {
   if (
     input.interaction.continuationPolicy !== "wake_assignee"
@@ -648,6 +650,8 @@ function queueResolvedInteractionContinuationWakeup(input: {
   if (input.interaction.status === "expired") return;
   if (!input.issue.assigneeAgentId || isClosedIssueStatus(input.issue.status)) return;
 
+  const forceFreshSession = input.forceFreshSession === true;
+  const workspaceRefreshReason = readNonEmptyString(input.workspaceRefreshReason);
   void input.heartbeat.wakeup(input.issue.assigneeAgentId, {
     source: "automation",
     triggerDetail: "system",
@@ -673,6 +677,8 @@ function queueResolvedInteractionContinuationWakeup(input: {
       sourceRunId: input.interaction.sourceRunId ?? null,
       wakeReason: "issue_commented",
       source: input.source,
+      ...(forceFreshSession ? { forceFreshSession: true } : {}),
+      ...(workspaceRefreshReason ? { workspaceRefreshReason } : {}),
     },
   }).catch((err) => logger.warn({
     err,
@@ -4126,12 +4132,18 @@ export function issueRoutes(
         });
       }
 
+      const acceptedPlanConfirmation =
+        interaction.kind === "request_confirmation" &&
+        interaction.status === "accepted" &&
+        issue.workMode === "planning";
       queueResolvedInteractionContinuationWakeup({
         heartbeat,
         issue: continuationWakeIssue,
         interaction,
         actor,
         source: "issue.interaction.accept",
+        forceFreshSession: acceptedPlanConfirmation,
+        workspaceRefreshReason: acceptedPlanConfirmation ? "accepted_plan_confirmation" : null,
       });
 
       res.json(interaction);

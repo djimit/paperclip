@@ -2382,7 +2382,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       if (row.originKind === RECOVERY_ORIGIN_KINDS.issueGraphLivenessEscalation) {
         const parsed = parseIssueGraphLivenessIncidentKey(row.originId);
         if (!parsed || parsed.companyId !== row.companyId) return [];
-        if (parsed.state !== "blocked_by_assigned_backlog_issue") return [];
         return [
           {
             companyId: row.companyId,
@@ -2574,6 +2573,21 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         )
       ) {
         continue;
+      }
+      const sourceIssue = await db
+        .select({
+          id: issues.id,
+          status: issues.status,
+        })
+        .from(issues)
+        .where(and(eq(issues.companyId, parsed.companyId), eq(issues.id, parsed.issueId)))
+        .then((rows) => rows[0] ?? null);
+      if (sourceIssue && !["done", "cancelled"].includes(sourceIssue.status)) {
+        const blockerIds = await existingBlockerIssueIds(parsed.companyId, sourceIssue.id);
+        if (blockerIds.includes(recovery.id)) {
+          result.activeSkipped += 1;
+          continue;
+        }
       }
       if (await removeRecoveryBlockerFromSource(recovery)) {
         result.blockerRelationsRemoved += 1;

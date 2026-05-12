@@ -126,7 +126,6 @@ export function IssueRow({
       <span className="flex shrink-0 items-center gap-1 pt-px sm:hidden">
         {mobileLeading ?? <StatusIcon status={issue.status} blockerAttention={issue.blockerAttention} className={selectedStatusClass} />}
         {productivityReviewIndicator}
-        {planningModeIndicator}
         {parkedBlockerIndicator}
         {recoveryIndicator}
       </span>

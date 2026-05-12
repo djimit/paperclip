@@ -45,6 +45,7 @@ import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
+import { buildDuplicateAgentPayload, duplicateAgentName, type DuplicateInstructionsBundle } from "../lib/duplicate-agent-payload";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs } from "@/components/ui/tabs";
@@ -83,6 +84,8 @@ import { RunTranscriptView, type TranscriptMode } from "../components/transcript
 import {
   isUuidLike,
   type Agent,
+  type AgentInstructionsBundle,
+  type AgentInstructionsFileSummary,
   type AgentSkillEntry,
   type AgentSkillSnapshot,
   type AgentDetail as AgentDetailRecord,
@@ -100,6 +103,33 @@ import {
   arraysEqual,
   isReadOnlyUnmanagedSkillEntry,
 } from "../lib/agent-skills-state";
+
+async function loadDuplicateInstructionsBundle(
+  agentId: string,
+  companyId?: string,
+): Promise<DuplicateInstructionsBundle | null> {
+  const bundle = await agentsApi.instructionsBundle(agentId, companyId);
+  const files: Record<string, string> = {};
+
+  for (const summary of bundle.files) {
+    const file = await agentsApi.instructionsFile(agentId, summary.path, companyId);
+    const path = duplicateInstructionFilePath(bundle, summary);
+    files[path] = file.content;
+  }
+
+  const entryFile = Object.prototype.hasOwnProperty.call(files, bundle.entryFile)
+    ? bundle.entryFile
+    : Object.keys(files)[0] ?? "AGENTS.md";
+  return Object.keys(files).length > 0 ? { entryFile, files } : null;
+}
+
+function duplicateInstructionFilePath(
+  bundle: AgentInstructionsBundle,
+  summary: AgentInstructionsFileSummary,
+): string {
+  if (summary.deprecated || summary.virtual) return bundle.entryFile || "AGENTS.md";
+  return summary.path;
+}
 
 const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string }> = {
   succeeded: { icon: CheckCircle2, color: "text-green-600 dark:text-green-400" },
@@ -635,6 +665,7 @@ export function AgentDetail() {
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { closePanel } = usePanel();
   const { openNewIssue } = useDialogActions();
+  const { pushToast } = useToastActions();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -804,6 +835,57 @@ export function AgentDetail() {
       setActionError(err instanceof Error ? err.message : "Action failed");
     },
   });
+
+  const duplicateAgent = useMutation({
+    mutationFn: async () => {
+      if (!agent?.id || !resolvedCompanyId) {
+        throw new Error("Agent is not ready to duplicate");
+      }
+
+      const instructionsBundle = await loadDuplicateInstructionsBundle(agent.id, resolvedCompanyId);
+      const payload = buildDuplicateAgentPayload(agent, instructionsBundle);
+
+      try {
+        return await agentsApi.create(resolvedCompanyId, payload);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409 && error.message.includes("requires board approval")) {
+          const hire = await agentsApi.hire(resolvedCompanyId, payload);
+          return hire.agent;
+        }
+        throw error;
+      }
+    },
+    onSuccess: async (createdAgent) => {
+      setActionError(null);
+      if (resolvedCompanyId) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(resolvedCompanyId) });
+      }
+      pushToast({
+        title: "Agent duplicated",
+        body: createdAgent.name,
+        tone: "success",
+      });
+      navigate(`/agents/${agentRouteRef(createdAgent)}/dashboard`);
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : "Failed to duplicate agent";
+      setActionError(message);
+      pushToast({
+        title: "Could not duplicate agent",
+        body: message,
+        tone: "error",
+      });
+    },
+  });
+
+  const handleDuplicateAgent = useCallback(() => {
+    if (!agent || duplicateAgent.isPending) return;
+    const nextName = duplicateAgentName(agent.name);
+    const confirmed = window.confirm(`Duplicate ${agent.name} as ${nextName}?`);
+    setMoreOpen(false);
+    if (!confirmed) return;
+    duplicateAgent.mutate();
+  }, [agent, duplicateAgent]);
 
   const budgetMutation = useMutation({
     mutationFn: (amount: number) =>
@@ -977,6 +1059,18 @@ export function AgentDetail() {
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-44 p-1" align="end">
+              <button
+                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+                disabled={duplicateAgent.isPending}
+                onClick={handleDuplicateAgent}
+              >
+                {duplicateAgent.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
+                Duplicate Agent
+              </button>
               <button
                 className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
                 onClick={() => {
