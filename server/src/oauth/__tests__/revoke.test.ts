@@ -148,6 +148,22 @@ describe("revokeUpstreamToken", () => {
     expect(fixture.lastUrl).toBe("/applications/abc-client/grant");
   });
 
+  it("prefers refresh token for DELETE JSON revocation when both tokens exist", async () => {
+    const provider = makeProvider(
+      `${fixture.base}/applications/{client_id}/grant`,
+      "abc-client",
+      "the-secret",
+      "delete-json",
+    );
+    await revokeUpstreamToken({
+      provider,
+      accessToken: "AT",
+      refreshToken: "RT",
+    });
+    expect(fixture.lastMethod).toBe("DELETE");
+    expect(JSON.parse(fixture.lastBody)).toEqual({ access_token: "RT" });
+  });
+
   it("throws on a non-2xx upstream response", async () => {
     const provider = makeProvider(`${fixture.base}/revoke`);
     fixture.setStatus(401);

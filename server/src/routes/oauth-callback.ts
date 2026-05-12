@@ -140,7 +140,9 @@ export function oauthCallbackRoute(deps: OAuthCallbackDeps): RequestHandler {
           grant_type: "authorization_code",
           code,
           redirect_uri: stateRow.redirectUri,
-          code_verifier: stateRow.codeVerifier,
+          ...(provider.config.pkce !== "unsupported"
+            ? { code_verifier: stateRow.codeVerifier }
+            : {}),
         },
         authMethod: provider.config.authMethod,
         responseFormat: provider.config.responseFormat,

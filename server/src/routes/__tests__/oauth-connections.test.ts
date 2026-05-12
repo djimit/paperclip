@@ -50,7 +50,9 @@ function makeApp(rows: Array<typeof conn>, membershipRole = "admin") {
     query: {
       oauthConnections: {
         findMany: vi.fn().mockResolvedValue(rows),
-        findFirst: vi.fn().mockResolvedValue(rows[0] ?? null),
+        findFirst: vi
+          .fn()
+          .mockResolvedValue(rows.find((row) => row.companyId === "c1") ?? null),
       },
     },
   };

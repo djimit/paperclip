@@ -240,7 +240,7 @@ export function oauthRoutes(deps: OAuthRouteDeps): Router {
         eq(oauthConnections.companyId, companyId),
       ),
     });
-    if (!row || (row as { companyId: string }).companyId !== companyId) {
+    if (!row) {
       res.status(404).end();
       return;
     }

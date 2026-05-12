@@ -33,7 +33,7 @@ export async function revokeUpstreamToken(
   const revokeMethod = input.provider.config.revokeMethod ?? "post-form";
 
   if (revokeMethod === "delete-json") {
-    const token = input.accessToken ?? input.refreshToken;
+    const token = input.refreshToken ?? input.accessToken;
     if (!token) return;
     const credentials = Buffer.from(
       `${input.provider.clientId}:${input.provider.clientSecret}`,
