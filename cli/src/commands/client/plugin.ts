@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { Command, Option } from "commander";
 import {
   scaffoldPluginProject,
@@ -43,6 +44,12 @@ interface PluginInstallOptions extends BaseClientOptions {
   version?: string;
 }
 
+interface PluginInstallRequest {
+  packageName: string;
+  version?: string;
+  isLocalPath: boolean;
+}
+
 interface PluginUninstallOptions extends BaseClientOptions {
   force?: boolean;
 }
@@ -66,20 +73,72 @@ interface PluginInitResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
+function expandHomePath(packageArg: string): string {
+  if (!packageArg.startsWith("~")) return packageArg;
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return path.resolve(home, packageArg.slice(1).replace(/^[\\/]/, ""));
+}
+
+function hasLocalPathSyntax(packageArg: string): boolean {
+  return (
+    path.isAbsolute(packageArg) ||
+    packageArg.startsWith("./") ||
+    packageArg.startsWith("../") ||
+    packageArg.startsWith("~") ||
+    packageArg.startsWith(".\\") ||
+    packageArg.startsWith("..\\")
+  );
+}
+
+function isExistingRelativePath(
+  packageArg: string,
+  cwd: string,
+  pathExists: (targetPath: string) => boolean,
+): boolean {
+  if (packageArg.trim() === "") return false;
+  if (hasLocalPathSyntax(packageArg)) return false;
+  return pathExists(path.resolve(cwd, packageArg));
+}
+
 /**
  * Resolve a local path argument to an absolute path so the server can find the
  * plugin on disk regardless of where the user ran the CLI.
  */
-function resolvePackageArg(packageArg: string, isLocal: boolean): string {
+function resolvePackageArg(packageArg: string, isLocal: boolean, cwd = process.cwd()): string {
   if (!isLocal) return packageArg;
-  // Already absolute
   if (path.isAbsolute(packageArg)) return packageArg;
-  // Expand leading ~ to home directory
-  if (packageArg.startsWith("~")) {
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    return path.resolve(home, packageArg.slice(1).replace(/^[\\/]/, ""));
+  if (packageArg.startsWith("~")) return expandHomePath(packageArg);
+  return path.resolve(cwd, packageArg);
+}
+
+export function buildPluginInstallRequest(
+  packageArg: string,
+  opts: Pick<PluginInstallOptions, "local" | "version"> = {},
+  deps: { cwd?: string; existsSync?: (targetPath: string) => boolean } = {},
+): PluginInstallRequest {
+  const cwd = deps.cwd ?? process.cwd();
+  const pathExists = deps.existsSync ?? existsSync;
+  const isLocal =
+    opts.local ||
+    hasLocalPathSyntax(packageArg) ||
+    (opts.version ? false : isExistingRelativePath(packageArg, cwd, pathExists));
+
+  if (isLocal && opts.version) {
+    throw new Error("--version is only supported for npm package installs, not local plugin paths.");
   }
-  return path.resolve(process.cwd(), packageArg);
+
+  return {
+    packageName: resolvePackageArg(packageArg, Boolean(isLocal), cwd),
+    version: opts.version,
+    isLocalPath: Boolean(isLocal),
+  };
+}
+
+export function renderLocalPluginInstallHint(packagePath: string): string {
+  return [
+    pc.dim("Local plugin installs run trusted local code from your machine."),
+    pc.dim(`Keep ${pc.cyan("pnpm dev")} running in ${packagePath}; Paperclip watches rebuilt dist output and reloads the plugin worker.`),
+  ].join("\n");
 }
 
 function formatPlugin(p: PluginRecord): string {
@@ -260,31 +319,19 @@ export function registerPluginCommands(program: Command): void {
         try {
           const ctx = resolveCommandContext(opts);
 
-          // Auto-detect local paths: starts with . or / or ~ or is an absolute path
-          const isLocal =
-            opts.local ||
-            packageArg.startsWith("./") ||
-            packageArg.startsWith("../") ||
-            packageArg.startsWith("/") ||
-            packageArg.startsWith("~");
-
-          const resolvedPackage = resolvePackageArg(packageArg, isLocal);
+          const installRequest = buildPluginInstallRequest(packageArg, opts);
 
           if (!ctx.json) {
             console.log(
               pc.dim(
-                isLocal
-                  ? `Installing plugin from local path: ${resolvedPackage}`
-                  : `Installing plugin: ${resolvedPackage}${opts.version ? `@${opts.version}` : ""}`,
+                installRequest.isLocalPath
+                  ? `Installing plugin from local path: ${installRequest.packageName}`
+                  : `Installing plugin: ${installRequest.packageName}${opts.version ? `@${opts.version}` : ""}`,
               ),
             );
           }
 
-          const installedPlugin = await ctx.api.post<PluginRecord>("/api/plugins/install", {
-            packageName: resolvedPackage,
-            version: opts.version,
-            isLocalPath: isLocal,
-          });
+          const installedPlugin = await ctx.api.post<PluginRecord>("/api/plugins/install", installRequest);
 
           if (ctx.json) {
             printOutput(installedPlugin, { json: true });
@@ -304,6 +351,10 @@ export function registerPluginCommands(program: Command): void {
 
           if (installedPlugin.lastError) {
             console.log(pc.red(`  Warning: ${installedPlugin.lastError}`));
+          }
+
+          if (installRequest.isLocalPath) {
+            console.log(renderLocalPluginInstallHint(installRequest.packageName));
           }
         } catch (err) {
           handleCommandError(err);
