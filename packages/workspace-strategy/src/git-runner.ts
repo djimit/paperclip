@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 
 export interface GitRunResult {
   exitCode: number;
@@ -17,19 +17,20 @@ export interface GitRunner {
 export const realGitRunner: GitRunner = {
   async run(cmd, args, opts) {
     return new Promise((resolve) => {
-      const child = spawn(cmd, args, {
+      execFile(cmd, args, {
         cwd: opts?.cwd,
         env: { ...process.env, ...(opts?.env ?? {}) },
+        maxBuffer: 10 * 1024 * 1024,
+      }, (error, stdout, stderr) => {
+        const exitCode =
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          typeof error.code === "number"
+            ? error.code
+            : 0;
+        resolve({ exitCode, stdout, stderr });
       });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (d) => {
-        stdout += d.toString();
-      });
-      child.stderr.on("data", (d) => {
-        stderr += d.toString();
-      });
-      child.on("close", (code) => resolve({ exitCode: code ?? -1, stdout, stderr }));
     });
   },
 };
