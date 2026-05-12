@@ -28,10 +28,14 @@ jobs:
   k8s-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -45,7 +49,14 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: |
+          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")"
+          manifest_pattern='(^|/)package\.json$|^pnpm-workspace\.yaml$|^\.npmrc$|^pnpmfile\.(cjs|js|mjs)$'
+          if printf '%s\n' "$changed" | grep -Eq "$manifest_pattern"; then
+            pnpm install --no-frozen-lockfile
+          else
+            pnpm install --frozen-lockfile
+          fi
 
       - name: Install kind
         run: |
@@ -84,7 +95,7 @@ jobs:
       # repo (forks don't get secret access). Empirical measurement test is
       # NOT in CI — operator runs it on-demand.
       - name: Run real-claude-code integration test (gated on Anthropic key)
-        if: ${{ secrets.ANTHROPIC_API_KEY != '' && github.event.pull_request.head.repo.fork == false }}
+        if: ${{ env.HAS_ANTHROPIC_KEY == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
         env:
           K8S_INTEGRATION: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
