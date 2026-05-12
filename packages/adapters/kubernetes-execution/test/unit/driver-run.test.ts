@@ -474,6 +474,30 @@ describe("KubernetesExecutionDriver.run()", () => {
     expect(result.errorCode).not.toBe("image_not_allowed");
   });
 
+  it("permits image allow-list entries without a trailing slash", async () => {
+    const driver = makeFakeDriver({
+      connectionImageAllowlist: ["ghcr.io/paperclipai"],
+      resolvedImage: "ghcr.io/paperclipai/agent-runtime-claude:v1",
+    });
+    const result = await driver.run({
+      ctx: makeCtx(),
+      target: { clusterConnectionId: "c-1", imageOverride: "ghcr.io/paperclipai/custom:v2" },
+    });
+    expect(result.errorCode).not.toBe("image_not_allowed");
+  });
+
+  it("rejects image allow-list prefix confusion across registry namespaces", async () => {
+    const driver = makeFakeDriver({
+      connectionImageAllowlist: ["ghcr.io/paperclipai"],
+      resolvedImage: "ghcr.io/paperclipai/agent-runtime-claude:v1",
+    });
+    const result = await driver.run({
+      ctx: makeCtx(),
+      target: { clusterConnectionId: "c-1", imageOverride: "ghcr.io/paperclipaiattacker/malware:latest" },
+    });
+    expect(result.errorCode).toBe("image_not_allowed");
+  });
+
   it("with empty allowlist and allowAgentImageOverride=true, override images are permitted", async () => {
     const driver = makeFakeDriver({
       connectionImageAllowlist: [],

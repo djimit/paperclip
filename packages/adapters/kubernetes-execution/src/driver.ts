@@ -340,10 +340,9 @@ export function createKubernetesExecutionDriver(deps: KubernetesDriverDeps): Kub
       //    a target.imageOverride is rejected outright — operators use this
       //    to pin agents to the cluster-supplied default image.
       // 2. imageAllowlist (M3b): when non-empty, runContext.image must
-      //    string-start-with one of the allowed prefixes. runContext.image
-      //    already equals target.imageOverride ?? adapterImage (set by
-      //    resolveRunContext), so a single check covers both default and
-      //    override cases.
+      //    match an allowed repository prefix. runContext.image already
+      //    equals target.imageOverride ?? adapterImage (set by resolveRunContext),
+      //    so a single check covers both default and override cases.
       if (target.imageOverride != null && !connection.allowAgentImageOverride) {
         cancellation.dispose();
         return {
@@ -355,7 +354,10 @@ export function createKubernetesExecutionDriver(deps: KubernetesDriverDeps): Kub
       const allowlist = connection.imageAllowlist ?? [];
       if (allowlist.length > 0) {
         const matchesAllowlist = (img: string): boolean =>
-          allowlist.some((prefix) => img.startsWith(prefix));
+          allowlist.some((prefix) => {
+            const pathPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
+            return img === prefix || img.startsWith(pathPrefix);
+          });
         if (!matchesAllowlist(runContext.image)) {
           cancellation.dispose();
           return {
