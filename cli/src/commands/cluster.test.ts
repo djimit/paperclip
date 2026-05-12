@@ -241,7 +241,18 @@ describe("cluster commands", () => {
     const cmd = createClusterCommand(m);
     const code = await cmd.run(["remove", "c-1"]);
     expect(code).toBe(0);
+    expect(m.clusterConnections.get).toHaveBeenCalledWith("c-1");
     expect(m.clusterConnections.delete).toHaveBeenCalledWith("c-1");
+  });
+
+  it("remove: returns non-zero when the connection does not exist", async () => {
+    const m = mocks();
+    (m.clusterConnections.get as any).mockResolvedValue(null);
+    const cmd = createClusterCommand(m);
+    const code = await cmd.run(["remove", "missing"]);
+    expect(code).not.toBe(0);
+    expect(m.clusterConnections.delete).not.toHaveBeenCalled();
+    expect(out.join("\n")).toMatch(/not found/i);
   });
 
   it("remove: returns non-zero when id is missing", async () => {

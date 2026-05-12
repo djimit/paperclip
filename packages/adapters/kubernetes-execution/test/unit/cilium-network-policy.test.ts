@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { buildCiliumAgentEgressPolicy } from "../../src/orchestrator/cilium-network-policy.js";
+import { describe, it, expect, vi } from "vitest";
+import {
+  applyCiliumNetworkPolicy,
+  buildCiliumAgentEgressPolicy,
+} from "../../src/orchestrator/cilium-network-policy.js";
 
 describe("buildCiliumAgentEgressPolicy", () => {
   it("merges adapter and tenant FQDN allowlists, deduplicated and sorted", () => {
@@ -64,5 +67,29 @@ describe("buildCiliumAgentEgressPolicy", () => {
       controlPlaneSelector: null,
     });
     expect(p.spec.egress).toEqual([]);
+  });
+
+  it("creates the policy when the custom client reports failed 404", async () => {
+    const request = vi.fn()
+      .mockRejectedValueOnce(new Error("failed 404: not found"))
+      .mockResolvedValueOnce({});
+    await applyCiliumNetworkPolicy({ request } as any, buildCiliumAgentEgressPolicy({
+      namespace: "paperclip-x", companyId: "c-1", companySlug: "x",
+      adapterAllowFqdns: [], tenantAllowFqdns: [], controlPlaneSelector: null,
+    }));
+    expect(request).toHaveBeenLastCalledWith(
+      "POST",
+      "/apis/cilium.io/v2/namespaces/paperclip-x/ciliumnetworkpolicies",
+      expect.any(Object),
+    );
+  });
+
+  it("does not treat unrelated 404 text as not found", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new Error("backend error code 40442"));
+    await expect(applyCiliumNetworkPolicy({ request } as any, buildCiliumAgentEgressPolicy({
+      namespace: "paperclip-x", companyId: "c-1", companySlug: "x",
+      adapterAllowFqdns: [], tenantAllowFqdns: [], controlPlaneSelector: null,
+    }))).rejects.toThrow("40442");
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

@@ -295,6 +295,11 @@ async function cmdRemove(argv: string[], deps: ClusterCommandDeps): Promise<numb
     deps.print("Usage: cluster remove <id>");
     return 2;
   }
+  const existing = await deps.clusterConnections.get(id);
+  if (!existing) {
+    deps.print(`Cluster connection ${id} not found`);
+    return 1;
+  }
   await deps.clusterConnections.delete(id);
   deps.print(`Deleted cluster connection ${id}`);
   return 0;

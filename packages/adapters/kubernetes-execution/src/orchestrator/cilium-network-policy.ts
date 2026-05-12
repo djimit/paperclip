@@ -65,16 +65,25 @@ export async function applyCiliumNetworkPolicy(client: KubernetesApiClient, p: C
     await client.request("GET", itemPath);
     await client.request("PUT", itemPath, p);
   } catch (err: unknown) {
-    const is404 =
-      /\b404\b/.test(String(err)) ||
-      (typeof err === "object" && err !== null && (err as Record<string, unknown>)["statusCode"] === 404) ||
-      (typeof err === "object" && err !== null &&
-        typeof (err as Record<string, unknown>)["response"] === "object" &&
-        ((err as Record<string, unknown>)["response"] as Record<string, unknown>)?.["statusCode"] === 404);
-    if (is404) {
+    if (isNotFoundError(err)) {
       await client.request("POST", collectionPath, p);
       return;
     }
     throw err;
   }
+}
+
+function isNotFoundError(err: unknown): boolean {
+  if (typeof err === "object" && err !== null) {
+    const record = err as Record<string, unknown>;
+    if (record.statusCode === 404) return true;
+    if (
+      typeof record.response === "object" &&
+      record.response !== null &&
+      (record.response as Record<string, unknown>).statusCode === 404
+    ) {
+      return true;
+    }
+  }
+  return /\bfailed 404:/.test(String(err));
 }
