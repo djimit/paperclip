@@ -1,8 +1,10 @@
 import type { PluginDetailTabProps } from "@paperclipai/plugin-sdk/ui";
 import { usePluginData, usePluginToast } from "@paperclipai/plugin-sdk/ui";
 import type { WorkspaceDiffResponse } from "@paperclipai/plugin-sdk";
-import { PatchDiff } from "@pierre/diffs/react";
-import { useEffect, useMemo, useState } from "react";
+import { DIFFS_TAG_NAME, getSingularPatch } from "@pierre/diffs";
+import type { PatchDiffProps } from "@pierre/diffs/react";
+import { useFileDiffInstance } from "@pierre/diffs/react";
+import { createElement, useEffect, useMemo, useState } from "react";
 import {
   diffSummary,
   fileName,
@@ -15,6 +17,7 @@ import {
 } from "../diff-model.js";
 
 type WorkspaceDiffData = WorkspaceDiffResponse;
+type WorkspacePatchDiffOptions = PatchDiffProps<undefined>["options"];
 
 function buttonClass(active = false) {
   return [
@@ -117,12 +120,37 @@ function FileRow({
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-[11px] text-muted-foreground">
         <span>{statusLabel(file.status)}</span>
-        <span className="font-mono text-emerald-700 dark:text-emerald-300">+{file.additions}</span>
-        <span className="font-mono text-red-700 dark:text-red-300">-{file.deletions}</span>
+        <span className="font-mono text-emerald-700 dark:text-emerald-300">{`+${file.additions}`}</span>
+        <span className="font-mono text-red-700 dark:text-red-300">{`-${file.deletions}`}</span>
         {warning ? <span className="text-amber-700 dark:text-amber-300">{warning}</span> : null}
       </div>
     </div>
   );
+}
+
+// The upstream React wrapper emits React 19 key warnings for its internal slot array.
+// This mounts the same Diffs custom element through the exported imperative hook.
+function WorkspacePatchDiff({
+  patch,
+  options,
+}: {
+  patch: string;
+  options: WorkspacePatchDiffOptions;
+}) {
+  const fileDiff = useMemo(() => getSingularPatch(patch), [patch]);
+  const { ref } = useFileDiffInstance({
+    fileDiff,
+    options,
+    metrics: undefined,
+    lineAnnotations: undefined,
+    selectedLines: undefined,
+    prerenderedHTML: undefined,
+    hasGutterRenderUtility: false,
+    hasCustomHeader: false,
+    disableWorkerPool: false,
+  });
+
+  return createElement(DIFFS_TAG_NAME, { ref });
 }
 
 function EmptyState() {
@@ -177,8 +205,8 @@ function FileDiffPanel({
             {file.patches.length > 1 ? (
               <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">{patchKindLabel(patch.kind)}</span>
-                <span className="font-mono text-emerald-700 dark:text-emerald-300">+{patch.additions}</span>
-                <span className="font-mono text-red-700 dark:text-red-300">-{patch.deletions}</span>
+                <span className="font-mono text-emerald-700 dark:text-emerald-300">{`+${patch.additions}`}</span>
+                <span className="font-mono text-red-700 dark:text-red-300">{`-${patch.deletions}`}</span>
               </div>
             ) : null}
             {patchWarning || !patch.patch ? (
@@ -186,7 +214,7 @@ function FileDiffPanel({
                 {patchWarning ?? "No renderable patch is available for this file."}
               </div>
             ) : (
-              <PatchDiff
+              <WorkspacePatchDiff
                 patch={patch.patch}
                 options={{
                   diffStyle: mode,
@@ -310,8 +338,9 @@ export function ChangesTab({ context }: PluginDetailTabProps) {
           </aside>
 
           <main className="min-w-0 space-y-3">
-            {files.map((file) => (
-              expandedFiles.has(file.path) ? (
+            {files
+              .filter((file) => expandedFiles.has(file.path))
+              .map((file) => (
                 <section
                   key={file.path}
                   className={file.path === selectedFile?.path ? "scroll-mt-20" : undefined}
@@ -352,8 +381,7 @@ export function ChangesTab({ context }: PluginDetailTabProps) {
                   </div>
                   <FileDiffPanel file={file} mode={mode} />
                 </section>
-              ) : null
-            ))}
+              ))}
           </main>
         </div>
       )}
