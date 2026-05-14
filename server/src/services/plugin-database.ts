@@ -19,6 +19,9 @@ const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_POSTGRES_IDENTIFIER_LENGTH = 63;
 
 type SqlRef = { schema: string; table: string; keyword: string };
+type QualifiedRefPattern =
+  | { pattern: RegExp; groups: "keyword-schema-table" }
+  | { pattern: RegExp; groups: "schema-table"; keyword: string };
 
 export type PluginDatabaseRuntimeResult<T = Record<string, unknown>> = {
   rows?: T[];
@@ -123,18 +126,28 @@ function normaliseSql(input: string): string {
 
 function extractQualifiedRefs(statement: string): SqlRef[] {
   const refs: SqlRef[] = [];
-  const patterns = [
-    /\b(from|join|references|into|update)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
-    /\b(alter\s+table|create\s+table|create\s+view|drop\s+table|truncate\s+table)\s+(?:if\s+(?:not\s+)?exists\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
-    /\bcreate\s+(?:unique\s+)?index(?:\s+concurrently)?\s+(?:if\s+not\s+exists\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?\s+on\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
+  const patterns: QualifiedRefPattern[] = [
+    {
+      pattern: /\b(from|join|references|into|update)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
+      groups: "keyword-schema-table",
+    },
+    {
+      pattern: /\b(alter\s+table|create\s+table|create\s+view|drop\s+table|truncate\s+table)\s+(?:if\s+(?:not\s+)?exists\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
+      groups: "keyword-schema-table",
+    },
+    {
+      pattern: /\bcreate\s+(?:unique\s+)?index(?:\s+concurrently)?\s+(?:if\s+not\s+exists\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?\s+on\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\."?([A-Za-z_][A-Za-z0-9_]*)"?/gi,
+      groups: "schema-table",
+      keyword: "create index",
+    },
   ];
 
-  for (const pattern of patterns) {
+  for (const { pattern, ...mapping } of patterns) {
     for (const match of statement.matchAll(pattern)) {
-      if (pattern.source.startsWith("\\bcreate\\s+")) {
-        refs.push({ keyword: "create index", schema: match[1]!, table: match[2]! });
-      } else {
+      if (mapping.groups === "keyword-schema-table") {
         refs.push({ keyword: match[1]!.toLowerCase(), schema: match[2]!, table: match[3]! });
+      } else {
+        refs.push({ keyword: mapping.keyword, schema: match[1]!, table: match[2]! });
       }
     }
   }
@@ -342,6 +355,46 @@ export interface ApplyPluginMigrationsOptions {
   persistFailure?: boolean;
 }
 
+const LEGACY_LLM_WIKI_SPACES_MIGRATION = {
+  pluginKey: "paperclipai.plugin-llm-wiki",
+  migrationKey: "003_spaces.sql",
+  checksum: "e4d706d9035ec6ad4612377cba810540187081481736a709702af5d8dd8669aa",
+  dynamicConstraintDropPattern: /DO \$\$\nDECLARE\n[\s\S]*?\nEND \$\$;/,
+  explicitConstraintDrops: `
+ALTER TABLE plugin_llm_wiki_8f50da974f.wiki_pages
+  DROP CONSTRAINT IF EXISTS wiki_pages_company_id_wiki_id_path_key;
+ALTER TABLE plugin_llm_wiki_8f50da974f.paperclip_distillation_cursors
+  DROP CONSTRAINT IF EXISTS paperclip_distillation_cursor_company_id_wiki_id_source_sco_key;
+ALTER TABLE plugin_llm_wiki_8f50da974f.paperclip_distillation_work_items
+  DROP CONSTRAINT IF EXISTS paperclip_distillation_work_i_company_id_wiki_id_idempotenc_key;
+ALTER TABLE plugin_llm_wiki_8f50da974f.paperclip_page_bindings
+  DROP CONSTRAINT IF EXISTS paperclip_page_bindings_company_id_wiki_id_page_path_key;`,
+} as const;
+
+function rewritePluginMigrationContent(input: {
+  pluginKey: string;
+  migrationKey: string;
+  checksum: string;
+  content: string;
+}): string {
+  if (
+    input.pluginKey !== LEGACY_LLM_WIKI_SPACES_MIGRATION.pluginKey ||
+    input.migrationKey !== LEGACY_LLM_WIKI_SPACES_MIGRATION.migrationKey ||
+    input.checksum !== LEGACY_LLM_WIKI_SPACES_MIGRATION.checksum
+  ) {
+    return input.content;
+  }
+
+  const rewritten = input.content.replace(
+    LEGACY_LLM_WIKI_SPACES_MIGRATION.dynamicConstraintDropPattern,
+    LEGACY_LLM_WIKI_SPACES_MIGRATION.explicitConstraintDrops,
+  );
+  if (rewritten === input.content) {
+    throw new Error(`Unable to rewrite legacy plugin migration ${input.migrationKey}`);
+  }
+  return rewritten;
+}
+
 export function pluginDatabaseService(db: PluginDatabaseRootClient) {
   async function getPluginRecord(pluginId: string) {
     const rows = await db.select().from(plugins).where(eq(plugins.id, pluginId)).limit(1);
@@ -481,7 +534,13 @@ export function pluginDatabaseService(db: PluginDatabaseRootClient) {
             continue;
           }
 
-          const statements = splitSqlStatements(content);
+          const executableContent = rewritePluginMigrationContent({
+            pluginKey: manifest.id,
+            migrationKey,
+            checksum,
+            content,
+          });
+          const statements = splitSqlStatements(executableContent);
           try {
             if (statements.length === 0) {
               throw new Error(`Plugin migration ${migrationKey} is empty`);
