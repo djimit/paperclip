@@ -10,6 +10,7 @@ export type DiffRenderMode = "unified" | "split";
 export interface DiffPatchViewModel {
   kind: WorkspaceDiffFilePatch["kind"];
   patch: string | null;
+  lineCount: number;
   additions: number;
   deletions: number;
   binary: boolean;
@@ -31,6 +32,8 @@ export interface DiffFileViewModel {
   patchKinds: WorkspaceDiffFilePatch["kind"][];
   patches: DiffPatchViewModel[];
   patch: string | null;
+  lineCount: number;
+  longDiff: boolean;
 }
 
 export interface DiffSummaryViewModel {
@@ -51,6 +54,8 @@ const STATUS_LABELS: Record<WorkspaceDiffFile["status"], string> = {
   unknown: "Changed",
 };
 
+export const LONG_DIFF_LINE_THRESHOLD = 400;
+
 export function statusLabel(status: WorkspaceDiffFile["status"]) {
   return STATUS_LABELS[status] ?? "Changed";
 }
@@ -62,9 +67,11 @@ export function fileName(filePath: string) {
 export function buildFilePatches(file: WorkspaceDiffFile): DiffPatchViewModel[] {
   return file.patches.map((patch) => {
     const textPatch = patch.patch?.trimEnd() ?? null;
+    const lineCount = textPatch ? textPatch.split("\n").length : 0;
     return {
       kind: patch.kind,
       patch: textPatch && textPatch.length > 0 ? textPatch : null,
+      lineCount,
       additions: patch.additions,
       deletions: patch.deletions,
       binary: patch.binary,
@@ -79,10 +86,15 @@ export function buildFilePatch(file: WorkspaceDiffFile): string | null {
   return buildFilePatches(file).find((patch) => patch.patch)?.patch ?? null;
 }
 
+export function isLongDiffFile(file: Pick<DiffFileViewModel, "lineCount">) {
+  return file.lineCount > LONG_DIFF_LINE_THRESHOLD;
+}
+
 export function toFileViewModels(diff: WorkspaceDiffResponse | null | undefined): DiffFileViewModel[] {
   return (diff?.files ?? []).map((file) => {
     const patchWarnings = file.patches.flatMap((patch) => patch.warnings);
     const patches = buildFilePatches(file);
+    const lineCount = patches.reduce((count, patch) => count + patch.lineCount, 0);
     return {
       path: file.path,
       oldPath: file.oldPath,
@@ -96,6 +108,8 @@ export function toFileViewModels(diff: WorkspaceDiffResponse | null | undefined)
       patchKinds: file.patches.map((patch) => patch.kind),
       patches,
       patch: patches.find((patch) => patch.patch)?.patch ?? null,
+      lineCount,
+      longDiff: isLongDiffFile({ lineCount }),
     };
   });
 }
@@ -126,4 +140,8 @@ export function nextExpandedFileSet(
   if (next.has(filePath)) next.delete(filePath);
   else next.add(filePath);
   return next;
+}
+
+export function initialExpandedFileSet(files: readonly DiffFileViewModel[]): Set<string> {
+  return new Set(files.filter((file) => !file.longDiff).map((file) => file.path));
 }

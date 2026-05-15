@@ -4,10 +4,11 @@ import type { WorkspaceDiffResponse } from "@paperclipai/plugin-sdk";
 import { DIFFS_TAG_NAME, getSingularPatch } from "@pierre/diffs";
 import type { PatchDiffProps } from "@pierre/diffs/react";
 import { useFileDiffInstance } from "@pierre/diffs/react";
-import { createElement, useEffect, useMemo, useState } from "react";
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   diffSummary,
   fileName,
+  initialExpandedFileSet,
   nextExpandedFileSet,
   statusLabel,
   toFileViewModels,
@@ -236,12 +237,45 @@ function FileDiffPanel({
   );
 }
 
+function CollapsedFilePanel({
+  file,
+  onExpand,
+}: {
+  file: DiffFileViewModel;
+  onExpand: () => void;
+}) {
+  const title = file.longDiff ? "Large diff folded" : "Diff folded";
+  const details = file.lineCount > 0
+    ? `${file.lineCount.toLocaleString()} lines`
+    : statusLabel(file.status);
+
+  return (
+    <div className="border border-dashed border-border bg-background px-4 py-5 text-sm text-muted-foreground">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="font-medium text-foreground">{title}</div>
+          <div className="mt-1 font-mono text-xs">{details}</div>
+        </div>
+        <button
+          type="button"
+          className={buttonClass(false)}
+          onClick={onExpand}
+          aria-label={`Show diff for ${file.path}`}
+        >
+          Show file
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function ChangesTab({ context }: PluginDetailTabProps) {
   const toast = usePluginToast();
   const [mode, setMode] = useState<DiffRenderMode>("split");
-  const [includeUntracked, setIncludeUntracked] = useState(true);
+  const [includeUntracked, setIncludeUntracked] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(() => new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const fileSectionRefs = useRef(new Map<string, HTMLElement>());
 
   const params = useMemo(() => ({
     workspaceId: context.entityId,
@@ -256,13 +290,28 @@ export function ChangesTab({ context }: PluginDetailTabProps) {
   const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
   const compareLabel = `${data?.baseRef ? `base ${data.baseRef}` : "working tree"}${data?.headSha ? ` · ${data.headSha.slice(0, 12)}` : ""}`;
 
+  const setFileSectionRef = useCallback((filePath: string) => (node: HTMLElement | null) => {
+    if (node) fileSectionRefs.current.set(filePath, node);
+    else fileSectionRefs.current.delete(filePath);
+  }, []);
+
+  const selectFile = useCallback((filePath: string) => {
+    setSelectedPath(filePath);
+    window.requestAnimationFrame(() => {
+      fileSectionRefs.current.get(filePath)?.scrollIntoView({
+        block: "start",
+        behavior: "smooth",
+      });
+    });
+  }, []);
+
   useEffect(() => {
     if (files.length === 0) {
       setExpandedFiles(new Set());
       setSelectedPath(null);
       return;
     }
-    setExpandedFiles((current) => current.size > 0 ? current : new Set(files.map((file) => file.path)));
+    setExpandedFiles(initialExpandedFileSet(files));
     setSelectedPath((current) => files.some((file) => file.path === current) ? current : files[0]?.path ?? null);
   }, [files]);
 
@@ -309,7 +358,7 @@ export function ChangesTab({ context }: PluginDetailTabProps) {
             className={buttonClass(includeUntracked)}
             onClick={() => setIncludeUntracked((value) => !value)}
           >
-            Untracked
+            {includeUntracked ? "Untracked shown" : "Show untracked"}
           </button>
           <button key="refresh" type="button" className={buttonClass(false)} onClick={() => refresh()}>
             Refresh
@@ -324,19 +373,19 @@ export function ChangesTab({ context }: PluginDetailTabProps) {
       ) : files.length === 0 ? (
         <EmptyState />
       ) : (
-        <div key="content" className="grid min-h-[560px] gap-3 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <aside key="files" className="min-w-0 border border-border bg-background">
+        <div key="content" className="grid gap-3 lg:h-[70vh] lg:min-h-[560px] lg:max-h-[820px] lg:grid-cols-[280px_minmax(0,1fr)]">
+          <aside key="files" className="flex min-w-0 flex-col border border-border bg-background lg:h-full lg:overflow-hidden">
             <div key="heading" className="border-b border-border px-3 py-2 text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
               Files
             </div>
-            <div key="list" className="max-h-[70vh] overflow-auto">
+            <div key="list" className="max-h-[70vh] overflow-auto lg:max-h-none lg:flex-1">
               {files.map((file) => (
                 <FileRow
                   key={file.path}
                   file={file}
                   active={file.path === selectedFile?.path}
                   expanded={expandedFiles.has(file.path)}
-                  onSelect={() => setSelectedPath(file.path)}
+                  onSelect={() => selectFile(file.path)}
                   onToggle={() => setExpandedFiles((current) => nextExpandedFileSet(current, file.path))}
                   onCopy={() => void copyPath(file.path)}
                 />
@@ -344,20 +393,20 @@ export function ChangesTab({ context }: PluginDetailTabProps) {
             </div>
           </aside>
 
-          <main key="diffs" className="min-w-0 space-y-3">
+          <main key="diffs" className="max-h-[70vh] min-w-0 space-y-3 overflow-auto lg:h-full lg:max-h-none lg:pr-1">
             {files
-              .filter((file) => expandedFiles.has(file.path))
               .map((file) => (
                 <section
                   key={file.path}
-                  className={file.path === selectedFile?.path ? "scroll-mt-20" : undefined}
+                  ref={setFileSectionRef(file.path)}
+                  className={file.path === selectedFile?.path ? "scroll-mt-2" : undefined}
                 >
                   <div key="header" className="flex min-w-0 items-center justify-between gap-3 border border-b-0 border-border bg-muted/35 px-3 py-2">
                     <button
                       key="select"
                       type="button"
                       className="min-w-0 text-left"
-                      onClick={() => setSelectedPath(file.path)}
+                      onClick={() => selectFile(file.path)}
                     >
                       <div key="path" className="truncate text-sm font-medium">{file.path}</div>
                       {file.oldPath ? (
@@ -381,15 +430,23 @@ export function ChangesTab({ context }: PluginDetailTabProps) {
                         key="collapse"
                         type="button"
                         className={iconButtonClass(false)}
-                        title="Collapse file"
-                        aria-label={`Collapse ${file.path}`}
+                        title={expandedFiles.has(file.path) ? "Collapse file" : "Expand file"}
+                        aria-label={expandedFiles.has(file.path) ? `Collapse ${file.path}` : `Expand ${file.path}`}
                         onClick={() => setExpandedFiles((current) => nextExpandedFileSet(current, file.path))}
                       >
-                        −
+                        {expandedFiles.has(file.path) ? "−" : "+"}
                       </button>
                     </div>
                   </div>
-                  <FileDiffPanel key="diff" file={file} mode={mode} />
+                  {expandedFiles.has(file.path) ? (
+                    <FileDiffPanel key="diff" file={file} mode={mode} />
+                  ) : (
+                    <CollapsedFilePanel
+                      key="collapsed"
+                      file={file}
+                      onExpand={() => setExpandedFiles((current) => nextExpandedFileSet(current, file.path))}
+                    />
+                  )}
                 </section>
               ))}
           </main>

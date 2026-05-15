@@ -3,6 +3,8 @@ import {
   buildFilePatch,
   buildFilePatches,
   diffSummary,
+  initialExpandedFileSet,
+  LONG_DIFF_LINE_THRESHOLD,
   nextExpandedFileSet,
   statusLabel,
   toFileViewModels,
@@ -23,6 +25,8 @@ describe("workspace diff UI model", () => {
       path: "src/app.ts",
       status: "modified",
       patchKinds: ["unstaged"],
+      lineCount: 7,
+      longDiff: false,
     });
   });
 
@@ -104,6 +108,47 @@ describe("workspace diff UI model", () => {
     expect(patches.map((patch) => patch.patch?.match(/^diff --git/gm)?.length ?? 0)).toEqual([1, 1]);
     expect(viewModel?.patches).toHaveLength(2);
     expect(viewModel?.patchKinds).toEqual(["staged", "unstaged"]);
+  });
+
+  it("marks long text diffs so the UI can fold them by default", () => {
+    const longPatch = [
+      "diff --git a/src/large.ts b/src/large.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/large.ts",
+      "+++ b/src/large.ts",
+      "@@ -1,1 +1,1 @@",
+      ...Array.from({ length: LONG_DIFF_LINE_THRESHOLD }, (_, index) => `+export const value${index} = ${index};`),
+      "",
+    ].join("\n");
+    const files = toFileViewModels(diffResponse({
+      files: [
+        changedFile({ path: "src/small.ts" }),
+        changedFile({
+          path: "src/large.ts",
+          additions: LONG_DIFF_LINE_THRESHOLD,
+          deletions: 0,
+          patches: [
+            {
+              kind: "unstaged",
+              patch: longPatch,
+              additions: LONG_DIFF_LINE_THRESHOLD,
+              deletions: 0,
+              binary: false,
+              oversized: false,
+              truncated: false,
+              warnings: [],
+            },
+          ],
+        }),
+      ],
+    }));
+    const longFile = files.find((file) => file.path === "src/large.ts");
+    const defaultExpanded = initialExpandedFileSet(files);
+
+    expect(longFile?.lineCount).toBeGreaterThan(LONG_DIFF_LINE_THRESHOLD);
+    expect(longFile?.longDiff).toBe(true);
+    expect(defaultExpanded.has("src/small.ts")).toBe(true);
+    expect(defaultExpanded.has("src/large.ts")).toBe(false);
   });
 
   it("toggles expanded file state without mutating the current set", () => {
