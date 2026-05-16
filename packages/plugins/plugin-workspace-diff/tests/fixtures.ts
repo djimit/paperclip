@@ -1,4 +1,4 @@
-import type { WorkspaceDiffFile, WorkspaceDiffResponse } from "@paperclipai/plugin-sdk";
+import type { WorkspaceDiffFile, WorkspaceDiffResponse } from "../src/contracts.js";
 
 export function changedFile(overrides: Partial<WorkspaceDiffFile> = {}): WorkspaceDiffFile {
   return {

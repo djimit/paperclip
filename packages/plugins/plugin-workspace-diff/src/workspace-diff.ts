@@ -2,8 +2,8 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { PluginExecutionWorkspaceMetadata } from "@paperclipai/plugin-sdk";
 import type {
-  PluginExecutionWorkspaceMetadata,
   WorkspaceDiffCaps,
   WorkspaceDiffFile,
   WorkspaceDiffFilePatch,
@@ -13,7 +13,7 @@ import type {
   WorkspaceDiffResponse,
   WorkspaceDiffWarning,
   WorkspaceDiffWarningCode,
-} from "@paperclipai/plugin-sdk";
+} from "./contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,7 +51,7 @@ function warning(code: WorkspaceDiffWarningCode, message: string, filePath: stri
 
 function workspaceDiffError(code: WorkspaceDiffWarningCode, message: string, details: Record<string, unknown> = {}) {
   const error = new Error(message);
-  Object.assign(error, { code, details: { code, ...details } });
+  Object.assign(error, { code, status: 422, details: { code, ...details } });
   return error;
 }
 

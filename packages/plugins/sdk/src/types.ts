@@ -39,15 +39,6 @@ import type {
   RoutineRun,
   Agent,
   Goal,
-  WorkspaceDiffFile,
-  WorkspaceDiffFilePatch,
-  WorkspaceDiffCaps,
-  WorkspaceDiffFileStatus,
-  WorkspaceDiffPatchKind,
-  WorkspaceDiffQueryOptions,
-  WorkspaceDiffResponse,
-  WorkspaceDiffWarning,
-  WorkspaceDiffWarningCode,
 } from "@paperclipai/shared";
 
 // ---------------------------------------------------------------------------
@@ -129,15 +120,6 @@ export type {
   IssueSurfaceVisibility,
   Agent,
   Goal,
-  WorkspaceDiffFile,
-  WorkspaceDiffFilePatch,
-  WorkspaceDiffCaps,
-  WorkspaceDiffFileStatus,
-  WorkspaceDiffPatchKind,
-  WorkspaceDiffQueryOptions,
-  WorkspaceDiffResponse,
-  WorkspaceDiffWarning,
-  WorkspaceDiffWarningCode,
 } from "@paperclipai/shared";
 
 // ---------------------------------------------------------------------------
@@ -362,6 +344,12 @@ export interface PluginWorkspace {
   name: string;
   /** Absolute filesystem path to the workspace directory. */
   path: string;
+  /** Repository URL, when known. */
+  repoUrl: string | null;
+  /** Checkout/ref requested for the workspace, when known. */
+  repoRef: string | null;
+  /** Default comparison ref for workspace tooling, when known. */
+  defaultRef: string | null;
   /** Whether this is the project's primary workspace. */
   isPrimary: boolean;
   /** ISO 8601 creation timestamp. */

@@ -266,21 +266,6 @@ export {
 } from "./execution-workspace.js";
 
 export {
-  workspaceDiffCapsSchema,
-  workspaceDiffFilePatchSchema,
-  workspaceDiffFileSchema,
-  workspaceDiffFileStatusSchema,
-  workspaceDiffPatchKindSchema,
-  workspaceDiffQuerySchema,
-  workspaceDiffResponseSchema,
-  workspaceDiffStatsSchema,
-  workspaceDiffViewSchema,
-  workspaceDiffWarningCodeSchema,
-  workspaceDiffWarningSchema,
-  type WorkspaceDiffQuery,
-} from "./workspace-diff.js";
-
-export {
   createGoalSchema,
   updateGoalSchema,
   type CreateGoal,

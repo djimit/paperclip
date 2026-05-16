@@ -131,19 +131,6 @@ export type {
   IssueExecutionWorkspaceSettings,
 } from "./workspace-runtime.js";
 export type {
-  WorkspaceDiffCaps,
-  WorkspaceDiffFile,
-  WorkspaceDiffFilePatch,
-  WorkspaceDiffFileStatus,
-  WorkspaceDiffPatchKind,
-  WorkspaceDiffQueryOptions,
-  WorkspaceDiffResponse,
-  WorkspaceDiffStats,
-  WorkspaceDiffView,
-  WorkspaceDiffWarning,
-  WorkspaceDiffWarningCode,
-} from "./workspace-diff.js";
-export type {
   WorkspaceOperation,
   WorkspaceOperationPhase,
   WorkspaceOperationStatus,

@@ -1,34 +1,11 @@
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
-import type { WorkspaceDiffQueryOptions } from "@paperclipai/plugin-sdk";
+import { workspaceDiffQuerySchema } from "./contracts.js";
 import { workspaceDiffService } from "./workspace-diff.js";
 
 const PLUGIN_NAME = "workspace-diff";
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function readPaths(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (typeof entry !== "string") return [];
-    const trimmed = entry.trim();
-    return trimmed ? [trimmed] : [];
-  });
-}
-
-function readDiffOptions(params: Record<string, unknown>): WorkspaceDiffQueryOptions {
-  const view = params.view === "head" ? "head" : "working-tree";
-  const baseRef = readString(params.baseRef) || null;
-  const includeUntracked = typeof params.includeUntracked === "boolean"
-    ? params.includeUntracked
-    : true;
-  return {
-    view,
-    baseRef,
-    includeUntracked,
-    paths: readPaths(params.paths),
-  };
 }
 
 const plugin = definePlugin({
@@ -57,15 +34,15 @@ const plugin = definePlugin({
           id: workspace.id,
           companyId,
           cwd: workspace.path,
-          baseRef: null,
-        }, readDiffOptions(params));
+          baseRef: workspace.defaultRef ?? workspace.repoRef ?? null,
+        }, workspaceDiffQuerySchema.parse(params));
       }
 
       const workspace = await ctx.executionWorkspaces.get(workspaceId, companyId);
       if (!workspace) {
         throw new Error("Workspace not found");
       }
-      return workspaceDiff.getDiff(workspace, readDiffOptions(params));
+      return workspaceDiff.getDiff(workspace, workspaceDiffQuerySchema.parse(params));
     });
   },
 

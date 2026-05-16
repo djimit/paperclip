@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@paperclipai/plugin-sdk";
 
 export const workspaceDiffViewSchema = z.enum(["working-tree", "head"]);
 
@@ -40,7 +40,7 @@ function normalizePathQuery(value: unknown): string[] {
     if (typeof entry !== "string") return [];
     return entry
       .split(",")
-      .map((path) => path.trim())
+      .map((filePath) => filePath.trim())
       .filter(Boolean);
   });
 }
@@ -115,8 +115,8 @@ export const workspaceDiffStatsSchema = z.object({
 }).strict();
 
 export const workspaceDiffResponseSchema = z.object({
-  workspaceId: z.string().uuid(),
-  companyId: z.string().uuid(),
+  workspaceId: z.string(),
+  companyId: z.string(),
   view: workspaceDiffViewSchema,
   baseRef: z.string().nullable(),
   headSha: z.string().nullable(),
@@ -129,4 +129,14 @@ export const workspaceDiffResponseSchema = z.object({
   truncated: z.boolean(),
 }).strict();
 
-export type WorkspaceDiffQuery = z.infer<typeof workspaceDiffQuerySchema>;
+export type WorkspaceDiffView = z.infer<typeof workspaceDiffViewSchema>;
+export type WorkspaceDiffFileStatus = z.infer<typeof workspaceDiffFileStatusSchema>;
+export type WorkspaceDiffPatchKind = z.infer<typeof workspaceDiffPatchKindSchema>;
+export type WorkspaceDiffWarningCode = z.infer<typeof workspaceDiffWarningCodeSchema>;
+export type WorkspaceDiffQueryOptions = z.infer<typeof workspaceDiffQuerySchema>;
+export type WorkspaceDiffWarning = z.infer<typeof workspaceDiffWarningSchema>;
+export type WorkspaceDiffCaps = z.infer<typeof workspaceDiffCapsSchema>;
+export type WorkspaceDiffFilePatch = z.infer<typeof workspaceDiffFilePatchSchema>;
+export type WorkspaceDiffFile = z.infer<typeof workspaceDiffFileSchema>;
+export type WorkspaceDiffStats = z.infer<typeof workspaceDiffStatsSchema>;
+export type WorkspaceDiffResponse = z.infer<typeof workspaceDiffResponseSchema>;

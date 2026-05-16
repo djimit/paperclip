@@ -27,16 +27,4 @@ describe("executionWorkspacesApi.listSummaries", () => {
     );
   });
 
-  it("requests workspace diffs with query options", async () => {
-    await executionWorkspacesApi.getDiff("workspace-1", {
-      view: "head",
-      baseRef: "main",
-      includeUntracked: false,
-      paths: ["server/src/index.ts", "packages/shared/src/index.ts"],
-    });
-
-    expect(mockApi.get).toHaveBeenCalledWith(
-      "/execution-workspaces/workspace-1/diff?view=head&baseRef=main&includeUntracked=false&path=server%2Fsrc%2Findex.ts&path=packages%2Fshared%2Fsrc%2Findex.ts",
-    );
-  });
 });

@@ -3,7 +3,7 @@ import type {
   WorkspaceDiffFilePatch,
   WorkspaceDiffResponse,
   WorkspaceDiffWarning,
-} from "@paperclipai/plugin-sdk";
+} from "./contracts.js";
 
 export type DiffRenderMode = "unified" | "split";
 

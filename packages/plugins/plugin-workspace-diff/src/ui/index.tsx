@@ -1,6 +1,5 @@
 import type { PluginDetailTabProps } from "@paperclipai/plugin-sdk/ui";
 import { usePluginData, usePluginToast } from "@paperclipai/plugin-sdk/ui";
-import type { WorkspaceDiffResponse } from "@paperclipai/plugin-sdk";
 import { DIFFS_TAG_NAME, getSingularPatch } from "@pierre/diffs";
 import type { PatchDiffProps } from "@pierre/diffs/react";
 import { useFileDiffInstance } from "@pierre/diffs/react";
@@ -16,6 +15,7 @@ import {
   type DiffPatchViewModel,
   type DiffRenderMode,
 } from "../diff-model.js";
+import type { WorkspaceDiffResponse } from "../contracts.js";
 
 type WorkspaceDiffData = WorkspaceDiffResponse;
 type WorkspacePatchDiffOptions = PatchDiffProps<undefined>["options"];

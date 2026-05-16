@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ExecutionWorkspace, WorkspaceDiffQueryOptions } from "@paperclipai/shared";
-import { WORKSPACE_DIFF_CAPS, workspaceDiffService } from "../services/workspace-diff.js";
+import type { PluginExecutionWorkspaceMetadata } from "@paperclipai/plugin-sdk";
+import type { WorkspaceDiffQueryOptions } from "../src/contracts.js";
+import { WORKSPACE_DIFF_CAPS, workspaceDiffService } from "../src/workspace-diff.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = new Set<string>();
@@ -16,7 +17,7 @@ async function runGit(cwd: string, args: string[]) {
 }
 
 async function createTempRepo() {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-workspace-diff-"));
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-plugin-workspace-diff-"));
   tempDirs.add(repoRoot);
   await runGit(repoRoot, ["init"]);
   await runGit(repoRoot, ["config", "user.name", "Paperclip Test"]);
@@ -32,34 +33,19 @@ async function createTempRepo() {
   return repoRoot;
 }
 
-function createWorkspace(cwd: string | null, overrides: Partial<ExecutionWorkspace> = {}): ExecutionWorkspace {
-  const now = new Date();
+function createWorkspace(cwd: string | null, overrides: Partial<PluginExecutionWorkspaceMetadata> = {}): PluginExecutionWorkspaceMetadata {
   return {
     id: randomUUID(),
     companyId: randomUUID(),
     projectId: randomUUID(),
     projectWorkspaceId: null,
-    sourceIssueId: null,
-    mode: "isolated_workspace",
-    strategyType: "git_worktree",
-    name: "Diff workspace",
-    status: "active",
+    path: cwd,
     cwd,
     repoUrl: null,
     baseRef: null,
     branchName: "feature",
     providerType: "git_worktree",
-    providerRef: cwd,
-    derivedFromExecutionWorkspaceId: null,
-    lastUsedAt: now,
-    openedAt: now,
-    closedAt: null,
-    cleanupEligibleAt: null,
-    cleanupReason: null,
-    config: null,
-    metadata: null,
-    createdAt: now,
-    updatedAt: now,
+    providerMetadata: null,
     ...overrides,
   };
 }
@@ -81,7 +67,7 @@ afterEach(async () => {
   tempDirs.clear();
 });
 
-describe("workspaceDiffService", () => {
+describe("plugin workspace diff service", () => {
   it("returns staged, unstaged, renamed, deleted, untracked, binary, and oversized working-tree changes", async () => {
     const repoRoot = await createTempRepo();
     await fs.writeFile(path.join(repoRoot, "tracked-staged.txt"), "alpha\nstaged\n", "utf8");
@@ -98,34 +84,12 @@ describe("workspaceDiffService", () => {
     const byPath = new Map(diff.files.map((file) => [file.path, file]));
 
     expect(diff.view).toBe("working-tree");
-    expect(byPath.get("tracked-staged.txt")).toMatchObject({
-      staged: true,
-      unstaged: false,
-      status: "modified",
-      additions: 1,
-    });
+    expect(byPath.get("tracked-staged.txt")).toMatchObject({ staged: true, unstaged: false, status: "modified", additions: 1 });
     expect(byPath.get("tracked-staged.txt")?.patches.map((patch) => patch.kind)).toEqual(["staged"]);
-    expect(byPath.get("tracked-unstaged.txt")).toMatchObject({
-      staged: false,
-      unstaged: true,
-      status: "modified",
-      additions: 1,
-    });
-    expect(byPath.get("renamed.txt")).toMatchObject({
-      oldPath: "rename-me.txt",
-      staged: true,
-      status: "renamed",
-    });
-    expect(byPath.get("delete-me.txt")).toMatchObject({
-      unstaged: true,
-      status: "deleted",
-      deletions: 1,
-    });
-    expect(byPath.get("untracked.txt")).toMatchObject({
-      untracked: true,
-      status: "untracked",
-      additions: 1,
-    });
+    expect(byPath.get("tracked-unstaged.txt")).toMatchObject({ staged: false, unstaged: true, status: "modified", additions: 1 });
+    expect(byPath.get("renamed.txt")).toMatchObject({ oldPath: "rename-me.txt", staged: true, status: "renamed" });
+    expect(byPath.get("delete-me.txt")).toMatchObject({ unstaged: true, status: "deleted", deletions: 1 });
+    expect(byPath.get("untracked.txt")).toMatchObject({ untracked: true, status: "untracked", additions: 1 });
     expect(byPath.get("untracked.txt")?.patches[0]?.patch).toContain("+brand new");
     expect(byPath.get("empty-untracked.txt")?.patches[0]?.patch).toBe([
       "diff --git a/empty-untracked.txt b/empty-untracked.txt",
@@ -134,18 +98,9 @@ describe("workspaceDiffService", () => {
       "+++ b/empty-untracked.txt",
       "",
     ].join("\n"));
-    expect(byPath.get("binary.bin")).toMatchObject({
-      binary: true,
-      unstaged: true,
-    });
-    expect(byPath.get("oversized.txt")).toMatchObject({
-      oversized: true,
-      untracked: true,
-    });
-    expect(diff.warnings.map((item) => item.code)).toEqual(expect.arrayContaining([
-      "binary_file",
-      "file_oversized",
-    ]));
+    expect(byPath.get("binary.bin")).toMatchObject({ binary: true, unstaged: true });
+    expect(byPath.get("oversized.txt")).toMatchObject({ oversized: true, untracked: true });
+    expect(diff.warnings.map((item) => item.code)).toEqual(expect.arrayContaining(["binary_file", "file_oversized"]));
   }, 20_000);
 
   it("returns head diffs against the requested base ref", async () => {
@@ -173,12 +128,39 @@ describe("workspaceDiffService", () => {
     expect(diff.files[0]?.patches.map((patch) => patch.kind)).toEqual(["head"]);
   }, 20_000);
 
-  it("surfaces missing cwd, non-git, invalid base refs, and unsafe path filters as 422 errors", async () => {
+  it("filters changed files by relative workspace paths", async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(path.join(repoRoot, "tracked-staged.txt"), "alpha\none\n", "utf8");
+    await fs.writeFile(path.join(repoRoot, "tracked-unstaged.txt"), "bravo\ntwo\n", "utf8");
+
+    const diff = await workspaceDiffService().getDiff(
+      createWorkspace(repoRoot),
+      workingTreeQuery({ paths: ["tracked-staged.txt"] }),
+    );
+
+    expect(diff.paths).toEqual(["tracked-staged.txt"]);
+    expect(diff.files.map((file) => file.path)).toEqual(["tracked-staged.txt"]);
+  }, 20_000);
+
+  it("applies output caps to large workspace responses", async () => {
+    const repoRoot = await createTempRepo();
+    for (let index = 0; index < WORKSPACE_DIFF_CAPS.maxFiles + 1; index += 1) {
+      await fs.writeFile(path.join(repoRoot, `untracked-${String(index).padStart(3, "0")}.txt`), "", "utf8");
+    }
+
+    const diff = await workspaceDiffService().getDiff(createWorkspace(repoRoot), workingTreeQuery());
+
+    expect(diff.files).toHaveLength(WORKSPACE_DIFF_CAPS.maxFiles);
+    expect(diff.truncated).toBe(true);
+    expect(diff.warnings).toContainEqual(expect.objectContaining({ code: "file_count_truncated" }));
+  }, 20_000);
+
+  it("surfaces missing cwd, non-git, invalid base refs, and unsafe path filters as plugin errors", async () => {
     const svc = workspaceDiffService();
     await expect(svc.getDiff(createWorkspace(null), workingTreeQuery()))
       .rejects.toMatchObject({ status: 422, details: { code: "missing_cwd" } });
 
-    const nonGitDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-workspace-diff-non-git-"));
+    const nonGitDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-plugin-workspace-diff-non-git-"));
     tempDirs.add(nonGitDir);
     await expect(svc.getDiff(createWorkspace(nonGitDir), workingTreeQuery()))
       .rejects.toMatchObject({ status: 422, details: { code: "non_git_workspace" } });

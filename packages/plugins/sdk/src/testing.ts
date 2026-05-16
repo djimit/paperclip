@@ -81,6 +81,7 @@ export interface TestHarness {
     issueComments?: IssueComment[];
     agents?: Agent[];
     goals?: Goal[];
+    projectWorkspaces?: PluginWorkspace[];
     executionWorkspaces?: PluginExecutionWorkspaceMetadata[];
   }): void;
   setConfig(config: Record<string, unknown>): void;
@@ -2058,6 +2059,11 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       }
       for (const row of input.agents ?? []) agents.set(row.id, row);
       for (const row of input.goals ?? []) goals.set(row.id, row);
+      for (const row of input.projectWorkspaces ?? []) {
+        const list = projectWorkspaces.get(row.projectId) ?? [];
+        list.push(row);
+        projectWorkspaces.set(row.projectId, list);
+      }
       for (const row of input.executionWorkspaces ?? []) executionWorkspaces.set(row.id, row);
     },
     setConfig(config) {

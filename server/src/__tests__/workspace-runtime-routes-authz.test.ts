@@ -26,7 +26,6 @@ const mockEnvironmentService = vi.hoisted(() => ({
 }));
 
 const mockWorkspaceOperationService = vi.hoisted(() => ({}));
-const mockWorkspaceDiffService = vi.hoisted(() => ({}));
 const mockLogActivity = vi.hoisted(() => vi.fn());
 const mockGetTelemetryClient = vi.hoisted(() => vi.fn());
 const mockAssertCanManageProjectWorkspaceRuntimeServices = vi.hoisted(() => vi.fn());
@@ -42,7 +41,6 @@ vi.mock("../services/index.js", () => ({
   logActivity: mockLogActivity,
   projectService: () => mockProjectService,
   secretService: () => mockSecretService,
-  workspaceDiffService: () => mockWorkspaceDiffService,
   workspaceOperationService: () => mockWorkspaceOperationService,
 }));
 
@@ -69,7 +67,6 @@ function registerWorkspaceRouteMocks() {
     logActivity: mockLogActivity,
     projectService: () => mockProjectService,
     secretService: () => mockSecretService,
-    workspaceDiffService: () => mockWorkspaceDiffService,
     workspaceOperationService: () => mockWorkspaceOperationService,
   }));
 
