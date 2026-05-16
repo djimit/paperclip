@@ -652,6 +652,39 @@ export {
 } from "./validators/sidebar-preferences.js";
 
 export { workspaceRuntimeControlTargetSchema } from "./validators/execution-workspace.js";
+
+export {
+  CLIP_ARTIFACT_FORMAT,
+  CLIP_ARTIFACT_VERSION,
+  CLIP_MANIFEST_SCHEMA,
+  CLIP_MANIFEST_VERSION,
+  buildAgentClipSnapshot,
+  buildBundleClipSnapshot,
+  buildClipSnapshot,
+  buildRoutineClipSnapshot,
+  buildSkillClipSnapshot,
+  buildTeamClipSnapshot,
+  clipDependencyGraphSchema,
+  clipManifestCreatorSchema,
+  clipManifestSchema,
+  clipRedactionReportSchema,
+  clipTypeSchema,
+  type ClipDependencyGraph,
+  type ClipManifest,
+  type ClipManifestClip,
+  type ClipManifestCreator,
+  type ClipManifestType,
+  type ClipManifestVisibility,
+  type ClipRedactionOutcome,
+  type ClipRedactionReport,
+  type ClipRedactionReportEntry,
+  type ClipReviewState,
+  type ClipRuntimeFilesystem,
+  type ClipScopedSnapshotBuilderInput,
+  type ClipSnapshotBuilderInput,
+  type ClipValidationStatus,
+} from "./clip-manifest.js";
+
 export {
   findWorkspaceCommandDefinition,
   listWorkspaceCommandDefinitions,
