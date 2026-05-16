@@ -25,6 +25,15 @@ const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockUsePluginSlots = vi.hoisted(() => vi.fn());
 const mockPluginSlotOutlet = vi.hoisted(() => vi.fn());
 const mockPluginSlotMount = vi.hoisted(() => vi.fn());
+const mockPluginSlotState = vi.hoisted(() => ({
+  slots: [] as unknown[],
+  isLoading: false,
+  errorMessage: null as string | null,
+}));
+const mockRouteLocation = vi.hoisted(() => ({
+  pathname: "/execution-workspaces/workspace-1/issues",
+  search: "",
+}));
 
 vi.mock("../api/execution-workspaces", () => ({ executionWorkspacesApi: mockExecutionWorkspacesApi }));
 vi.mock("../api/projects", () => ({ projectsApi: mockProjectsApi }));
@@ -34,9 +43,11 @@ vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
 vi.mock("../api/routines", () => ({ routinesApi: mockRoutinesApi }));
 
 vi.mock("@/lib/router", () => ({
-  Link: ({ children, to }: { children?: ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({ children, to, className }: { children?: ReactNode; to: string; className?: string }) => (
+    <a href={to} className={className}>{children}</a>
+  ),
   Navigate: ({ to }: { to: string }) => <div data-testid="navigate">{to}</div>,
-  useLocation: () => ({ pathname: "/execution-workspaces/workspace-1/issues", search: "", hash: "", state: null }),
+  useLocation: () => ({ ...mockRouteLocation, hash: "", state: null }),
   useNavigate: () => mockNavigate,
   useParams: () => ({ workspaceId: "workspace-1" }),
 }));
@@ -62,7 +73,12 @@ vi.mock("@/plugins/slots", () => ({
   },
   usePluginSlots: (filters: unknown) => {
     mockUsePluginSlots(filters);
-    return { slots: [], isLoading: false, errorMessage: null };
+    const entityType = (filters as { entityType?: string }).entityType;
+    return {
+      slots: entityType === "execution_workspace" ? mockPluginSlotState.slots : [],
+      isLoading: mockPluginSlotState.isLoading,
+      errorMessage: mockPluginSlotState.errorMessage,
+    };
   },
 }));
 
@@ -164,6 +180,21 @@ function project(overrides: Partial<Project> = {}): Project {
   };
 }
 
+function pluginSlot(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "changes-tab",
+    type: "detailTab",
+    displayName: "Changes",
+    exportName: "ExecutionWorkspaceChangesTab",
+    entityTypes: ["execution_workspace"],
+    pluginId: "plugin-1",
+    pluginKey: "paperclip.workspace-diff",
+    pluginDisplayName: "Workspace Changes",
+    pluginVersion: "0.1.0",
+    ...overrides,
+  };
+}
+
 async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -183,6 +214,9 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
     mockAgentsApi.list.mockResolvedValue([]);
     mockRoutinesApi.list.mockResolvedValue([]);
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
+    mockPluginSlotState.slots = [];
+    mockPluginSlotState.isLoading = false;
+    mockPluginSlotState.errorMessage = null;
   });
 
   afterEach(() => {
@@ -190,6 +224,8 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
     root = null;
     container.remove();
     vi.clearAllMocks();
+    mockRouteLocation.pathname = "/execution-workspaces/workspace-1/issues";
+    mockRouteLocation.search = "";
   });
 
   async function render() {
@@ -247,5 +283,39 @@ describe("ExecutionWorkspaceDetail plugin slots", () => {
     for (const props of outletCalls) {
       expect(props.entityType).toBe("execution_workspace");
     }
+  });
+
+  it("shows a missing plugin placeholder instead of routines for stale plugin tab URLs", async () => {
+    mockRouteLocation.pathname = "/execution-workspaces/workspace-1";
+    mockRouteLocation.search = "?tab=plugin%3Amissing%3Aslot";
+
+    await render();
+
+    expect(container.textContent).toContain("Workspace plugin tab is not available.");
+    expect(container.querySelector('a[href="/execution-workspaces/workspace-1/issues"]')?.textContent).toBe("Back to issues");
+    expect(container.textContent).not.toContain("Workspace routines");
+    expect(container.querySelector('[data-testid="plugin-slot-mount"]')).toBeNull();
+  });
+
+  it("orders execution workspace plugin tabs against built-in tabs by slot order", async () => {
+    mockPluginSlotState.slots = [
+      pluginSlot({ id: "default-tab", displayName: "Default" }),
+      pluginSlot({ id: "changes-tab", displayName: "Changes", order: 25 }),
+      pluginSlot({ id: "inspect-tab", displayName: "Inspect", order: 50 }),
+    ];
+
+    await render();
+
+    const tabLabels = Array.from(container.querySelectorAll("[data-tab-value]")).map((tab) => tab.textContent);
+    expect(tabLabels).toEqual([
+      "Issues",
+      "Services",
+      "Changes",
+      "Configuration",
+      "Runtime logs",
+      "Inspect",
+      "Routines",
+      "Default",
+    ]);
   });
 });

@@ -29,7 +29,9 @@ const mockPluginSlotState = vi.hoisted(() => ({
 vi.mock("../api/projects", () => ({ projectsApi: mockProjectsApi }));
 
 vi.mock("@/lib/router", () => ({
-  Link: ({ children, to }: { children?: ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({ children, to, className }: { children?: ReactNode; to: string; className?: string }) => (
+    <a href={to} className={className}>{children}</a>
+  ),
   useLocation: () => ({
     pathname: "/PAP/projects/paperclip-app/workspaces/workspace-1",
     search: mockRouteSearch.value,
@@ -248,6 +250,19 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
     );
   });
 
+  it("orders project workspace plugin tabs against built-in tabs by slot order", async () => {
+    mockPluginSlotState.slots = [
+      pluginSlot({ id: "late-tab", displayName: "Late", order: 40 }),
+      pluginSlot({ id: "early-tab", displayName: "Early", order: 20 }),
+      pluginSlot({ id: "default-tab", displayName: "Default" }),
+    ];
+
+    await render();
+
+    const tabLabels = Array.from(container.querySelectorAll("[data-tab-value]")).map((tab) => tab.textContent);
+    expect(tabLabels).toEqual(["Early", "Configuration", "Late", "Default"]);
+  });
+
   it("navigates plugin tabs with only the generic plugin tab parameter", async () => {
     mockPluginSlotState.slots = [pluginSlot()];
 
@@ -273,6 +288,20 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
     expect(container.querySelector('[data-tab-value="changes"]')).toBeNull();
     expect(container.querySelector('[data-testid="plugin-slot-mount"]')).toBeNull();
     expect(container.textContent).toContain("Project workspace");
+  });
+
+  it("shows a missing plugin placeholder instead of configuration for stale plugin tab URLs", async () => {
+    mockRouteSearch.value = "?tab=plugin%3Amissing%3Aslot";
+
+    await render();
+
+    expect(container.textContent).toContain("Workspace plugin tab is not available.");
+    expect(container.querySelector('a[href="/projects/paperclip-app/workspaces/workspace-1?tab=configuration"]')?.textContent).toBe(
+      "Back to configuration",
+    );
+    expect(container.querySelector('[data-testid="plugin-slot-mount"]')).toBeNull();
+    expect(container.textContent).not.toContain("Configure the concrete workspace");
+    expect(container.textContent).not.toContain("Workspace name");
   });
 
   it("shows loading and error states for plugin tab manifests", async () => {
