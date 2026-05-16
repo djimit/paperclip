@@ -250,6 +250,20 @@ describe("ProjectWorkspaceDetail plugin tabs", () => {
     );
   });
 
+  it("keeps the project workspace heading visible on plugin tabs", async () => {
+    mockPluginSlotState.slots = [pluginSlot({ displayName: "Changes" })];
+    mockRouteSearch.value = "?tab=plugin%3Apaperclip.quality%3Aquality-tab";
+
+    await render();
+
+    expect(container.querySelector("h1")?.textContent).toBe("Primary checkout");
+    expect(container.textContent).toContain("Project workspace");
+    expect(container.textContent).toContain("This is the project’s primary codebase workspace.");
+    expect(container.querySelector('[data-testid="plugin-slot-mount"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Configure the concrete workspace");
+    expect(container.textContent).not.toContain("Workspace name");
+  });
+
   it("orders project workspace plugin tabs against built-in tabs by slot order", async () => {
     mockPluginSlotState.slots = [
       pluginSlot({ id: "late-tab", displayName: "Late", order: 40 }),
