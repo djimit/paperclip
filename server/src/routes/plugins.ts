@@ -156,7 +156,7 @@ const BUNDLED_PLUGIN_EXAMPLES: AvailablePluginExample[] = [
     packageName: "@paperclipai/plugin-workspace-diff",
     pluginKey: "paperclip.workspace-diff",
     displayName: "Workspace Changes",
-    description: "First-party execution workspace Changes tab backed by Paperclip's host diff API.",
+    description: "First-party workspace Changes tab backed by plugin-local Git diff computation.",
     localPath: "packages/plugins/plugin-workspace-diff",
     tag: "first-party",
   },
