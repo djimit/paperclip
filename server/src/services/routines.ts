@@ -1562,15 +1562,16 @@ export function routineService(
         const { routine } = await appendRoutineRevision(txDb, created, actor, {
           changeSummary: "Created routine",
         });
+        if (env) {
+          await secretsSvc.syncEnvBindingsForTarget(
+            companyId,
+            { targetType: "routine", targetId: routine.id },
+            env,
+            { db: tx },
+          );
+        }
         return routine;
       });
-      if (env) {
-        await secretsSvc.syncEnvBindingsForTarget(
-          companyId,
-          { targetType: "routine", targetId: createdRoutine.id },
-          env,
-        );
-      }
       return createdRoutine;
     },
 
@@ -1672,6 +1673,14 @@ export function routineService(
             )
             .then((rows) => rows[0] ?? null);
           if (latestRevision && snapshotsMatch(nextSnapshot, latestRevision.snapshot as RoutineRevisionSnapshotV1)) {
+            if (patch.env !== undefined) {
+              await secretsSvc.syncEnvBindingsForTarget(
+                locked.companyId,
+                { targetType: "routine", targetId: locked.id },
+                candidate.env,
+                { db: tx },
+              );
+            }
             return locked;
           }
         }
@@ -1701,15 +1710,16 @@ export function routineService(
         const { routine } = await appendRoutineRevision(txDb, updated, actor, {
           changeSummary: "Updated routine",
         });
+        if (patch.env !== undefined) {
+          await secretsSvc.syncEnvBindingsForTarget(
+            routine.companyId,
+            { targetType: "routine", targetId: routine.id },
+            routine.env,
+            { db: tx },
+          );
+        }
         return routine;
       });
-      if (updatedRoutine && patch.env !== undefined) {
-        await secretsSvc.syncEnvBindingsForTarget(
-          updatedRoutine.companyId,
-          { targetType: "routine", targetId: updatedRoutine.id },
-          updatedRoutine.env,
-        );
-      }
       return updatedRoutine;
     },
 
@@ -2084,6 +2094,12 @@ export function routineService(
           changeSummary: `Restored from revision ${targetRevision.revisionNumber}`,
           restoredFromRevisionId: targetRevision.id,
         });
+        await secretsSvc.syncEnvBindingsForTarget(
+          locked.companyId,
+          { targetType: "routine", targetId: locked.id },
+          routineSnapshot.env,
+          { db: tx },
+        );
         return {
           routine: appended.routine,
           revision: appended.revision,
@@ -2092,11 +2108,6 @@ export function routineService(
           secretMaterials: [...recreatedWebhookSecrets.values()].map((entry) => entry.secretMaterial),
         };
       });
-      await secretsSvc.syncEnvBindingsForTarget(
-        existingRoutine.companyId,
-        { targetType: "routine", targetId: existingRoutine.id },
-        routineSnapshot.env,
-      );
       return result;
     },
 

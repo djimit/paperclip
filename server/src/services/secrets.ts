@@ -61,6 +61,8 @@ const COMING_SOON_SECRET_PROVIDERS: ReadonlySet<SecretProvider> = new Set([
   "gcp_secret_manager",
   "vault",
 ]);
+type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type SecretBindingDb = Pick<Db | DbTransaction, "select" | "delete" | "insert">;
 
 function remoteProviderHttpError(error: unknown, context: {
   companyId: string;
@@ -294,8 +296,8 @@ export function secretService(db: Db) {
     fieldPath?: string;
   };
 
-  async function getById(id: string) {
-    return db
+  async function getById(id: string, source: Pick<Db | DbTransaction, "select"> = db) {
+    return source
       .select()
       .from(companySecrets)
       .where(eq(companySecrets.id, id))
@@ -401,8 +403,12 @@ export function secretService(db: Db) {
     });
   }
 
-  async function assertSecretInCompany(companyId: string, secretId: string) {
-    const secret = await getById(secretId);
+  async function assertSecretInCompany(
+    companyId: string,
+    secretId: string,
+    source: Pick<Db | DbTransaction, "select"> = db,
+  ) {
+    const secret = await getById(secretId, source);
     if (!secret) throw notFound("Secret not found");
     if (secret.status === "deleted") throw notFound("Secret not found");
     if (secret.companyId !== companyId) throw unprocessable("Secret must belong to same company");
@@ -2025,6 +2031,7 @@ export function secretService(db: Db) {
       companyId: string,
       target: { targetType: SecretBindingTargetType; targetId: string; pathPrefix?: string },
       envValue: unknown,
+      options?: { db?: SecretBindingDb },
     ) => {
       const record = asRecord(envValue) ?? {};
       const refs: Array<{
@@ -2033,12 +2040,13 @@ export function secretService(db: Db) {
         versionSelector: SecretVersionSelector;
       }> = [];
       const pathPrefix = target.pathPrefix ?? "env";
+      const bindingDb = options?.db ?? db;
       for (const [key, rawBinding] of Object.entries(record)) {
         const parsed = envBindingSchema.safeParse(rawBinding);
         if (!parsed.success) continue;
         const binding = canonicalizeBinding(parsed.data as EnvBinding);
         if (binding.type !== "secret_ref") continue;
-        await assertSecretInCompany(companyId, binding.secretId);
+        await assertSecretInCompany(companyId, binding.secretId, bindingDb);
         refs.push({
           secretId: binding.secretId,
           configPath: `${pathPrefix}.${key}`,
@@ -2046,8 +2054,8 @@ export function secretService(db: Db) {
         });
       }
 
-      await db.transaction(async (tx) => {
-        await tx
+      const writeBindings = async (targetDb: SecretBindingDb) => {
+        await targetDb
           .delete(companySecretBindings)
           .where(
             and(
@@ -2058,7 +2066,7 @@ export function secretService(db: Db) {
             ),
           );
         if (refs.length === 0) return;
-        await tx.insert(companySecretBindings).values(
+        await targetDb.insert(companySecretBindings).values(
           refs.map((ref) => ({
             companyId,
             secretId: ref.secretId,
@@ -2069,7 +2077,13 @@ export function secretService(db: Db) {
             required: true,
           })),
         );
-      });
+      };
+
+      if (options?.db) {
+        await writeBindings(options.db);
+      } else {
+        await db.transaction(async (tx) => writeBindings(tx));
+      }
       return refs;
     },
 

@@ -382,8 +382,25 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     const [initialRevision] = await svc.listRevisions(routine.id);
     expect(initialRevision?.snapshot.routine.env).toEqual(routine.env);
 
+    await db.delete(companySecretBindings).where(eq(companySecretBindings.targetId, routine.id));
+    const repaired = await svc.update(routine.id, { env: routine.env }, {});
+    expect(repaired).not.toBeNull();
+    const repairedBindings = await db
+      .select()
+      .from(companySecretBindings)
+      .where(eq(companySecretBindings.targetId, routine.id));
+    expect(repairedBindings).toMatchObject([
+      {
+        companyId,
+        secretId: secret.id,
+        targetType: "routine",
+        configPath: "env.ROUTINE_API_KEY",
+      },
+    ]);
+
+    const currentRoutine = repaired ?? routine;
     const runBefore = await svc.runRoutine(routine.id, { source: "manual" });
-    expect(runBefore.routineRevisionId).toBe(routine.latestRevisionId);
+    expect(runBefore.routineRevisionId).toBe(currentRoutine.latestRevisionId);
 
     const updated = await svc.update(
       routine.id,
@@ -395,7 +412,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       },
       {},
     );
-    expect(updated?.latestRevisionNumber).toBe(routine.latestRevisionNumber + 1);
+    expect(updated?.latestRevisionNumber).toBe(currentRoutine.latestRevisionNumber + 1);
 
     const runAfter = await svc.runRoutine(routine.id, { source: "manual" });
     expect(runAfter.routineRevisionId).toBe(updated?.latestRevisionId);
