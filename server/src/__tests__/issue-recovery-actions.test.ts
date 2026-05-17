@@ -768,6 +768,48 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     });
   });
 
+  it("rejects stale recovery action IDs before mutating the source issue", async () => {
+    const { companyId, managerId, sourceIssueId } = await seedCompany();
+    const recoveryActionSvc = issueRecoveryActionService(db);
+    const action = await recoveryActionSvc.upsertSourceScoped({
+      companyId,
+      sourceIssueId,
+      kind: "issue_graph_liveness",
+      ownerType: "agent",
+      ownerAgentId: managerId,
+      cause: "issue_graph_liveness",
+      fingerprint: "graph-liveness:stale-action-id",
+      evidence: { latestIssueStatus: "in_progress" },
+      nextAction: "Only the current active recovery action can be resolved.",
+      wakePolicy: { type: "wake_owner" },
+    });
+    const app = createApp({
+      type: "agent",
+      agentId: managerId,
+      companyId,
+      source: "agent_jwt",
+    });
+
+    const rejected = await request(app)
+      .post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`)
+      .send({
+        actionId: randomUUID(),
+        outcome: "restored",
+        sourceIssueStatus: "done",
+      })
+      .expect(404);
+
+    expect(rejected.body.error).toContain("Active recovery action not found");
+
+    const [sourceIssue] = await db.select().from(issues).where(eq(issues.id, sourceIssueId));
+    expect(sourceIssue?.status).toBe("in_progress");
+    expect(await recoveryActionSvc.getActiveForIssue(companyId, sourceIssueId)).toMatchObject({
+      id: action.id,
+      status: "active",
+      ownerAgentId: managerId,
+    });
+  });
+
   it("allows the assigned recovery owner to resolve an unassigned recovery action", async () => {
     const { companyId, managerId, sourceIssueId } = await seedCompany();
     await db.update(issues).set({ assigneeAgentId: null, status: "todo" }).where(eq(issues.id, sourceIssueId));

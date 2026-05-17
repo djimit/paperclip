@@ -1150,13 +1150,25 @@ export function issueRoutes(
     },
   ) {
     const activeAction = await recoveryActionsSvc.getActiveForIssue(input.issue.companyId, input.issue.id);
-    if (!activeAction || (input.actionId && activeAction.id !== input.actionId)) {
+    if (!activeAction) {
       return { allowed: true, activeAction: null as typeof activeAction };
     }
-    if (req.actor.type === "board") {
+    if (input.actionId && activeAction.id !== input.actionId) {
+      res.status(404).json({
+        error: "Active recovery action not found",
+        details: {
+          issueId: input.issue.id,
+          requestedRecoveryActionId: input.actionId,
+          activeRecoveryActionId: activeAction.id,
+          securityPrinciples: ["Least Privilege", "Complete Mediation", "Fail Securely"],
+        },
+      });
+      return { allowed: false, activeAction };
+    }
+    if (req.actor.type !== "agent") {
       return { allowed: true, activeAction };
     }
-    const actorAgentId = req.actor.type === "agent" ? req.actor.agentId : null;
+    const actorAgentId = req.actor.agentId;
     if (activeAction.ownerType === "agent" && actorAgentId && activeAction.ownerAgentId === actorAgentId) {
       return { allowed: true, activeAction };
     }

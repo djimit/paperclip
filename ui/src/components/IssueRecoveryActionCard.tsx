@@ -516,34 +516,32 @@ export function IssueRecoveryActionCard({
                 Resolve recovery
               </div>
               <div className="flex flex-col">
-                {visibleResolveOptions.map((option) => (
-                  (() => {
-                    const disabled = option.requiresBlocker && !canMarkBlocked;
-                    return (
-                  <button
-                    key={option.outcome}
-                    type="button"
-                    onClick={() => {
-                      if (disabled) return;
-                      onResolve?.(option.outcome);
-                    }}
-                    disabled={disabled}
-                    aria-disabled={disabled}
-                    title={disabled ? "Add a first-class blocker before marking recovery blocked." : undefined}
-                    className={cn(
-                      "flex flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
-                      "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent",
-                      option.destructive ? "text-destructive" : null,
-                    )}
-                  >
-                    <span className="font-medium leading-5">{option.label}</span>
-                    <span className="text-[11px] leading-4 text-muted-foreground">
-                      {disabled ? "Add a first-class blocker before using this outcome." : option.description}
-                    </span>
-                  </button>
-                    );
-                  })()
-                ))}
+                {visibleResolveOptions.map((option) => {
+                  const disabled = option.requiresBlocker && !canMarkBlocked;
+                  return (
+                    <button
+                      key={option.outcome}
+                      type="button"
+                      onClick={() => {
+                        if (disabled) return;
+                        onResolve?.(option.outcome);
+                      }}
+                      disabled={disabled}
+                      aria-disabled={disabled}
+                      title={disabled ? "Add a first-class blocker before marking recovery blocked." : undefined}
+                      className={cn(
+                        "flex flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+                        "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent",
+                        option.destructive ? "text-destructive" : null,
+                      )}
+                    >
+                      <span className="font-medium leading-5">{option.label}</span>
+                      <span className="text-[11px] leading-4 text-muted-foreground">
+                        {disabled ? "Add a first-class blocker before using this outcome." : option.description}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </PopoverContent>
           </Popover>
