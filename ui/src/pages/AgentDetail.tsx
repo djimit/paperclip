@@ -117,6 +117,7 @@ async function loadDuplicateInstructionsBundle(
   for (const summary of bundle.files) {
     const file = await agentsApi.instructionsFile(agentId, summary.path, companyId);
     const path = duplicateInstructionFilePath(bundle, summary);
+    if (!path) continue;
     files[path] = file.content;
   }
 
@@ -127,10 +128,10 @@ async function loadDuplicateInstructionsBundle(
 }
 
 function duplicateInstructionFilePath(
-  bundle: AgentInstructionsBundle,
+  _bundle: AgentInstructionsBundle,
   summary: AgentInstructionsFileSummary,
-): string {
-  if (summary.deprecated || summary.virtual) return bundle.entryFile || "AGENTS.md";
+): string | null {
+  if (summary.deprecated || summary.virtual) return null;
   return summary.path;
 }
 

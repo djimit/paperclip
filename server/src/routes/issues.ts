@@ -1021,6 +1021,18 @@ export function issueRoutes(
     return null;
   }
 
+  async function revalidateActiveSourceRecoveryForRead(input: Parameters<typeof revalidateActiveSourceRecovery>[0]) {
+    try {
+      return await revalidateActiveSourceRecovery(input);
+    } catch (err) {
+      logger.warn(
+        { err, issueId: input.issue.id, trigger: input.trigger },
+        "failed to revalidate recovery action during read projection",
+      );
+      return input.activeRecoveryAction ?? null;
+    }
+  }
+
   function withContentPath<T extends { id: string }>(attachment: T) {
     return {
       ...attachment,
@@ -1725,7 +1737,7 @@ export function issueRoutes(
     await Promise.all(result.map(async (issue) => {
       const activeRecoveryAction = recoveryActionByIssue.get(issue.id) ?? null;
       if (!activeRecoveryAction) return;
-      const revalidated = await revalidateActiveSourceRecovery({
+      const revalidated = await revalidateActiveSourceRecoveryForRead({
         issue,
         trigger: "read_projection",
         actor,
@@ -1890,7 +1902,7 @@ export function issueRoutes(
       relations,
       recoveryActionsByRelationIssue,
     );
-    const revalidatedActiveRecoveryAction = await revalidateActiveSourceRecovery({
+    const revalidatedActiveRecoveryAction = await revalidateActiveSourceRecoveryForRead({
       issue,
       trigger: "read_projection",
       actor: getActorInfo(req),
@@ -2014,7 +2026,7 @@ export function issueRoutes(
       relations,
       recoveryActionsByRelationIssue,
     );
-    const revalidatedActiveRecoveryAction = await revalidateActiveSourceRecovery({
+    const revalidatedActiveRecoveryAction = await revalidateActiveSourceRecoveryForRead({
       issue,
       trigger: "read_projection",
       actor: getActorInfo(req),
@@ -2057,7 +2069,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    const active = await revalidateActiveSourceRecovery({
+    const active = await revalidateActiveSourceRecoveryForRead({
       issue,
       trigger: "read_projection",
       actor: getActorInfo(req),
