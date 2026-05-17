@@ -116,14 +116,14 @@ export const issueExecutionWorkspaceSettingsSchema = z
     mode: z.enum(ISSUE_EXECUTION_WORKSPACE_PREFERENCES).optional(),
     environmentId: z.string().uuid().optional().nullable(),
     workspaceStrategy: executionWorkspaceStrategySchema.optional().nullable(),
-    workspaceRuntime: z.record(z.unknown()).optional().nullable(),
+    workspaceRuntime: z.record(z.string(), z.unknown()).optional().nullable(),
   })
   .strict();
 
 export const issueAssigneeAdapterOverridesSchema = z
   .object({
     modelProfile: z.enum(MODEL_PROFILE_KEYS).optional(),
-    adapterConfig: z.record(z.unknown()).optional(),
+    adapterConfig: z.record(z.string(), z.unknown()).optional(),
     useProjectWorkspace: z.boolean().optional(),
   })
   .strict();
@@ -248,10 +248,10 @@ export const issueRecoveryActionReadModelSchema = z.object({
   returnOwnerAgentId: z.string().uuid().nullable(),
   cause: z.string().min(1),
   fingerprint: z.string().min(1),
-  evidence: z.record(z.unknown()),
+  evidence: z.record(z.string(), z.unknown()),
   nextAction: z.string().min(1),
-  wakePolicy: z.record(z.unknown()).nullable(),
-  monitorPolicy: z.record(z.unknown()).nullable(),
+  wakePolicy: z.record(z.string(), z.unknown()).nullable(),
+  monitorPolicy: z.record(z.string(), z.unknown()).nullable(),
   attemptCount: z.number().int().nonnegative(),
   maxAttempts: z.number().int().positive().nullable(),
   timeoutAt: z.union([z.date(), z.string().datetime()]).nullable(),
