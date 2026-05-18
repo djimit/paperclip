@@ -248,7 +248,6 @@ const manifest: PaperclipPluginManifestV1 = {
     {
       skillKey: "weekly-brief-skills",
       displayName: "Weekly Briefer",
-      slug: "weekly-brief-skills",
       description: "Reusable skill for the managed research workflow.",
     },
   ],

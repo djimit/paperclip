@@ -345,6 +345,7 @@ export interface PaperclipPluginManifestV1 {
   routines?: PluginManagedRoutineDeclaration[];
   skills?: PluginManagedSkillDeclaration[];
   localFolders?: PluginLocalFolderDeclaration[];
+  /** Legacy top-level launcher declarations. Prefer `ui.launchers` for new manifests. */
   launchers?: PluginLauncherDeclaration[];
   ui?: {
     launchers?: PluginLauncherDeclaration[];
