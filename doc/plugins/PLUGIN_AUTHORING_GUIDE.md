@@ -13,6 +13,8 @@ It is intentionally narrower than [PLUGIN_SPEC.md](./PLUGIN_SPEC.md). The spec i
 - Worker-side host APIs are capability-gated.
 - Plugin UI is not sandboxed by manifest capabilities.
 - Plugin database migrations are restricted to a host-derived plugin namespace.
+- Plugin-managed surfaces are first-class records (agents, projects, routines, and
+  skills) rather than private plugin-only state.
 - Plugin-owned JSON API routes must be declared in the manifest and are mounted
   only under `/api/plugins/:pluginId/api/*`.
 - The host provides a small shared React component kit through
@@ -74,6 +76,7 @@ Worker:
 - issues, comments, namespaced `plugin:<pluginKey>` origins, blocker relations, checkout assertions, assignment wakeups, and orchestration summaries
 - agents, plugin-managed agents, and agent sessions
 - plugin-managed routines
+- plugin-managed skills
 - goals
 - data/actions
 - streams
@@ -134,7 +137,7 @@ paths; they always remain under `/api/plugins/:pluginId/api/*`.
 
 Plugins that provide durable Paperclip business objects should declare them in
 the manifest and let the host create or relink the actual records per company.
-Do this for plugin-owned agents, plugin-owned projects, and recurring automation.
+Do this for plugin-owned agents, projects, routines, and skills.
 Do not hide long-lived work behind private plugin state when it should be visible
 to the board, scoped to a company, audited, budgeted, and assigned like normal
 Paperclip work.
@@ -155,10 +158,14 @@ Use these surfaces:
   jobs that should create visible Paperclip issues. Prefer managed routines over
   plugin `jobs[]` for recurring business work; plugin jobs are for plugin
   runtime maintenance that does not need a board-visible task trail.
+- Managed skills: declare top-level `skills[]` and require `skills.managed`.
+  Use this for reusable plugin capabilities that should be surfaced to operators and
+  synced into Paperclip managed agents.
 
 Managed resources are resolved by stable plugin keys, not hardcoded database
 ids. In a worker action or data handler, call `ctx.agents.managed.reconcile()`,
-`ctx.projects.managed.reconcile()`, and `ctx.routines.managed.reconcile()` for
+`ctx.projects.managed.reconcile()`, `ctx.routines.managed.reconcile()`, and
+`ctx.skills.managed.reconcile()` for
 the current `companyId`. `reconcile()` creates the missing resource, relinks a
 recoverable binding, or returns the existing resource. `reset()` reapplies the
 manifest defaults when the operator wants to restore the plugin's suggested
@@ -185,6 +192,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "agents.managed",
     "projects.managed",
     "routines.managed",
+    "skills.managed",
     "instance.settings.register",
   ],
   entrypoints: {
@@ -231,6 +239,14 @@ const manifest: PaperclipPluginManifestV1 = {
       ],
     },
   ],
+  skills: [
+    {
+      skillKey: "weekly-brief-skills",
+      displayName: "Weekly Briefer",
+      slug: "weekly-brief-skills",
+      description: "Reusable skill for the managed research workflow.",
+    },
+  ],
   ui: {
     slots: [
       {
@@ -261,8 +277,9 @@ export default definePlugin({
       const project = await ctx.projects.managed.reconcile("research", companyId);
       const agent = await ctx.agents.managed.reconcile("researcher", companyId);
       const routine = await ctx.routines.managed.reconcile("weekly-brief", companyId);
+      const skill = await ctx.skills.managed.reconcile("weekly-brief-skills", companyId);
 
-      return { project, agent, routine };
+      return { project, agent, routine, skill };
     });
   },
 });
@@ -278,6 +295,9 @@ Authoring rules:
 - Use managed routines for recurring or externally triggered work that should
   produce tasks. Schedule, webhook, and API triggers are visible routine
   triggers, and each run has the normal Paperclip issue/audit trail.
+- Use managed skills for reusable operator-visible capabilities that are shared
+  by managed agents. Reconcile skill declarations by `skillKey` and keep the
+  declared skill markdown and files in sync with agent behavior.
 - Use managed projects to keep plugin-generated work organized and to give
   project-scoped plugin UI a stable home. For filesystem access inside a
   project, still resolve project workspaces through `ctx.projects`.
@@ -316,6 +336,10 @@ Use shared components from `@paperclipai/plugin-sdk/ui` when the plugin needs a
 Paperclip-native control. The host owns the implementation, so plugins inherit
 the board's current styling, ordering, recent selections, and dark-mode behavior
 without importing `ui/src` internals.
+
+Prefer shared components for common Paperclip UX patterns to reduce drift and
+deprecation risk, especially for task/assignment flows and routine or sidebar-like
+plugin screens.
 
 Currently exposed components include:
 
