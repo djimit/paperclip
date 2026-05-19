@@ -19,6 +19,11 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import {
+  DEFAULT_TRIAGE_DEFAULT_STATE_KEY,
+  DEFAULT_TRIAGE_QUEUE_STATES,
+  DEFAULT_TRIAGE_QUEUE_TRANSITIONS,
+} from "../workflow-defaults.js";
 
 // ---------------------------------------------------------------------------
 // Worker payload shapes (mirror @paperclipai/plugin-triage worker contracts).
@@ -432,30 +437,47 @@ function useManagedResourceHealth(companyId: string | null) {
 }
 
 // ---------------------------------------------------------------------------
-// Default workflow used for v1: New → Approved/Rejected → Done.
-// (See plan: workflow editor not implemented as drag-and-drop in v1.)
+// Default workflow used for v1: Draft → Approved/Rejected → Done.
+// State keys come from `src/workflow-defaults.ts`, which is also the source
+// for `triage.ts` seeding and the SQL migration's column default. The UI
+// layers on presentational tone + button copy below.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_STATE_DEFS: Array<{ stateKey: string; label: string; terminal: boolean; tone: "default" | "info" | "success" | "warning" | "muted" }> = [
-  { stateKey: "new", label: "New", terminal: false, tone: "info" },
-  { stateKey: "approved", label: "Approved", terminal: false, tone: "success" },
-  { stateKey: "rejected", label: "Rejected", terminal: false, tone: "warning" },
-  { stateKey: "done", label: "Done", terminal: true, tone: "muted" },
-];
+type StateTone = "default" | "info" | "success" | "warning" | "muted";
 
-const DEFAULT_TRANSITIONS: Array<{ fromStateKey: string; toStateKey: string; label: string }> = [
-  { fromStateKey: "new", toStateKey: "approved", label: "Approve" },
-  { fromStateKey: "new", toStateKey: "rejected", label: "Reject" },
-  { fromStateKey: "approved", toStateKey: "done", label: "Mark done" },
-  { fromStateKey: "rejected", toStateKey: "done", label: "Archive" },
-];
+const STATE_TONES: Record<string, StateTone> = {
+  draft: "info",
+  approved: "success",
+  rejected: "warning",
+  done: "muted",
+};
+
+const TRANSITION_BUTTON_LABELS: Record<string, string> = {
+  "draft->approved": "Approve",
+  "draft->rejected": "Reject",
+  "approved->done": "Mark done",
+  "rejected->done": "Archive",
+};
+
+const DEFAULT_STATE_DEFS = DEFAULT_TRIAGE_QUEUE_STATES.map((state) => ({
+  stateKey: state.stateKey,
+  label: state.displayName,
+  terminal: state.isTerminal,
+  tone: STATE_TONES[state.stateKey] ?? "default",
+}));
+
+const DEFAULT_TRANSITIONS = DEFAULT_TRIAGE_QUEUE_TRANSITIONS.map((transition) => ({
+  fromStateKey: transition.fromStateKey,
+  toStateKey: transition.toStateKey,
+  label: TRANSITION_BUTTON_LABELS[`${transition.fromStateKey}->${transition.toStateKey}`] ?? transition.label,
+}));
 
 function stateLabel(stateKey: string): string {
   const def = DEFAULT_STATE_DEFS.find((s) => s.stateKey === stateKey);
   return def ? def.label : stateKey;
 }
 
-function stateTone(stateKey: string) {
+function stateTone(stateKey: string): StateTone {
   const def = DEFAULT_STATE_DEFS.find((s) => s.stateKey === stateKey);
   return def ? def.tone : "default";
 }
@@ -2230,7 +2252,7 @@ function ActionForm({
   }) => Promise<void>;
 }) {
   const [actionKey, setActionKey] = useState(initial?.actionKey ?? "create-work");
-  const [fromStateKey, setFromStateKey] = useState(initial?.fromStateKey ?? "new");
+  const [fromStateKey, setFromStateKey] = useState(initial?.fromStateKey ?? DEFAULT_TRIAGE_DEFAULT_STATE_KEY);
   const [toStateKey, setToStateKey] = useState(initial?.toStateKey ?? "approved");
   const [mode, setMode] = useState<TransitionAction["action"]["mode"]>(initial?.action.mode ?? "create_if_missing");
   const [template, setTemplate] = useState<Record<string, string>>(() => {

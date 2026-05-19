@@ -109,7 +109,7 @@ const baseQueue = {
   title: "Content Training",
   description: "Triage incoming launch posts.",
   status: "active" as const,
-  defaultStateKey: "new",
+  defaultStateKey: "draft",
   activeItemCount: 2,
   archivedItemCount: 0,
   createdAt: "2026-05-19T10:00:00Z",
@@ -126,7 +126,7 @@ const baseItem = {
   contentFormat: "markdown",
   content: "# Draft\n\nLaunching this week.",
   properties: { sourceKind: "opaque-blog", priority: "medium" },
-  stateKey: "new",
+  stateKey: "draft",
   status: "active" as const,
   linkedQueueChatId: null,
   linkedWorkIssueId: null,
@@ -329,7 +329,7 @@ describe("TriagePage — queue overview lists items by state", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Draft launch post");
     expect(text).toContain("Approved post");
-    expect(text).toContain("New");
+    expect(text).toContain("Draft");
     expect(text).toContain("Approved");
 
     const itemLinks = Array.from(container.querySelectorAll("a"))
@@ -382,7 +382,7 @@ describe("TriagePage — item workbench two-column layout", () => {
       },
     ]);
     bridge.data["item-events"] = staticData([
-      { id: "evt-1", eventType: "item.ingested.created", fromStateKey: null, toStateKey: "new", actorType: "user", actorId: "u1", metadata: {}, createdAt: "2026-05-19T10:00:00Z" },
+      { id: "evt-1", eventType: "item.ingested.created", fromStateKey: null, toStateKey: "draft", actorType: "user", actorId: "u1", metadata: {}, createdAt: "2026-05-19T10:00:00Z" },
     ]);
     installBridge(bridge);
     container = document.createElement("div");
@@ -415,7 +415,7 @@ describe("TriagePage — item workbench two-column layout", () => {
     const editor = container.querySelector('textarea[data-stub="markdown-editor"]') as HTMLTextAreaElement | null;
     expect(editor?.value).toContain("Launching this week.");
 
-    // Transition bar surfaces the default workflow transitions for state "new"
+    // Transition bar surfaces the default workflow transitions for state "draft"
     const buttons = Array.from(container.querySelectorAll("button")).map((b) => b.textContent ?? "");
     expect(buttons.some((label) => label.includes("Approve"))).toBe(true);
     expect(buttons.some((label) => label.includes("Reject"))).toBe(true);
@@ -443,7 +443,7 @@ describe("TriagePage — transition action editor", () => {
         id: "act-1",
         queueId: "queue-1",
         actionKey: "create-work",
-        fromStateKey: "new",
+        fromStateKey: "draft",
         toStateKey: "approved",
         actionType: "create_or_update_issue" as const,
         enabled: true,

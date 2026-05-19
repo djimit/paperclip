@@ -33,7 +33,7 @@ const queues = [
     title: "Content training",
     description: "Triage incoming launch drafts and teach the assistant our voice.",
     status: "active",
-    defaultStateKey: "new",
+    defaultStateKey: "draft",
     activeItemCount: 12,
     archivedItemCount: 4,
     createdAt: NOW,
@@ -46,7 +46,7 @@ const queues = [
     title: "Inbox",
     description: "Generic inbox for arbitrary item drops.",
     status: "active",
-    defaultStateKey: "new",
+    defaultStateKey: "draft",
     activeItemCount: 3,
     archivedItemCount: 0,
     createdAt: NOW,
@@ -59,7 +59,7 @@ const queues = [
     title: "Drafts",
     description: "Long-form drafts pending review.",
     status: "active",
-    defaultStateKey: "new",
+    defaultStateKey: "draft",
     activeItemCount: 7,
     archivedItemCount: 1,
     createdAt: NOW,
@@ -72,7 +72,7 @@ const queues = [
     title: "Financial approvals",
     description: "Review small purchases before issue creation.",
     status: "active",
-    defaultStateKey: "new",
+    defaultStateKey: "draft",
     activeItemCount: 2,
     archivedItemCount: 0,
     createdAt: NOW,
@@ -91,7 +91,7 @@ const items = [
     contentFormat: "markdown",
     content: "# Draft launch post\n\nOur new bench cut p95 latency by half.\nHere's what changed and what's next.\n\n## What's new\n\n- Stream-first scheduling\n- Per-queue guidance\n- Reflection loop after every item\n\n## Closing\n\nMore to come on the next iteration.\n",
     properties: { upstreamId: "ext-9210-blog", sourceKind: "opaque-blog", priority: "medium" },
-    stateKey: "new",
+    stateKey: "draft",
     status: "active",
     linkedQueueChatId: "chat-142",
     linkedWorkIssueId: null,
@@ -110,7 +110,7 @@ const items = [
     contentFormat: "markdown",
     content: "Rewrite the pricing intro to highlight per-seat pricing.",
     properties: {},
-    stateKey: "new",
+    stateKey: "draft",
     status: "active",
     linkedQueueChatId: null,
     linkedWorkIssueId: null,
@@ -209,8 +209,8 @@ const proposals = [
 ];
 
 const events = [
-  { id: "evt-1", eventType: "item.ingested.created", fromStateKey: null, toStateKey: "new", actorType: "user", actorId: "u-1", metadata: {}, createdAt: ONE_HOUR_AGO },
-  { id: "evt-2", eventType: "item.content.updated", fromStateKey: "new", toStateKey: "new", actorType: "user", actorId: "u-1", metadata: {}, createdAt: NOW },
+  { id: "evt-1", eventType: "item.ingested.created", fromStateKey: null, toStateKey: "draft", actorType: "user", actorId: "u-1", metadata: {}, createdAt: ONE_HOUR_AGO },
+  { id: "evt-2", eventType: "item.content.updated", fromStateKey: "draft", toStateKey: "draft", actorType: "user", actorId: "u-1", metadata: {}, createdAt: NOW },
 ];
 
 const transitionActions = [
@@ -218,7 +218,7 @@ const transitionActions = [
     id: "act-1",
     queueId: "queue-content",
     actionKey: "create-work",
-    fromStateKey: "new",
+    fromStateKey: "draft",
     toStateKey: "approved",
     actionType: "create_or_update_issue",
     enabled: true,

@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Issue, PluginContext } from "@paperclipai/plugin-sdk";
+import {
+  DEFAULT_TRIAGE_DEFAULT_STATE_KEY,
+  DEFAULT_TRIAGE_QUEUE_STATES,
+  DEFAULT_TRIAGE_QUEUE_TRANSITIONS,
+  type TriageQueueStateDefault,
+  type TriageQueueTransitionDefault,
+} from "./workflow-defaults.js";
 
 export type TriageQueueStatus = "active" | "archived";
 export type TriageItemStatus = "active" | "archived";
@@ -155,6 +162,15 @@ export interface TriageItemTransitionResult {
   actionResults: TriageTransitionActionResult[];
 }
 
+export type TriageQueueState = TriageQueueStateDefault;
+export type TriageQueueTransition = TriageQueueTransitionDefault;
+
+export {
+  DEFAULT_TRIAGE_DEFAULT_STATE_KEY,
+  DEFAULT_TRIAGE_QUEUE_STATES,
+  DEFAULT_TRIAGE_QUEUE_TRANSITIONS,
+};
+
 export interface IngestItemInput {
   companyId: string;
   queueKey: string;
@@ -258,6 +274,7 @@ export interface TriageStore {
     toStateKey?: string | null;
     actionKey?: string | null;
   }): Promise<TriageTransitionAction[]>;
+  listQueueTransitions(companyId: string, queueId: string): Promise<TriageQueueTransition[]>;
   recordItemEvent(input: {
     companyId: string;
     queueId: string;
@@ -709,35 +726,39 @@ export function createPostgresTriageStore(ctx: Pick<PluginContext, "db">): Triag
     },
 
     async ensureQueueDefaults(queue) {
-      const defaultStates = [
-        ["draft", "Draft", false, "active", 10],
-        ["approved", "Approved", false, "active", 20],
-        ["rejected", "Rejected", false, "active", 30],
-        ["done", "Done", true, "archived", 40],
-      ] as const;
-      for (const [stateKey, displayName, terminal, visibility, sortOrder] of defaultStates) {
+      for (const state of DEFAULT_TRIAGE_QUEUE_STATES) {
         await ctx.db.execute(
           `INSERT INTO ${states}
              (id, company_id, queue_id, state_key, display_name, is_terminal, visibility, sort_order)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (queue_id, state_key) DO NOTHING`,
-          [randomUUID(), queue.companyId, queue.id, stateKey, displayName, terminal, visibility, sortOrder],
+          [
+            randomUUID(),
+            queue.companyId,
+            queue.id,
+            state.stateKey,
+            state.displayName,
+            state.isTerminal,
+            state.visibility,
+            state.sortOrder,
+          ],
         );
       }
 
-      const defaultTransitions = [
-        ["draft", "approved", "Approve"],
-        ["draft", "rejected", "Reject"],
-        ["approved", "done", "Mark Done"],
-        ["rejected", "done", "Mark Done"],
-      ] as const;
-      for (const [fromState, toState, label] of defaultTransitions) {
+      for (const transition of DEFAULT_TRIAGE_QUEUE_TRANSITIONS) {
         await ctx.db.execute(
           `INSERT INTO ${transitions}
              (id, company_id, queue_id, from_state_key, to_state_key, label)
            VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (queue_id, from_state_key, to_state_key) DO NOTHING`,
-          [randomUUID(), queue.companyId, queue.id, fromState, toState, label],
+          [
+            randomUUID(),
+            queue.companyId,
+            queue.id,
+            transition.fromStateKey,
+            transition.toStateKey,
+            transition.label,
+          ],
         );
       }
 
@@ -938,6 +959,20 @@ export function createPostgresTriageStore(ctx: Pick<PluginContext, "db">): Triag
         ],
       );
       return rows.map(actionFromRow);
+    },
+
+    async listQueueTransitions(companyId, queueId) {
+      const rows = await ctx.db.query<Record<string, unknown>>(
+        `SELECT from_state_key, to_state_key, label FROM ${transitions}
+         WHERE company_id = $1 AND queue_id = $2
+         ORDER BY from_state_key ASC, to_state_key ASC`,
+        [companyId, queueId],
+      );
+      return rows.map((row) => ({
+        fromStateKey: String(row.from_state_key ?? ""),
+        toStateKey: String(row.to_state_key ?? ""),
+        label: String(row.label ?? ""),
+      }));
     },
 
     async recordItemEvent(input) {
@@ -1199,6 +1234,7 @@ export function createInMemoryTriageStore(): TriageStore {
   const docs = new Map<string, TriageGuidanceDoc>();
   const revisions = new Map<string, TriageGuidanceRevision>();
   const proposals = new Map<string, TriageGuidanceProposal>();
+  const queueTransitions = new Map<string, TriageQueueTransition[]>();
   const defaultedQueues = new Set<string>();
 
   function queueIndex(companyId: string, queueKey: string): string {
@@ -1318,6 +1354,12 @@ export function createInMemoryTriageStore(): TriageStore {
         };
         docs.set(`${queue.id}:guidance.md`, doc);
         revisions.set(revisionId, revision);
+      }
+      if (!queueTransitions.has(queue.id)) {
+        queueTransitions.set(
+          queue.id,
+          DEFAULT_TRIAGE_QUEUE_TRANSITIONS.map((transition) => ({ ...transition })),
+        );
       }
       defaultedQueues.add(queue.id);
     },
@@ -1459,6 +1501,11 @@ export function createInMemoryTriageStore(): TriageStore {
         .filter((action) => input.actionKey ? action.actionKey === input.actionKey : true)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .map(cloneAction);
+    },
+
+    async listQueueTransitions(_companyId, queueId) {
+      const entries = queueTransitions.get(queueId);
+      return entries ? entries.map((entry) => ({ ...entry })) : [];
     },
 
     async recordItemEvent(input) {
@@ -1873,6 +1920,16 @@ export function createTriageService(store: TriageStore) {
       const { item, queue } = await requireItemWithQueue(store, companyId, itemId);
       const actionKey = stringField(params.actionKey);
       const fromStateKey = item.stateKey;
+      const queueTransitions = await store.listQueueTransitions(companyId, queue.id);
+      const allowed = queueTransitions.some((transition) =>
+        transition.fromStateKey === fromStateKey && transition.toStateKey === toStateKey);
+      if (!allowed) {
+        throw new TriageError(
+          422,
+          "invalid_state_transition",
+          `No configured transition from "${fromStateKey}" to "${toStateKey}" for this queue`,
+        );
+      }
       const actions = (await store.listTransitionActions({
         companyId,
         queueId: queue.id,
@@ -2368,9 +2425,14 @@ function resolvedStatus(value: string | undefined): Issue["status"] | undefined 
   return status as Issue["status"];
 }
 
-function actorForIssueMutation(actor: TriageActor): { actorAgentId?: string | null; actorRunId?: string | null } {
+function actorForIssueMutation(actor: TriageActor): {
+  actorAgentId?: string | null;
+  actorUserId?: string | null;
+  actorRunId?: string | null;
+} {
   return {
     actorAgentId: actor.actorType === "agent" ? actor.actorId ?? null : null,
+    actorUserId: actor.actorType === "user" ? actor.actorId ?? null : null,
     actorRunId: actor.actorRunId ?? null,
   };
 }
@@ -2470,6 +2532,7 @@ async function runIssueTransitionAction(input: {
   if (comment) {
     await input.ctx.issues.createComment(issue.id, comment, input.item.companyId, {
       authorAgentId: mutationActor.actorAgentId ?? undefined,
+      authorUserId: mutationActor.actorUserId ?? undefined,
     });
     commentCreated = true;
   }

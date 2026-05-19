@@ -11,6 +11,10 @@ import manifest, {
 } from "../src/manifest.js";
 import plugin, { createTriagePlugin } from "../src/worker.js";
 import { createInMemoryTriageStore } from "../src/triage.js";
+import {
+  DEFAULT_TRIAGE_DEFAULT_STATE_KEY,
+  DEFAULT_TRIAGE_QUEUE_TRANSITIONS,
+} from "../src/workflow-defaults.js";
 
 const COMPANY_ID = "company-1";
 const OTHER_COMPANY_ID = "company-2";
@@ -313,6 +317,18 @@ describe("Paperclip Triage queue and item ingest", () => {
   it("reuses one hidden queue chat and assistant session per queue while isolating other queues", async () => {
     const { harness, plugin: testPlugin } = createHarness();
     await testPlugin.definition.setup(harness.ctx);
+    const boardUserId = "board-user-1";
+    const commentCalls: Array<{
+      issueId: string;
+      body: string;
+      companyId: string;
+      options: Record<string, unknown> | undefined;
+    }> = [];
+    const originalCreateComment = harness.ctx.issues.createComment.bind(harness.ctx.issues);
+    harness.ctx.issues.createComment = async (issueId, body, companyId, options) => {
+      commentCalls.push({ issueId, body, companyId, options: options as Record<string, unknown> | undefined });
+      return originalCreateComment(issueId, body, companyId, options);
+    };
 
     const first = await harness.performAction<{
       item: { id: string };
@@ -342,6 +358,8 @@ describe("Paperclip Triage queue and item ingest", () => {
       companyId: COMPANY_ID,
       itemId: first.item.id,
       message: "What should I change?",
+      actorType: "user",
+      actorUserId: boardUserId,
     });
 
     expect(firstSend.hiddenIssueId).toBeTruthy();
@@ -360,6 +378,8 @@ describe("Paperclip Triage queue and item ingest", () => {
       companyId: COMPANY_ID,
       itemId: first.item.id,
       message: "Use the same thread.",
+      actorType: "user",
+      actorUserId: boardUserId,
     });
     expect(secondSend.chat.id).toBe(firstSend.chat.id);
     expect(secondSend.hiddenIssueId).toBe(firstSend.hiddenIssueId);
@@ -372,14 +392,26 @@ describe("Paperclip Triage queue and item ingest", () => {
       companyId: COMPANY_ID,
       itemId: other.item.id,
       message: "Different queue.",
+      actorType: "user",
+      actorUserId: boardUserId,
     });
     expect(otherSend.chat.id).not.toBe(firstSend.chat.id);
     expect(otherSend.hiddenIssueId).not.toBe(firstSend.hiddenIssueId);
+
+    const hiddenComments = await harness.ctx.issues.listComments(firstSend.hiddenIssueId, COMPANY_ID);
+    expect(hiddenComments).toEqual(expect.arrayContaining([expect.objectContaining({
+      body: expect.stringContaining("What should I change?"),
+    })]));
+    expect(commentCalls).toEqual(expect.arrayContaining([expect.objectContaining({
+      companyId: COMPANY_ID,
+      options: expect.objectContaining({ authorUserId: boardUserId }),
+    })]));
   });
 
   it("updates item content only when the expected revision matches", async () => {
     const { harness, plugin: testPlugin } = createHarness();
     await testPlugin.definition.setup(harness.ctx);
+    const boardUserId = "board-user-1";
 
     const ingested = await harness.performAction<{
       item: { id: string; revision: number };
@@ -399,11 +431,15 @@ describe("Paperclip Triage queue and item ingest", () => {
       expectedRevision: ingested.item.revision,
       title: "Edited",
       content: "Edited content",
+      actorType: "user",
+      actorUserId: boardUserId,
     });
 
     expect(updated.item).toMatchObject({ title: "Edited", content: "Edited content", revision: 2 });
     expect(updated.event).toMatchObject({
       eventType: "item.content.updated",
+      actorType: "user",
+      actorId: boardUserId,
       metadata: { previousRevision: 1, nextRevision: 2 },
     });
 
@@ -510,6 +546,19 @@ describe("Paperclip Triage queue and item ingest", () => {
   it("creates a linked work issue from a create_if_missing transition action and records history", async () => {
     const { harness, plugin: testPlugin } = createHarness();
     await testPlugin.definition.setup(harness.ctx);
+    const boardUserId = "board-user-1";
+    const createCalls: Array<Record<string, unknown>> = [];
+    const commentCalls: Array<Record<string, unknown> | undefined> = [];
+    const originalCreateIssue = harness.ctx.issues.create.bind(harness.ctx.issues);
+    const originalCreateComment = harness.ctx.issues.createComment.bind(harness.ctx.issues);
+    harness.ctx.issues.create = async (input) => {
+      createCalls.push(input as Record<string, unknown>);
+      return originalCreateIssue(input);
+    };
+    harness.ctx.issues.createComment = async (issueId, body, companyId, options) => {
+      commentCalls.push(options as Record<string, unknown> | undefined);
+      return originalCreateComment(issueId, body, companyId, options);
+    };
 
     const ingested = await harness.performAction<{
       item: { id: string };
@@ -547,6 +596,8 @@ describe("Paperclip Triage queue and item ingest", () => {
       companyId: COMPANY_ID,
       itemId: ingested.item.id,
       toStateKey: "approved",
+      actorType: "user",
+      actorUserId: boardUserId,
     });
 
     expect(transitioned.item.stateKey).toBe("approved");
@@ -564,7 +615,15 @@ describe("Paperclip Triage queue and item ingest", () => {
       originId: ingested.item.id,
     });
     const comments = await harness.ctx.issues.listComments(transitioned.item.linkedWorkIssueId!, COMPANY_ID);
-    expect(comments).toEqual([expect.objectContaining({ body: "Triage item moved to approved." })]);
+    expect(comments).toEqual([expect.objectContaining({
+      body: "Triage item moved to approved.",
+    })]);
+    expect(createCalls).toEqual(expect.arrayContaining([expect.objectContaining({
+      actor: expect.objectContaining({ actorUserId: boardUserId }),
+    })]));
+    expect(commentCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ authorUserId: boardUserId }),
+    ]));
 
     const events = await harness.getData<Array<{ eventType: string; metadata: Record<string, unknown> }>>(
       "item-events",
@@ -804,6 +863,109 @@ describe("Paperclip Triage queue and item ingest", () => {
       .resolves.toMatchObject({ stateKey: "draft" });
     await expect(harness.ctx.issues.get(otherIssue.id, OTHER_COMPANY_ID)).resolves.toMatchObject({
       title: "Other company issue",
+    });
+  });
+});
+
+// PAP-9894: backend defaulted ingested items to stateKey="draft" while the
+// UI hardcoded "new", so transition buttons disappeared on fresh installs.
+// These regressions lock the alignment in place.
+describe("Paperclip Triage default workflow alignment", () => {
+  function createHarness() {
+    const store = createInMemoryTriageStore();
+    const testPlugin = createTriagePlugin({ createStore: () => store });
+    const harness = createTestHarness({ manifest });
+    harness.seed({ companies: [company(COMPANY_ID), company(OTHER_COMPANY_ID)] });
+    return { harness, plugin: testPlugin, store };
+  }
+
+  it("ingests with the canonical default state key and has at least one allowed UI transition", async () => {
+    const { harness, plugin: testPlugin } = createHarness();
+    await testPlugin.definition.setup(harness.ctx);
+
+    const result = await harness.performAction<{
+      item: { stateKey: string };
+      queue: { defaultStateKey: string };
+    }>("ingest-item", {
+      companyId: COMPANY_ID,
+      queueKey: "probe-q",
+      title: "Probe",
+      content: "Probe content",
+    });
+
+    expect(result.queue.defaultStateKey).toBe(DEFAULT_TRIAGE_DEFAULT_STATE_KEY);
+    expect(result.item.stateKey).toBe(DEFAULT_TRIAGE_DEFAULT_STATE_KEY);
+
+    // The UI's TransitionBar filters DEFAULT_TRANSITIONS by item.stateKey. If
+    // the ingested key is not present as a `fromStateKey` in the default
+    // transitions, the bar renders empty and PAP-9894 returns.
+    const transitionsFromDefault = DEFAULT_TRIAGE_QUEUE_TRANSITIONS.filter(
+      (transition) => transition.fromStateKey === result.item.stateKey,
+    );
+    expect(transitionsFromDefault.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the UI workflow keys identical to the shared workflow defaults", () => {
+    const uiSource = readFileSync(new URL("../src/ui/app.tsx", import.meta.url), "utf8");
+    // The UI must derive its state and transition lists from the shared
+    // `workflow-defaults` module, never re-declare them.
+    expect(uiSource).toContain("from \"../workflow-defaults.js\"");
+    expect(uiSource).toContain("DEFAULT_TRIAGE_QUEUE_STATES.map");
+    expect(uiSource).toContain("DEFAULT_TRIAGE_QUEUE_TRANSITIONS.map");
+
+    const migrationSource = readFileSync(
+      new URL("../migrations/001_triage_core.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migrationSource).toContain(`default_state_key text NOT NULL DEFAULT '${DEFAULT_TRIAGE_DEFAULT_STATE_KEY}'`);
+  });
+
+  it("rejects transition-item calls whose destination is not in the queue's configured transitions", async () => {
+    const { harness, plugin: testPlugin } = createHarness();
+    await testPlugin.definition.setup(harness.ctx);
+
+    const ingested = await harness.performAction<{
+      item: { id: string; stateKey: string };
+    }>("ingest-item", {
+      companyId: COMPANY_ID,
+      queueKey: "reviews",
+      title: "Probe",
+    });
+
+    await expect(harness.performAction("transition-item", {
+      companyId: COMPANY_ID,
+      itemId: ingested.item.id,
+      toStateKey: "qa-pending",
+    })).rejects.toMatchObject({
+      status: 422,
+      code: "invalid_state_transition",
+    });
+
+    // The item should still be in its starting state — the validation must
+    // run before any mutation.
+    await expect(harness.getData("queue-item", { companyId: COMPANY_ID, itemId: ingested.item.id }))
+      .resolves.toMatchObject({ stateKey: DEFAULT_TRIAGE_DEFAULT_STATE_KEY });
+  });
+
+  it("rejects transition-item calls that skip a configured step (draft → done with no direct edge)", async () => {
+    const { harness, plugin: testPlugin } = createHarness();
+    await testPlugin.definition.setup(harness.ctx);
+
+    const ingested = await harness.performAction<{
+      item: { id: string };
+    }>("ingest-item", {
+      companyId: COMPANY_ID,
+      queueKey: "reviews",
+      title: "Probe",
+    });
+
+    await expect(harness.performAction("transition-item", {
+      companyId: COMPANY_ID,
+      itemId: ingested.item.id,
+      toStateKey: "done",
+    })).rejects.toMatchObject({
+      status: 422,
+      code: "invalid_state_transition",
     });
   });
 });
