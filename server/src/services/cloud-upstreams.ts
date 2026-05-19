@@ -699,7 +699,18 @@ async function fetchDiscovery(remoteUrl: string): Promise<Record<string, unknown
   if (!response.ok) {
     throw badRequest(`Cloud upstream discovery failed: ${response.status}`);
   }
-  return await response.json() as Record<string, unknown>;
+  const discovery = await response.json() as Record<string, unknown>;
+  if (discovery.schema !== "paperclip-upstream-discovery-v1") {
+    throw badRequest("Remote URL is not a Paperclip Cloud upstream target");
+  }
+  const transfer = objectField(discovery, "transfer");
+  const featureFlags = Array.isArray(transfer.featureFlags)
+    ? transfer.featureFlags.filter((flag): flag is string => typeof flag === "string")
+    : [];
+  if (!featureFlags.includes("cloud_sync")) {
+    throw badRequest("Remote Paperclip Cloud stack does not advertise the cloud_sync transfer flag");
+  }
+  return discovery;
 }
 
 function firstPathSegment(pathname: string): string | null {

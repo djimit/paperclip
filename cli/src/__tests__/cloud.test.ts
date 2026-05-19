@@ -84,6 +84,7 @@ describe("cloud CLI helpers", () => {
 
   it("hard-blocks incompatible transfer schema versions with the stable schema exit code", () => {
     expect(() => assertDiscoveryCompatible(discovery({ supportedSchemaMajor: 99 }))).toThrow(/schema mismatch/i);
+    expect(() => assertDiscoveryCompatible(discovery({ featureFlags: [] }))).toThrow(/cloud_sync/);
     expect(cloudCommandExitCodes.schemaMismatch).toBe(3);
   });
 
@@ -91,9 +92,32 @@ describe("cloud CLI helpers", () => {
     const bundle = await buildTestBundle();
 
     expect(bundle.chunks).toHaveLength(2);
+    expect(bundle.manifest.perEntityTypeCounts.company).toBe(1);
     expect(bundle.chunks[0]?.sha256).toBe(normalizedContentHash(bundle.chunks[0]?.payload));
     expect(bundle.manifest.chunks[0]?.manifestHash).toBe(bundle.manifest.manifestHash);
     expect(bundle.manifest.idempotencyKey).toBe((await buildTestBundle()).manifest.idempotencyKey);
+  });
+
+  it("fails device-code authorization when expiresAt is malformed", async () => {
+    globalThis.fetch = vi.fn(async (url, init) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/.well-known/paperclip-upstream")) {
+        return jsonResponse(discovery());
+      }
+      if (requestUrl.endsWith("/api/upstream-sync/device-code")) {
+        return jsonResponse({
+          deviceCode: "device-1",
+          userCode: "ABCD-EFGH",
+          verificationUri: "https://cloud.example.test/api/upstream-sync/device-code/approve",
+          expiresAt: "not-a-date",
+          intervalSeconds: 0,
+        });
+      }
+      throw new Error(`unexpected request: ${requestUrl} ${init?.method ?? "GET"}`);
+    }) as typeof fetch;
+
+    await expect(connectCloud("https://cloud.example.test", { noBrowser: true, json: true }))
+      .rejects.toThrow(/valid expiresAt/);
   });
 
   it("reuses the same manifest and chunk identity when an interrupted apply is retried", async () => {
@@ -185,7 +209,7 @@ async function buildTestBundle(): Promise<LocalUpstreamExportBundle> {
   });
 }
 
-function discovery(overrides: Partial<{ supportedSchemaMajor: number }> = {}) {
+function discovery(overrides: Partial<{ supportedSchemaMajor: number; featureFlags: string[] }> = {}) {
   return {
     schema: "paperclip-upstream-discovery-v1",
     stack: {
@@ -205,7 +229,7 @@ function discovery(overrides: Partial<{ supportedSchemaMajor: number }> = {}) {
     },
     transfer: {
       supportedSchemaMajor: overrides.supportedSchemaMajor ?? 1,
-      featureFlags: ["cloud_sync"],
+      featureFlags: overrides.featureFlags ?? ["cloud_sync"],
     },
   };
 }

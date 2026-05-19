@@ -62,6 +62,7 @@ export interface UpstreamTransferManifest {
   idempotencyKey: string;
   generatedAt: string;
   entityCount: number;
+  perEntityTypeCounts: Record<string, number>;
   entities: UpstreamTransferEntityRecord[];
   chunks: UpstreamTransferChunk[];
   warnings: UpstreamTransferWarning[];
@@ -229,6 +230,7 @@ export function buildLocalUpstreamExportBundle(
     idempotencyKey: input.idempotencyKey,
     generatedAt: new Date(0).toISOString(),
     entityCount: entities.length,
+    perEntityTypeCounts: countEntityTypesForManifest(entities),
     entities: entities.map((entity) => entity.record),
     chunks: chunks.map(({ payload: _payload, ...chunk }) => chunk),
     warnings: input.warnings ?? [],
@@ -244,6 +246,15 @@ export function buildLocalUpstreamExportBundle(
     entities,
     chunks,
   };
+}
+
+function countEntityTypesForManifest(entities: LocalUpstreamExportEntity[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const entity of entities) {
+    const entityType = entity.record.key.sourceEntityType;
+    counts[entityType] = (counts[entityType] ?? 0) + 1;
+  }
+  return counts;
 }
 
 export function normalizedContentHash(value: unknown): NormalizedSha256 {

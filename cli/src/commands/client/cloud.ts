@@ -406,8 +406,11 @@ async function authorizeWithDeviceCode(
   if (opts.openBrowser) openUrl(response.verificationUri);
 
   const expiresAt = Date.parse(response.expiresAt);
+  if (!Number.isFinite(expiresAt)) {
+    throw new Error("Device-code authorization response did not include a valid expiresAt timestamp.");
+  }
   const intervalMs = Math.max(500, (response.intervalSeconds ?? 5) * 1000);
-  while (!Number.isFinite(expiresAt) || Date.now() < expiresAt) {
+  while (Date.now() < expiresAt) {
     await sleep(intervalMs);
     try {
       return await requestCloudJson<TokenResponse>(device.tokenUrl, {
