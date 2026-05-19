@@ -67,6 +67,10 @@ CREATE TABLE plugin_triage_f3b4aa721e.triage_queue_chats (
 CREATE INDEX triage_queue_chats_company_queue_idx
   ON plugin_triage_f3b4aa721e.triage_queue_chats (company_id, queue_id, updated_at DESC);
 
+CREATE UNIQUE INDEX triage_queue_chats_active_queue_idx
+  ON plugin_triage_f3b4aa721e.triage_queue_chats (queue_id)
+  WHERE status = 'active';
+
 CREATE TABLE plugin_triage_f3b4aa721e.triage_items (
   id uuid PRIMARY KEY,
   company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,

@@ -4,11 +4,13 @@ import {
   type PluginContext,
   type PluginApiRequestInput,
   type PaperclipPlugin,
+  type AgentSession,
   type PluginManagedAgentResolution,
   type PluginManagedProjectResolution,
   type PluginManagedSkillResolution,
 } from "@paperclipai/plugin-sdk";
 import {
+  PLUGIN_ID,
   TRIAGE_ASSISTANT_AGENT_KEY,
   TRIAGE_MANAGED_SKILL_KEYS,
   TRIAGE_PROJECT_KEY,
@@ -140,6 +142,66 @@ async function managedResourceHealth(
   };
 }
 
+function actionActor(ctx: PluginContext, params: Record<string, unknown>) {
+  return {
+    actorType: "plugin-action",
+    actorId: ctx.manifest.id,
+    actorRunId: typeof params.actorRunId === "string" ? params.actorRunId : null,
+  };
+}
+
+async function ensureQueueChatIssue(
+  ctx: PluginContext,
+  service: ReturnType<typeof createTriageService>,
+  params: Record<string, unknown>,
+) {
+  const companyId = requireCompanyId(params);
+  const ensured = await service.ensureQueueChat(params);
+  let hiddenIssueId = ensured.chat.hiddenIssueId;
+  const existingIssue = hiddenIssueId ? await ctx.issues.get(hiddenIssueId, companyId) : null;
+  if (!existingIssue) {
+    const project = await ctx.projects.managed.reconcile(TRIAGE_PROJECT_KEY, companyId);
+    const issue = await ctx.issues.create({
+      companyId,
+      projectId: project.projectId ?? undefined,
+      title: ensured.chat.title ?? `Triage chat: ${ensured.queue.title}`,
+      description: [
+        `Hidden queue chat for Paperclip Triage queue \`${ensured.queue.queueKey}\`.`,
+        "",
+        "This issue stores assistant conversation audit context for the queue and is created by the triage plugin.",
+      ].join("\n"),
+      status: "in_review",
+      priority: "low",
+      surfaceVisibility: "plugin_operation",
+      originKind: `plugin:${PLUGIN_ID}:operation:queue-chat`,
+      originId: `queue-chat:${ensured.queue.id}`,
+    });
+    hiddenIssueId = issue.id;
+    ensured.chat = await service.updateQueueChat({
+      companyId,
+      chatId: ensured.chat.id,
+      hiddenIssueId,
+      metadata: {
+        ...ensured.chat.metadata,
+        hiddenIssueIdentifier: issue.identifier,
+      },
+    });
+  }
+  return { ...ensured, hiddenIssueId };
+}
+
+async function activeSessionForChat(
+  ctx: PluginContext,
+  companyId: string,
+  agentId: string,
+  chatMetadata: Record<string, unknown>,
+): Promise<AgentSession | null> {
+  const activeSessionId = typeof chatMetadata.activeSessionId === "string" ? chatMetadata.activeSessionId : null;
+  if (!activeSessionId) return null;
+  const sessions = await ctx.agents.sessions.list(agentId, companyId);
+  return sessions.find((session) => session.sessionId === activeSessionId) ?? null;
+}
+
 export function createTriagePlugin(options: {
   createStore?: (ctx: PluginContext) => TriageStore;
 } = {}): PaperclipPlugin {
@@ -235,6 +297,26 @@ export function createTriagePlugin(options: {
       return getService().getItem(params);
     });
 
+    ctx.data.register("assistant-context", async (params: Record<string, unknown>) => {
+      return getService().getAssistantContext(params);
+    });
+
+    ctx.data.register("queue-guidance", async (params: Record<string, unknown>) => {
+      return getService().listGuidanceDocs(params);
+    });
+
+    ctx.data.register("guidance-proposals", async (params: Record<string, unknown>) => {
+      return getService().listGuidanceProposals(params);
+    });
+
+    ctx.data.register("item-events", async (params: Record<string, unknown>) => {
+      return getService().listItemEvents(params);
+    });
+
+    ctx.data.register("queue-transition-actions", async (params: Record<string, unknown>) => {
+      return getService().listTransitionActions(params);
+    });
+
     ctx.actions.register("reconcile-managed-resources", async (params: Record<string, unknown>) => {
       const companyId = requireCompanyId(params);
       const result = await managedResourceHealth(ctx, companyId, "reconcile");
@@ -277,9 +359,116 @@ export function createTriagePlugin(options: {
       return getService().updateItem(params);
     });
 
+    ctx.actions.register("update-item-content", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return getService().updateItemContent(params, actionActor(ctx, params));
+    });
+
     ctx.actions.register("archive-item", async (params: Record<string, unknown>) => {
       await requireKnownCompany(ctx, requireCompanyId(params));
       return getService().archiveItem(params);
+    });
+
+    ctx.actions.register("upsert-transition-action", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return getService().upsertTransitionAction(params);
+    });
+
+    ctx.actions.register("transition-item", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return getService().transitionItem(params, ctx, actionActor(ctx, params));
+    });
+
+    ctx.actions.register("ensure-queue-chat", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return ensureQueueChatIssue(ctx, getService(), params);
+    });
+
+    ctx.actions.register("send-assistant-message", async (params: Record<string, unknown>) => {
+      const companyId = requireCompanyId(params);
+      await requireKnownCompany(ctx, companyId);
+      const message = stringField(params.message);
+      if (!message) {
+        throw new Error("message is required");
+      }
+
+      const context = await getService().getAssistantContext(params);
+      const chat = await ensureQueueChatIssue(ctx, getService(), params);
+      const agentResolution = await ctx.agents.managed.reconcile(TRIAGE_ASSISTANT_AGENT_KEY, companyId);
+      if (!agentResolution.agentId) {
+        throw new Error("Triage Assistant managed agent is missing");
+      }
+      if (agentResolution.agent?.status === "paused") {
+        await ctx.agents.resume(agentResolution.agentId, companyId);
+      }
+      const existingSession = await activeSessionForChat(
+        ctx,
+        companyId,
+        agentResolution.agentId,
+        chat.chat.metadata,
+      );
+      const session = existingSession ??
+        await ctx.agents.sessions.create(agentResolution.agentId, companyId, {
+          taskKey: `plugin:${PLUGIN_ID}:session:triage-queue-chat:${chat.queue.id}`,
+          reason: "triage_queue_chat",
+        });
+      const run = await ctx.agents.sessions.sendMessage(session.sessionId, companyId, {
+        prompt: context.prompt,
+        reason: `triage:${chat.queue.queueKey}`,
+      });
+      const updatedChat = await getService().updateQueueChat({
+        companyId,
+        chatId: chat.chat.id,
+        metadata: {
+          ...chat.chat.metadata,
+          activeSessionId: session.sessionId,
+          lastRunId: run.runId,
+          lastItemId: context.item.id,
+        },
+      });
+      if (chat.hiddenIssueId) {
+        await ctx.issues.createComment(
+          chat.hiddenIssueId,
+          [`User message for item \`${context.item.title}\`:`, "", message].join("\n"),
+          companyId,
+          { authorAgentId: agentResolution.agentId },
+        );
+      }
+      return {
+        queue: context.queue,
+        item: context.item,
+        guidanceDocs: context.guidanceDocs,
+        chat: updatedChat,
+        hiddenIssueId: chat.hiddenIssueId,
+        session,
+        runId: run.runId,
+        prompt: context.prompt,
+      };
+    });
+
+    ctx.actions.register("generate-guidance-proposal", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return getService().createGuidanceProposal(params, actionActor(ctx, params));
+    });
+
+    ctx.actions.register("revise-guidance-proposal", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return getService().reviseGuidanceProposal(params, actionActor(ctx, params));
+    });
+
+    ctx.actions.register("reject-guidance-proposal", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return getService().rejectGuidanceProposal(params, actionActor(ctx, params));
+    });
+
+    ctx.actions.register("accept-guidance-proposal", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return getService().acceptGuidanceProposal(params, actionActor(ctx, params));
+    });
+
+    ctx.actions.register("manual-edit-guidance", async (params: Record<string, unknown>) => {
+      await requireKnownCompany(ctx, requireCompanyId(params));
+      return getService().manualEditGuidance(params, actionActor(ctx, params));
     });
   },
 

@@ -65,6 +65,11 @@ describe("Paperclip Triage scaffold", () => {
       "database.namespace.read",
       "database.namespace.write",
       "companies.read",
+      "issues.read",
+      "issues.create",
+      "issues.update",
+      "issue.comments.read",
+      "issue.comments.create",
       "agents.managed",
       "projects.managed",
       "skills.managed",
@@ -155,7 +160,7 @@ describe("Paperclip Triage queue and item ingest", () => {
     const testPlugin = createTriagePlugin({ createStore: () => store });
     const harness = createTestHarness({ manifest });
     harness.seed({ companies: [company(COMPANY_ID), company(OTHER_COMPANY_ID)] });
-    return { harness, plugin: testPlugin };
+    return { harness, plugin: testPlugin, store };
   }
 
   it("creates and updates queues through worker actions", async () => {
@@ -302,6 +307,203 @@ describe("Paperclip Triage queue and item ingest", () => {
           message: "Request companyId does not match the resolved plugin route company",
         },
       },
+    });
+  });
+
+  it("reuses one hidden queue chat and assistant session per queue while isolating other queues", async () => {
+    const { harness, plugin: testPlugin } = createHarness();
+    await testPlugin.definition.setup(harness.ctx);
+
+    const first = await harness.performAction<{
+      item: { id: string };
+    }>("ingest-item", {
+      companyId: COMPANY_ID,
+      queueKey: "reviews",
+      title: "Launch review",
+      content: "Please review the launch copy.",
+      properties: { sourceKind: "manual" },
+    });
+    const other = await harness.performAction<{
+      item: { id: string };
+    }>("ingest-item", {
+      companyId: COMPANY_ID,
+      queueKey: "support",
+      title: "Support review",
+      content: "Please review the support reply.",
+    });
+
+    const firstSend = await harness.performAction<{
+      chat: { id: string; hiddenIssueId: string; metadata: Record<string, unknown> };
+      hiddenIssueId: string;
+      session: { sessionId: string };
+      runId: string;
+      prompt: string;
+    }>("send-assistant-message", {
+      companyId: COMPANY_ID,
+      itemId: first.item.id,
+      message: "What should I change?",
+    });
+
+    expect(firstSend.hiddenIssueId).toBeTruthy();
+    expect(firstSend.chat.hiddenIssueId).toBe(firstSend.hiddenIssueId);
+    expect(firstSend.runId).toBeTruthy();
+    expect(firstSend.prompt).toContain("Queue: Reviews (reviews)");
+    expect(firstSend.prompt).toContain("Please review the launch copy.");
+    expect(firstSend.prompt).toContain("guidance.md");
+    expect(firstSend.prompt).toContain("What should I change?");
+
+    const secondSend = await harness.performAction<{
+      chat: { id: string; hiddenIssueId: string };
+      hiddenIssueId: string;
+      session: { sessionId: string };
+    }>("send-assistant-message", {
+      companyId: COMPANY_ID,
+      itemId: first.item.id,
+      message: "Use the same thread.",
+    });
+    expect(secondSend.chat.id).toBe(firstSend.chat.id);
+    expect(secondSend.hiddenIssueId).toBe(firstSend.hiddenIssueId);
+    expect(secondSend.session.sessionId).toBe(firstSend.session.sessionId);
+
+    const otherSend = await harness.performAction<{
+      chat: { id: string };
+      hiddenIssueId: string;
+    }>("send-assistant-message", {
+      companyId: COMPANY_ID,
+      itemId: other.item.id,
+      message: "Different queue.",
+    });
+    expect(otherSend.chat.id).not.toBe(firstSend.chat.id);
+    expect(otherSend.hiddenIssueId).not.toBe(firstSend.hiddenIssueId);
+  });
+
+  it("updates item content only when the expected revision matches", async () => {
+    const { harness, plugin: testPlugin } = createHarness();
+    await testPlugin.definition.setup(harness.ctx);
+
+    const ingested = await harness.performAction<{
+      item: { id: string; revision: number };
+    }>("ingest-item", {
+      companyId: COMPANY_ID,
+      queueKey: "reviews",
+      title: "Original",
+      content: "Original content",
+    });
+
+    const updated = await harness.performAction<{
+      item: { title: string; content: string; revision: number };
+      event: { eventType: string; metadata: Record<string, unknown> };
+    }>("update-item-content", {
+      companyId: COMPANY_ID,
+      itemId: ingested.item.id,
+      expectedRevision: ingested.item.revision,
+      title: "Edited",
+      content: "Edited content",
+    });
+
+    expect(updated.item).toMatchObject({ title: "Edited", content: "Edited content", revision: 2 });
+    expect(updated.event).toMatchObject({
+      eventType: "item.content.updated",
+      metadata: { previousRevision: 1, nextRevision: 2 },
+    });
+
+    await expect(harness.performAction("update-item-content", {
+      companyId: COMPANY_ID,
+      itemId: ingested.item.id,
+      expectedRevision: 1,
+      content: "Stale edit",
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "item_revision_conflict",
+    });
+  });
+
+  it("supports guidance proposal generation, revision, acceptance, rejection, and manual edits", async () => {
+    const { harness, plugin: testPlugin } = createHarness();
+    await testPlugin.definition.setup(harness.ctx);
+
+    const ingested = await harness.performAction<{
+      item: { id: string };
+    }>("ingest-item", {
+      companyId: COMPANY_ID,
+      queueKey: "reviews",
+      title: "Review example",
+      content: "Prefer concise copy.",
+    });
+
+    const manual = await harness.performAction<{
+      doc: { content: string; currentRevisionId: string };
+      revision: { id: string; summary: string };
+    }>("manual-edit-guidance", {
+      companyId: COMPANY_ID,
+      queueKey: "reviews",
+      content: "# Reviews Guidance\n\nStart from the user's target audience.",
+      summary: "Seed guidance",
+    });
+    expect(manual.doc.content).toContain("target audience");
+    expect(manual.doc.currentRevisionId).toBe(manual.revision.id);
+
+    const generated = await harness.performAction<{
+      proposal: { id: string; status: string; proposedContent: string };
+    }>("generate-guidance-proposal", {
+      companyId: COMPANY_ID,
+      itemId: ingested.item.id,
+      suggestedChange: "For launch copy, flag vague benefits before approving.",
+      rationale: "The item exposed a repeatable approval rule.",
+    });
+    expect(generated.proposal.status).toBe("proposed");
+    expect(generated.proposal.proposedContent).toContain("target audience");
+    expect(generated.proposal.proposedContent).toContain("flag vague benefits");
+
+    const revised = await harness.performAction<{ status: string; proposedContent: string }>(
+      "revise-guidance-proposal",
+      {
+        companyId: COMPANY_ID,
+        proposalId: generated.proposal.id,
+        proposedContent: "# Reviews Guidance\n\nFlag vague benefits and ask for concrete proof.",
+        rationale: "Sharper wording.",
+      },
+    );
+    expect(revised).toMatchObject({ status: "revised" });
+
+    const accepted = await harness.performAction<{
+      proposal: { status: string; metadata: Record<string, unknown> };
+      doc: { content: string; currentRevisionId: string };
+      revision: { id: string };
+    }>("accept-guidance-proposal", {
+      companyId: COMPANY_ID,
+      proposalId: generated.proposal.id,
+    });
+    expect(accepted.proposal.status).toBe("accepted");
+    expect(accepted.proposal.metadata.acceptedRevisionId).toBe(accepted.revision.id);
+    expect(accepted.doc.content).toContain("concrete proof");
+    expect(accepted.doc.currentRevisionId).toBe(accepted.revision.id);
+
+    const rejectedCandidate = await harness.performAction<{
+      proposal: { id: string };
+    }>("generate-guidance-proposal", {
+      companyId: COMPANY_ID,
+      itemId: ingested.item.id,
+      proposedContent: "# Reviews Guidance\n\nToo broad.",
+    });
+    const rejected = await harness.performAction<{ status: string; metadata: Record<string, unknown> }>(
+      "reject-guidance-proposal",
+      {
+        companyId: COMPANY_ID,
+        proposalId: rejectedCandidate.proposal.id,
+        reason: "Too broad for this queue.",
+      },
+    );
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      metadata: expect.objectContaining({ rejectionReason: "Too broad for this queue." }),
+    });
+    await expect(harness.performAction("accept-guidance-proposal", {
+      companyId: COMPANY_ID,
+      proposalId: rejectedCandidate.proposal.id,
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "guidance_proposal_rejected",
     });
   });
 });
