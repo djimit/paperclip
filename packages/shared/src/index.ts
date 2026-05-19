@@ -682,20 +682,22 @@ export {
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
 } from "./types/instance.js";
 
-export type {
-  CloudUpstreamConnectStartResponse,
-  CloudUpstreamActivationDecision,
-  CloudUpstreamActivationEntityType,
-  CloudUpstreamConnection,
-  CloudUpstreamConflict,
-  CloudUpstreamPreview,
-  CloudUpstreamRun,
-  CloudUpstreamRunEvent,
-  CloudUpstreamsState,
-  CloudUpstreamStep,
-  CloudUpstreamSummaryCount,
-  CloudUpstreamTarget,
-  CloudUpstreamWarning,
+export {
+  CLOUD_UPSTREAM_EXPORTER_VERSION,
+  CLOUD_UPSTREAM_SOURCE_SCHEMA_VERSION,
+  type CloudUpstreamConnectStartResponse,
+  type CloudUpstreamActivationDecision,
+  type CloudUpstreamActivationEntityType,
+  type CloudUpstreamConnection,
+  type CloudUpstreamConflict,
+  type CloudUpstreamPreview,
+  type CloudUpstreamRun,
+  type CloudUpstreamRunEvent,
+  type CloudUpstreamsState,
+  type CloudUpstreamStep,
+  type CloudUpstreamSummaryCount,
+  type CloudUpstreamTarget,
+  type CloudUpstreamWarning,
 } from "./types/cloud-upstream.js";
 
 export {

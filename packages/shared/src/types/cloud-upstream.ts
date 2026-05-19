@@ -4,6 +4,9 @@ export type CloudUpstreamRunStatus = "previewed" | "running" | "succeeded" | "fa
 
 export type CloudUpstreamActivationEntityType = "agents" | "routines" | "monitors";
 
+export const CLOUD_UPSTREAM_EXPORTER_VERSION = "paperclipai-cli-cloud-v1";
+export const CLOUD_UPSTREAM_SOURCE_SCHEMA_VERSION = "paperclip-local-portability-v1";
+
 export interface CloudUpstreamActivationDecision {
   entityType: CloudUpstreamActivationEntityType;
   count: number;

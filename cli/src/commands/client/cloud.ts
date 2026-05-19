@@ -8,6 +8,10 @@ import type {
   CompanyPortabilityFileEntry,
   InstanceExperimentalSettings,
 } from "@paperclipai/shared";
+import {
+  CLOUD_UPSTREAM_EXPORTER_VERSION,
+  CLOUD_UPSTREAM_SOURCE_SCHEMA_VERSION,
+} from "@paperclipai/shared";
 import { openUrl } from "../../client/board-auth.js";
 import { resolvePaperclipInstanceId } from "../../config/home.js";
 import {
@@ -286,8 +290,8 @@ export async function buildBundleFromLocalCompany(input: {
     sourceInstanceId: input.connection.sourceInstanceId,
     sourceCompanyId: input.localCompanyId,
     sourceInstanceKeyFingerprint: input.connection.sourceInstanceFingerprint,
-    exporterVersion: "paperclipai-cli-cloud-v1",
-    sourceSchemaVersion: "paperclip-local-portability-v1",
+    exporterVersion: CLOUD_UPSTREAM_EXPORTER_VERSION,
+    sourceSchemaVersion: CLOUD_UPSTREAM_SOURCE_SCHEMA_VERSION,
   };
   const target: UpstreamTransferManifestTarget = {
     targetStackId: input.discovery.stack.id,

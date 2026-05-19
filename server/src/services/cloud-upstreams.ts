@@ -9,12 +9,17 @@ import type {
   CloudUpstreamPreview,
   CloudUpstreamRun,
   CloudUpstreamRunEvent,
+  CloudUpstreamStep,
   CloudUpstreamsState,
   CloudUpstreamSummaryCount,
   CloudUpstreamTarget,
   CloudUpstreamWarning,
   CompanyPortabilityExportResult,
   CompanyPortabilityFileEntry,
+} from "@paperclipai/shared";
+import {
+  CLOUD_UPSTREAM_EXPORTER_VERSION,
+  CLOUD_UPSTREAM_SOURCE_SCHEMA_VERSION,
 } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
 import {
@@ -432,11 +437,13 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
   }): Promise<void> {
     let preview: CloudUpstreamPreview | null = null;
     let bundle: LocalUpstreamExportBundle | null = null;
+    let currentStep: CloudUpstreamStep = "scan";
     try {
       preview = await localPreview(input.connection);
       if (!preview.schemaCompatible) {
         throw badRequest("Cloud stack schema is not compatible with this local Paperclip version");
       }
+      currentStep = "preview";
       await updateRun(input.runId, {
         activeStep: "preview",
         progressPercent: 25,
@@ -451,6 +458,7 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
       });
 
       bundle = await buildBundle(input.connection, "apply");
+      currentStep = "push";
       await updateRun(input.runId, {
         activeStep: "push",
         progressPercent: 45,
@@ -484,6 +492,7 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
       for (const chunk of bundle.chunks) {
         await remotePost(input.connection, `/api/upstream-import-runs/${encodeURIComponent(remoteRunId)}/chunks`, chunk);
       }
+      currentStep = "verify";
       await updateRun(input.runId, {
         activeStep: "verify",
         progressPercent: 82,
@@ -536,7 +545,7 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
       const failure = cloudUpstreamRemoteFailureReport(error);
       await updateRun(input.runId, {
         status: "failed",
-        activeStep: "push",
+        activeStep: currentStep,
         progressPercent: 100,
         ...(preview ? {
           summary: preview.summary,
@@ -652,8 +661,8 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
       sourceInstanceId: connection.sourceInstanceId,
       sourceCompanyId: connection.companyId,
       sourceInstanceKeyFingerprint: connection.sourceInstanceFingerprint,
-      exporterVersion: "paperclip-local-cloud-ui-v1",
-      sourceSchemaVersion: TRANSFER_SCHEMA.version,
+      exporterVersion: CLOUD_UPSTREAM_EXPORTER_VERSION,
+      sourceSchemaVersion: CLOUD_UPSTREAM_SOURCE_SCHEMA_VERSION,
     };
     const target = {
       targetStackId: connection.targetStackId,
