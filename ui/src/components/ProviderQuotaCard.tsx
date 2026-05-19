@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { QuotaBar } from "./QuotaBar";
 import { ClaudeSubscriptionPanel } from "./ClaudeSubscriptionPanel";
 import { CodexSubscriptionPanel } from "./CodexSubscriptionPanel";
+import { CostProvenanceNotice } from "./CostProvenanceNotice";
 import {
   billingTypeDisplayName,
   formatCents,
@@ -54,6 +55,8 @@ export function ProviderQuotaCard({
   const totals = useMemo(() => {
     let inputTokens = 0, outputTokens = 0, costCents = 0;
     let apiRunCount = 0, subRunCount = 0, subInputTokens = 0, subOutputTokens = 0;
+    let estimatedMeteredCostCents = 0, estimatedMeteredInputTokens = 0, estimatedMeteredCachedInputTokens = 0, estimatedMeteredOutputTokens = 0, estimatedMeteredEventCount = 0;
+    let unavailableMeteredInputTokens = 0, unavailableMeteredCachedInputTokens = 0, unavailableMeteredOutputTokens = 0, unavailableMeteredEventCount = 0;
     for (const r of rows) {
       inputTokens += r.inputTokens;
       outputTokens += r.outputTokens;
@@ -62,6 +65,15 @@ export function ProviderQuotaCard({
       subRunCount += r.subscriptionRunCount;
       subInputTokens += r.subscriptionInputTokens;
       subOutputTokens += r.subscriptionOutputTokens;
+      estimatedMeteredCostCents += r.estimatedMeteredCostCents;
+      estimatedMeteredInputTokens += r.estimatedMeteredInputTokens;
+      estimatedMeteredCachedInputTokens += r.estimatedMeteredCachedInputTokens;
+      estimatedMeteredOutputTokens += r.estimatedMeteredOutputTokens;
+      estimatedMeteredEventCount += r.estimatedMeteredEventCount;
+      unavailableMeteredInputTokens += r.unavailableMeteredInputTokens;
+      unavailableMeteredCachedInputTokens += r.unavailableMeteredCachedInputTokens;
+      unavailableMeteredOutputTokens += r.unavailableMeteredOutputTokens;
+      unavailableMeteredEventCount += r.unavailableMeteredEventCount;
     }
     const totalTokens = inputTokens + outputTokens;
     const subTokens = subInputTokens + subOutputTokens;
@@ -78,6 +90,15 @@ export function ProviderQuotaCard({
       totalSubOutputTokens: subOutputTokens,
       totalSubTokens: subTokens,
       subSharePct: allTokens > 0 ? (subTokens / allTokens) * 100 : 0,
+      estimatedMeteredCostCents,
+      estimatedMeteredInputTokens,
+      estimatedMeteredCachedInputTokens,
+      estimatedMeteredOutputTokens,
+      estimatedMeteredEventCount,
+      unavailableMeteredInputTokens,
+      unavailableMeteredCachedInputTokens,
+      unavailableMeteredOutputTokens,
+      unavailableMeteredEventCount,
     };
   }, [rows]);
 
@@ -159,6 +180,8 @@ export function ProviderQuotaCard({
       </CardHeader>
 
       <CardContent className="px-4 pb-4 pt-3 space-y-4">
+        <CostProvenanceNotice totals={totals} />
+
         {hasBudget && (
           <div className="space-y-3">
             <QuotaBar
@@ -275,6 +298,7 @@ export function ProviderQuotaCard({
                         <span className="text-[11px] text-muted-foreground truncate block">
                           {providerDisplayName(row.biller)} · {billingTypeDisplayName(row.billingType)}
                         </span>
+                        <CostProvenanceNotice totals={row} compact className="truncate" />
                       </div>
                       <div className="flex items-center gap-3 shrink-0 tabular-nums text-xs">
                         <span className="text-muted-foreground">

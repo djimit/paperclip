@@ -15,6 +15,7 @@ import { costsApi } from "../api/costs";
 import { BillerSpendCard } from "../components/BillerSpendCard";
 import { BudgetIncidentCard } from "../components/BudgetIncidentCard";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
+import { CostProvenanceNotice, formatCostProvenanceSummary } from "../components/CostProvenanceNotice";
 import { EmptyState } from "../components/EmptyState";
 import { FinanceBillerCard } from "../components/FinanceBillerCard";
 import { FinanceKindCard } from "../components/FinanceKindCard";
@@ -518,6 +519,7 @@ export function Costs() {
       (sum, row) => sum + row.inputTokens + row.cachedInputTokens + row.outputTokens,
       0,
     );
+  const inferenceProvenanceSummary = formatCostProvenanceSummary(spendData?.summary);
 
   const topFinanceEvents = (financeData?.events ?? []) as FinanceEvent[];
   const budgetPolicies = budgetData?.policies ?? [];
@@ -583,7 +585,7 @@ export function Costs() {
             <MetricTile
               label="Inference spend"
               value={formatCents(spendData?.summary.spendCents ?? 0)}
-              subtitle={`${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`}
+              subtitle={`${formatTokens(inferenceTokenTotal)} tokens across request-scoped events${inferenceProvenanceSummary ? ` · ${inferenceProvenanceSummary}` : ""}`}
               icon={DollarSign}
             />
             <MetricTile
@@ -681,6 +683,7 @@ export function Costs() {
                         </div>
                       </div>
                     </div>
+                    <CostProvenanceNotice totals={spendData?.summary} />
                     {spendData?.summary.budgetCents && spendData.summary.budgetCents > 0 ? (
                       <div className="space-y-2">
                         <div className="h-2 overflow-hidden bg-muted">
@@ -758,6 +761,7 @@ export function Costs() {
                                       : "0 subscription"}
                                   </div>
                                 ) : null}
+                                <CostProvenanceNotice totals={row} compact />
                               </div>
                             </div>
 
@@ -779,6 +783,7 @@ export function Costs() {
                                         <div className="truncate text-muted-foreground">
                                           {providerDisplayName(modelRow.biller)} · {billingTypeDisplayName(modelRow.billingType)}
                                         </div>
+                                        <CostProvenanceNotice totals={modelRow} compact className="truncate" />
                                       </div>
                                       <div className="text-right tabular-nums">
                                         <div className="font-medium">

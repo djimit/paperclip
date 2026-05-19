@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { CostByBiller, CostByProviderModel } from "@paperclipai/shared";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { QuotaBar } from "./QuotaBar";
+import { CostProvenanceNotice } from "./CostProvenanceNotice";
 import { billingTypeDisplayName, formatCents, formatTokens, providerDisplayName } from "@/lib/utils";
 
 interface BillerSpendCardProps {
@@ -20,17 +21,49 @@ export function BillerSpendCard({
   providerRows,
 }: BillerSpendCardProps) {
   const providerBreakdown = useMemo(() => {
-    const map = new Map<string, { provider: string; costCents: number; inputTokens: number; outputTokens: number }>();
+    const map = new Map<string, {
+      provider: string;
+      costCents: number;
+      inputTokens: number;
+      outputTokens: number;
+      estimatedMeteredCostCents: number;
+      estimatedMeteredInputTokens: number;
+      estimatedMeteredCachedInputTokens: number;
+      estimatedMeteredOutputTokens: number;
+      estimatedMeteredEventCount: number;
+      unavailableMeteredInputTokens: number;
+      unavailableMeteredCachedInputTokens: number;
+      unavailableMeteredOutputTokens: number;
+      unavailableMeteredEventCount: number;
+    }>();
     for (const entry of providerRows) {
       const current = map.get(entry.provider) ?? {
         provider: entry.provider,
         costCents: 0,
         inputTokens: 0,
         outputTokens: 0,
+        estimatedMeteredCostCents: 0,
+        estimatedMeteredInputTokens: 0,
+        estimatedMeteredCachedInputTokens: 0,
+        estimatedMeteredOutputTokens: 0,
+        estimatedMeteredEventCount: 0,
+        unavailableMeteredInputTokens: 0,
+        unavailableMeteredCachedInputTokens: 0,
+        unavailableMeteredOutputTokens: 0,
+        unavailableMeteredEventCount: 0,
       };
       current.costCents += entry.costCents;
       current.inputTokens += entry.inputTokens + entry.cachedInputTokens;
       current.outputTokens += entry.outputTokens;
+      current.estimatedMeteredCostCents += entry.estimatedMeteredCostCents;
+      current.estimatedMeteredInputTokens += entry.estimatedMeteredInputTokens;
+      current.estimatedMeteredCachedInputTokens += entry.estimatedMeteredCachedInputTokens;
+      current.estimatedMeteredOutputTokens += entry.estimatedMeteredOutputTokens;
+      current.estimatedMeteredEventCount += entry.estimatedMeteredEventCount;
+      current.unavailableMeteredInputTokens += entry.unavailableMeteredInputTokens;
+      current.unavailableMeteredCachedInputTokens += entry.unavailableMeteredCachedInputTokens;
+      current.unavailableMeteredOutputTokens += entry.unavailableMeteredOutputTokens;
+      current.unavailableMeteredEventCount += entry.unavailableMeteredEventCount;
       map.set(entry.provider, current);
     }
     return Array.from(map.values()).sort((a, b) => b.costCents - a.costCents);
@@ -78,6 +111,8 @@ export function BillerSpendCard({
       </CardHeader>
 
       <CardContent className="px-4 pb-4 pt-3 space-y-4">
+        <CostProvenanceNotice totals={row} />
+
         {budgetMonthlyCents > 0 && (
           <QuotaBar
             label="Period spend"
@@ -132,6 +167,7 @@ export function BillerSpendCard({
                       <div className="text-muted-foreground">
                         {formatTokens(entry.inputTokens + entry.outputTokens)} tok
                       </div>
+                      <CostProvenanceNotice totals={entry} compact />
                     </div>
                   </div>
                 ))}

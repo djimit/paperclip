@@ -12,9 +12,54 @@ export interface CostDateRange {
 
 const METERED_BILLING_TYPE = "metered_api";
 const SUBSCRIPTION_BILLING_TYPES = ["subscription_included", "subscription_overage"] as const;
+const ESTIMATED_COST_SOURCE = "estimated";
+const UNAVAILABLE_COST_SOURCE = "unavailable";
 
 function sumAsNumber(column: typeof costEvents.costCents | typeof costEvents.inputTokens | typeof costEvents.cachedInputTokens | typeof costEvents.outputTokens) {
   return sql<number>`coalesce(sum(${column}), 0)::double precision`;
+}
+
+function meteredCostSourceSum(
+  costSource: string,
+  column: typeof costEvents.costCents | typeof costEvents.inputTokens | typeof costEvents.cachedInputTokens | typeof costEvents.outputTokens,
+) {
+  return sql<number>`
+    coalesce(sum(
+      case
+        when ${costEvents.billingType} = ${METERED_BILLING_TYPE}
+          and ${costEvents.costSource} = ${costSource}
+        then ${column}
+        else 0
+      end
+    ), 0)::double precision
+  `;
+}
+
+function meteredCostSourceEventCount(costSource: string) {
+  return sql<number>`
+    count(
+      case
+        when ${costEvents.billingType} = ${METERED_BILLING_TYPE}
+          and ${costEvents.costSource} = ${costSource}
+        then 1
+        else null
+      end
+    )::int
+  `;
+}
+
+function meteredCostProvenanceSelect() {
+  return {
+    estimatedMeteredCostCents: meteredCostSourceSum(ESTIMATED_COST_SOURCE, costEvents.costCents),
+    estimatedMeteredInputTokens: meteredCostSourceSum(ESTIMATED_COST_SOURCE, costEvents.inputTokens),
+    estimatedMeteredCachedInputTokens: meteredCostSourceSum(ESTIMATED_COST_SOURCE, costEvents.cachedInputTokens),
+    estimatedMeteredOutputTokens: meteredCostSourceSum(ESTIMATED_COST_SOURCE, costEvents.outputTokens),
+    estimatedMeteredEventCount: meteredCostSourceEventCount(ESTIMATED_COST_SOURCE),
+    unavailableMeteredInputTokens: meteredCostSourceSum(UNAVAILABLE_COST_SOURCE, costEvents.inputTokens),
+    unavailableMeteredCachedInputTokens: meteredCostSourceSum(UNAVAILABLE_COST_SOURCE, costEvents.cachedInputTokens),
+    unavailableMeteredOutputTokens: meteredCostSourceSum(UNAVAILABLE_COST_SOURCE, costEvents.outputTokens),
+    unavailableMeteredEventCount: meteredCostSourceEventCount(UNAVAILABLE_COST_SOURCE),
+  };
 }
 
 function currentUtcMonthWindow(now = new Date()) {
@@ -116,14 +161,15 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
       if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
 
-      const [{ total }] = await db
+      const [summaryRow] = await db
         .select({
           total: sumAsNumber(costEvents.costCents),
+          ...meteredCostProvenanceSelect(),
         })
         .from(costEvents)
         .where(and(...conditions));
 
-      const spendCents = Number(total);
+      const spendCents = Number(summaryRow?.total ?? 0);
       const utilization =
         company.budgetMonthlyCents > 0
           ? (spendCents / company.budgetMonthlyCents) * 100
@@ -134,6 +180,15 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         spendCents,
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
+        estimatedMeteredCostCents: Number(summaryRow?.estimatedMeteredCostCents ?? 0),
+        estimatedMeteredInputTokens: Number(summaryRow?.estimatedMeteredInputTokens ?? 0),
+        estimatedMeteredCachedInputTokens: Number(summaryRow?.estimatedMeteredCachedInputTokens ?? 0),
+        estimatedMeteredOutputTokens: Number(summaryRow?.estimatedMeteredOutputTokens ?? 0),
+        estimatedMeteredEventCount: Number(summaryRow?.estimatedMeteredEventCount ?? 0),
+        unavailableMeteredInputTokens: Number(summaryRow?.unavailableMeteredInputTokens ?? 0),
+        unavailableMeteredCachedInputTokens: Number(summaryRow?.unavailableMeteredCachedInputTokens ?? 0),
+        unavailableMeteredOutputTokens: Number(summaryRow?.unavailableMeteredOutputTokens ?? 0),
+        unavailableMeteredEventCount: Number(summaryRow?.unavailableMeteredEventCount ?? 0),
       };
     },
 
@@ -296,6 +351,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
             sql<number>`coalesce(sum(case when ${costEvents.billingType} in (${sql.join(SUBSCRIPTION_BILLING_TYPES.map((value) => sql`${value}`), sql`, `)}) then ${costEvents.inputTokens} else 0 end), 0)::double precision`,
           subscriptionOutputTokens:
             sql<number>`coalesce(sum(case when ${costEvents.billingType} in (${sql.join(SUBSCRIPTION_BILLING_TYPES.map((value) => sql`${value}`), sql`, `)}) then ${costEvents.outputTokens} else 0 end), 0)::double precision`,
+          ...meteredCostProvenanceSelect(),
         })
         .from(costEvents)
         .leftJoin(agents, eq(costEvents.agentId, agents.id))
@@ -329,6 +385,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
             sql<number>`coalesce(sum(case when ${costEvents.billingType} in (${sql.join(SUBSCRIPTION_BILLING_TYPES.map((value) => sql`${value}`), sql`, `)}) then ${costEvents.inputTokens} else 0 end), 0)::double precision`,
           subscriptionOutputTokens:
             sql<number>`coalesce(sum(case when ${costEvents.billingType} in (${sql.join(SUBSCRIPTION_BILLING_TYPES.map((value) => sql`${value}`), sql`, `)}) then ${costEvents.outputTokens} else 0 end), 0)::double precision`,
+          ...meteredCostProvenanceSelect(),
         })
         .from(costEvents)
         .where(and(...conditions))
@@ -360,6 +417,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
             sql<number>`coalesce(sum(case when ${costEvents.billingType} in (${sql.join(SUBSCRIPTION_BILLING_TYPES.map((value) => sql`${value}`), sql`, `)}) then ${costEvents.outputTokens} else 0 end), 0)::double precision`,
           providerCount: sql<number>`count(distinct ${costEvents.provider})::int`,
           modelCount: sql<number>`count(distinct ${costEvents.model})::int`,
+          ...meteredCostProvenanceSelect(),
         })
         .from(costEvents)
         .where(and(...conditions))
@@ -438,6 +496,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
           inputTokens: sumAsNumber(costEvents.inputTokens),
           cachedInputTokens: sumAsNumber(costEvents.cachedInputTokens),
           outputTokens: sumAsNumber(costEvents.outputTokens),
+          ...meteredCostProvenanceSelect(),
         })
         .from(costEvents)
         .leftJoin(agents, eq(costEvents.agentId, agents.id))

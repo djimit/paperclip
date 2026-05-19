@@ -496,6 +496,99 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     expect(byAgentModelRow?.costCents).toBe(4_000_000_000);
   });
 
+  it("exposes estimated and unavailable metered API usage in cost rollups", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+      budgetMonthlyCents: 10_000,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Cost Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(costEvents).values([
+      {
+        companyId,
+        agentId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5.5",
+        inputTokens: 100,
+        cachedInputTokens: 10,
+        outputTokens: 20,
+        costCents: 250,
+        costSource: "estimated",
+        occurredAt: new Date("2026-04-10T00:00:00.000Z"),
+      },
+      {
+        companyId,
+        agentId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5.5",
+        inputTokens: 1_000,
+        cachedInputTokens: 100,
+        outputTokens: 200,
+        costCents: 0,
+        costSource: "unavailable",
+        occurredAt: new Date("2026-04-10T00:01:00.000Z"),
+      },
+      {
+        companyId,
+        agentId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "subscription_included",
+        model: "gpt-5.5",
+        inputTokens: 5_000,
+        cachedInputTokens: 0,
+        outputTokens: 500,
+        costCents: 0,
+        costSource: "unavailable",
+        occurredAt: new Date("2026-04-10T00:02:00.000Z"),
+      },
+    ]);
+
+    const range = {
+      from: new Date("2026-04-01T00:00:00.000Z"),
+      to: new Date("2026-04-15T23:59:59.999Z"),
+    };
+
+    const summary = await costs.summary(companyId, range);
+    const [byAgentRow] = await costs.byAgent(companyId, range);
+    const [byProviderRow] = await costs.byProvider(companyId, range);
+
+    for (const row of [summary, byAgentRow, byProviderRow]) {
+      expect(row?.estimatedMeteredCostCents).toBe(250);
+      expect(row?.estimatedMeteredInputTokens).toBe(100);
+      expect(row?.estimatedMeteredCachedInputTokens).toBe(10);
+      expect(row?.estimatedMeteredOutputTokens).toBe(20);
+      expect(row?.estimatedMeteredEventCount).toBe(1);
+      expect(row?.unavailableMeteredInputTokens).toBe(1_000);
+      expect(row?.unavailableMeteredCachedInputTokens).toBe(100);
+      expect(row?.unavailableMeteredOutputTokens).toBe(200);
+      expect(row?.unavailableMeteredEventCount).toBe(1);
+    }
+    expect(summary.spendCents).toBe(250);
+    expect(summary.utilizationPercent).toBe(2.5);
+    expect(byAgentRow?.subscriptionInputTokens).toBe(5_000);
+  });
+
   it("aggregates issue costs across recursive descendants only", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();

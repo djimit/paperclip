@@ -28,6 +28,17 @@ const now = new Date("2026-04-20T12:00:00.000Z");
 const windowStart = new Date("2026-04-01T00:00:00.000Z");
 const windowEnd = new Date("2026-05-01T00:00:00.000Z");
 const at = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * 60_000);
+const costProvenanceZero = {
+  estimatedMeteredCostCents: 0,
+  estimatedMeteredInputTokens: 0,
+  estimatedMeteredCachedInputTokens: 0,
+  estimatedMeteredOutputTokens: 0,
+  estimatedMeteredEventCount: 0,
+  unavailableMeteredInputTokens: 0,
+  unavailableMeteredCachedInputTokens: 0,
+  unavailableMeteredOutputTokens: 0,
+  unavailableMeteredEventCount: 0,
+};
 
 function Section({
   eyebrow,
@@ -159,6 +170,7 @@ const providerRowsByProvider: Record<string, CostByProviderModel[]> = {
       subscriptionCachedInputTokens: 210_000,
       subscriptionInputTokens: 1_420_000,
       subscriptionOutputTokens: 385_000,
+      ...costProvenanceZero,
     },
     {
       provider: "anthropic",
@@ -174,6 +186,7 @@ const providerRowsByProvider: Record<string, CostByProviderModel[]> = {
       subscriptionCachedInputTokens: 0,
       subscriptionInputTokens: 0,
       subscriptionOutputTokens: 0,
+      ...costProvenanceZero,
     },
   ],
   openai: [
@@ -191,6 +204,7 @@ const providerRowsByProvider: Record<string, CostByProviderModel[]> = {
       subscriptionCachedInputTokens: 164_000,
       subscriptionInputTokens: 1_050_000,
       subscriptionOutputTokens: 318_000,
+      ...costProvenanceZero,
     },
     {
       provider: "openai",
@@ -206,6 +220,7 @@ const providerRowsByProvider: Record<string, CostByProviderModel[]> = {
       subscriptionCachedInputTokens: 91_000,
       subscriptionInputTokens: 410_000,
       subscriptionOutputTokens: 160_000,
+      ...costProvenanceZero,
     },
   ],
   openrouter: [
@@ -223,6 +238,7 @@ const providerRowsByProvider: Record<string, CostByProviderModel[]> = {
       subscriptionCachedInputTokens: 0,
       subscriptionInputTokens: 0,
       subscriptionOutputTokens: 0,
+      ...costProvenanceZero,
     },
     {
       provider: "google",
@@ -238,6 +254,7 @@ const providerRowsByProvider: Record<string, CostByProviderModel[]> = {
       subscriptionCachedInputTokens: 0,
       subscriptionInputTokens: 0,
       subscriptionOutputTokens: 0,
+      ...costProvenanceZero,
     },
   ],
 };
@@ -296,6 +313,7 @@ const billerSpendRows: Array<{
       subscriptionOutputTokens: 385_000,
       providerCount: 1,
       modelCount: 2,
+      ...costProvenanceZero,
     },
     providerRows: providerRowsByProvider.anthropic,
     totalCompanySpendCents: 83_000,
@@ -316,6 +334,7 @@ const billerSpendRows: Array<{
       subscriptionOutputTokens: 478_000,
       providerCount: 1,
       modelCount: 2,
+      ...costProvenanceZero,
     },
     providerRows: providerRowsByProvider.openai,
     totalCompanySpendCents: 218_000,
@@ -336,6 +355,7 @@ const billerSpendRows: Array<{
       subscriptionOutputTokens: 0,
       providerCount: 2,
       modelCount: 2,
+      ...costProvenanceZero,
     },
     providerRows: providerRowsByProvider.openrouter,
     totalCompanySpendCents: 286_000,
