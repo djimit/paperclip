@@ -350,7 +350,7 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
         completedAt: new Date(),
         events: [
           ...row.events,
-          event(new Date().toISOString(), "push", "failed", "Push cancelled locally before remote apply completed."),
+          event(new Date().toISOString(), cloudUpstreamStep(row.activeStep), "failed", "Push cancelled locally before remote apply completed."),
         ],
       });
     },
@@ -729,12 +729,13 @@ function targetFromDiscovery(discovery: Record<string, unknown>): CloudUpstreamT
   const transfer = objectField(discovery, "transfer");
   const schema = optionalObject(transfer.schema);
   const origin = stringField(stack, "origin");
+  const parsedOrigin = parseSecureCloudUpstreamUrl(origin, "Cloud upstream origin URL");
   return {
     stackId: stringField(stack, "id"),
     stackSlug: optionalString(stack.slug),
     stackDisplayName: optionalString(stack.displayName),
     companyId: stringField(stack, "companyId"),
-    primaryHost: optionalString(stack.primaryHost) ?? new URL(origin).host,
+    primaryHost: optionalString(stack.primaryHost) ?? parsedOrigin.host,
     origin,
     product: optionalString(discovery.product) ?? "Paperclip Cloud",
     schemaMajor: optionalNumber(schema?.major) ?? numberField(transfer, "supportedSchemaMajor"),
