@@ -155,6 +155,7 @@ export type DeterministicBriefOptions = {
   summaryTokensOut?: number | null;
   generatedByAgentId?: string | null;
   generatedByRunId?: string | null;
+  allowGeneratedSummary?: boolean;
   preferences?: Partial<BriefPreferences>;
   idFactory?: () => string;
 };

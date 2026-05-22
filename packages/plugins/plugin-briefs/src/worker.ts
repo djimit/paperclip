@@ -31,6 +31,10 @@ import {
   BRIEFS_PROJECT_KEY,
   MANUAL_REFRESH_ROUTINE_KEY,
 } from "./manifest.js";
+import {
+  hardenGeneratedSummaryOptions,
+  sanitizeBriefSourceBundle,
+} from "./safety.js";
 import { createBriefsStore } from "./store.js";
 
 function objectParam(value: unknown, name: string): Record<string, unknown> {
@@ -83,6 +87,7 @@ function summaryOptions(input: Record<string, unknown>): DeterministicBriefOptio
     summaryTokensOut: numberParam(input.summaryTokensOut),
     generatedByAgentId: typeof input.generatedByAgentId === "string" ? input.generatedByAgentId : null,
     generatedByRunId: typeof input.generatedByRunId === "string" ? input.generatedByRunId : null,
+    allowGeneratedSummary: input.allowGeneratedSummary === true,
   };
 }
 
@@ -92,7 +97,9 @@ async function saveBriefCard(
   bundle: BriefsSourceBundle,
   options: DeterministicBriefOptions,
 ) {
-  const card = await store.saveCard(buildDeterministicBriefCard(bundle, options));
+  const safeBundle = sanitizeBriefSourceBundle(bundle);
+  const safeOptions = hardenGeneratedSummaryOptions(safeBundle, options);
+  const card = await store.saveCard(buildDeterministicBriefCard(safeBundle, safeOptions));
   await ctx.activity.log({
     companyId: card.companyId,
     message: `Updated briefing card "${card.title}"`,

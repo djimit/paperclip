@@ -273,6 +273,7 @@ const manifest: PaperclipPluginManifestV1 = {
           summaryTokensIn: { type: "number" },
           summaryTokensOut: { type: "number" },
           summaryFailureReason: { type: "string" },
+          allowGeneratedSummary: { type: "boolean" },
           budgetCapped: { type: "boolean" }
         },
         required: ["companyId", "userId", "rootIssueId"]
