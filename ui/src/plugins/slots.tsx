@@ -177,6 +177,24 @@ export function resolveRegisteredPluginComponent(
   return registry.get(buildRegistryKey(pluginKey, exportName)) ?? null;
 }
 
+function isRegisterablePluginExport(exported: unknown): boolean {
+  return typeof exported === "function" || typeof exported === "string";
+}
+
+function collectRegisterableExportNames(
+  mod: Record<string, unknown>,
+  declaredExports: Set<string>,
+): Set<string> {
+  const exportNames = new Set(declaredExports);
+  for (const [exportName, exported] of Object.entries(mod)) {
+    if (exportName === "default") continue;
+    if (isRegisterablePluginExport(exported)) {
+      exportNames.add(exportName);
+    }
+  }
+  return exportNames;
+}
+
 // ---------------------------------------------------------------------------
 // Plugin module dynamic import loader
 // ---------------------------------------------------------------------------
@@ -471,7 +489,8 @@ async function loadPluginModule(contribution: PluginUiContribution): Promise<voi
         }
       }
 
-      for (const exportName of declaredExports) {
+      const exportNames = collectRegisterableExportNames(mod, declaredExports);
+      for (const exportName of exportNames) {
         const exported = mod[exportName];
         if (exported === undefined) {
           console.warn(
@@ -910,3 +929,4 @@ export function _resetPluginModuleLoader(): void {
 export const _applyJsxRuntimeKeyForTests = applyJsxRuntimeKey;
 export const _createReactShimSourceForTests = createReactShimSource;
 export const _rewriteBareSpecifiersForTests = rewriteBareSpecifiers;
+export const _collectRegisterableExportNamesForTests = collectRegisterableExportNames;
