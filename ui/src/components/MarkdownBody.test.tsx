@@ -449,6 +449,9 @@ describe("MarkdownBody", () => {
     const html = renderMarkdown("```ts\nconst a = 1;\n```");
 
     expect(html).toContain("paperclip-markdown-codeblock");
+    expect(html).toContain("paperclip-markdown-codeblock-actions");
+    expect(html).toContain("paperclip-markdown-codeblock-wrap");
+    expect(html).toContain('aria-label="Wrap lines"');
     expect(html).toContain("paperclip-markdown-codeblock-copy");
     expect(html).toContain('aria-label="Copy code"');
     expect(html).toContain("lucide-copy");
