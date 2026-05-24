@@ -67,10 +67,10 @@ export function CompanyInvites() {
     latestInviteInputRef.current?.select();
   }
 
-  async function copyInviteUrl(url: string) {
+  async function copyText(text: string, unavailableBody: string, afterFallback?: () => void) {
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(url);
+        await navigator.clipboard.writeText(text);
         return true;
       }
     } catch {
@@ -83,7 +83,7 @@ export function CompanyInvites() {
       (typeof document.queryCommandSupported !== "function" || document.queryCommandSupported("copy"));
     if (canUseLegacyCopy) {
       const textarea = document.createElement("textarea");
-      textarea.value = url;
+      textarea.value = text;
       textarea.setAttribute("readonly", "true");
       textarea.style.position = "fixed";
       textarea.style.top = "0";
@@ -96,20 +96,24 @@ export function CompanyInvites() {
       try {
         const copied = document.execCommand("copy");
         document.body.removeChild(textarea);
-        selectLatestInviteUrl();
+        afterFallback?.();
         if (copied) return true;
       } catch {
         document.body.removeChild(textarea);
       }
     }
 
-    selectLatestInviteUrl();
+    afterFallback?.();
     pushToast({
       title: "Clipboard unavailable",
-      body: "The invite URL is selected. Copy it manually from the field.",
+      body: unavailableBody,
       tone: "warn",
     });
     return false;
+  }
+
+  async function copyInviteUrl(url: string) {
+    return copyText(url, "The invite URL is selected. Copy it manually from the field.", selectLatestInviteUrl);
   }
 
   useEffect(() => {
@@ -150,7 +154,7 @@ export function CompanyInvites() {
     onSuccess: async (invite) => {
       setLatestInviteUrl(invite.inviteUrl);
       setLatestInviteCopied(false);
-      const copied = await copyInviteUrl(invite.inviteUrl);
+      const copied = await copyText(invite.inviteUrl, "Copy the invite URL manually from the field below.");
 
       await queryClient.invalidateQueries({ queryKey: inviteHistoryQueryKey });
       pushToast({
@@ -209,13 +213,13 @@ export function CompanyInvites() {
           <h1 className="text-lg font-semibold">Company Invites</h1>
         </div>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Create human invite links for company access. New invite links are copied to your clipboard when they are generated.
+          Invite people to request access to this company. New invite links are copied to your clipboard when they are generated.
         </p>
       </div>
 
       <section className="space-y-4 rounded-xl border border-border p-5">
         <div className="space-y-1">
-          <h2 className="text-sm font-semibold">Create invite</h2>
+          <h2 className="text-sm font-semibold">Invite a person</h2>
           <p className="text-sm text-muted-foreground">
             Generate a human invite link and choose the default access it should request.
           </p>
@@ -325,7 +329,7 @@ export function CompanyInvites() {
           <div className="space-y-1">
             <h2 className="text-sm font-semibold">Invite history</h2>
             <p className="text-sm text-muted-foreground">
-              Review invite status, role, inviter, and any linked join request.
+              Review invite status, audience, inviter, and any linked join request.
             </p>
           </div>
           <Link to="/inbox/requests" className="text-sm underline underline-offset-4">
@@ -344,7 +348,7 @@ export function CompanyInvites() {
                 <thead>
                   <tr className="border-b border-border">
                     <th className="px-5 py-3 font-medium text-muted-foreground">State</th>
-                    <th className="px-5 py-3 font-medium text-muted-foreground">Role</th>
+                    <th className="px-5 py-3 font-medium text-muted-foreground">For</th>
                     <th className="px-5 py-3 font-medium text-muted-foreground">Invited by</th>
                     <th className="px-5 py-3 font-medium text-muted-foreground">Created</th>
                     <th className="px-5 py-3 font-medium text-muted-foreground">Join request</th>
@@ -359,7 +363,7 @@ export function CompanyInvites() {
                           {formatInviteState(invite.state)}
                         </span>
                       </td>
-                      <td className="px-5 py-3 align-top">{invite.humanRole ?? "—"}</td>
+                      <td className="px-5 py-3 align-top">{formatInviteAudience(invite)}</td>
                       <td className="px-5 py-3 align-top">
                         <div>{invite.invitedByUser?.name || invite.invitedByUser?.email || "Unknown inviter"}</div>
                         {invite.invitedByUser?.email && invite.invitedByUser.name ? (
@@ -418,4 +422,10 @@ export function CompanyInvites() {
 
 function formatInviteState(state: "active" | "accepted" | "expired" | "revoked") {
   return state.charAt(0).toUpperCase() + state.slice(1);
+}
+
+function formatInviteAudience(invite: Awaited<ReturnType<typeof accessApi.listInvites>>["invites"][number]) {
+  if (invite.allowedJoinTypes === "agent") return "Agent";
+  if (invite.allowedJoinTypes === "both") return invite.humanRole ? `Human or agent · ${invite.humanRole}` : "Human or agent";
+  return invite.humanRole ?? "Human";
 }

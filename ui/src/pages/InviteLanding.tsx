@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AGENT_ADAPTER_TYPES } from "@paperclipai/shared";
-import type { AgentAdapterType, Company, JoinRequest } from "@paperclipai/shared";
+import type { AgentAdapterType, JoinRequest } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { CompanyPatternIcon } from "@/components/CompanyPatternIcon";
 import { useCompany } from "@/context/CompanyContext";
 import { Link, useNavigate, useParams } from "@/lib/router";
 import { accessApi } from "../api/access";
 import { authApi } from "../api/auth";
-import { companiesApi } from "../api/companies";
+import { companiesListQueryOptions } from "../api/companies-query";
 import { healthApi } from "../api/health";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { clearPendingInviteToken, rememberPendingInviteToken } from "../lib/invite-memory";
@@ -17,7 +17,6 @@ import { formatDate } from "../lib/utils";
 
 type AuthMode = "sign_in" | "sign_up";
 type AuthFeedback = { tone: "error" | "info"; message: string };
-type CompanyListQueryData = Company[] | { companies?: Company[]; unauthorized?: boolean };
 
 const joinAdapterOptions: AgentAdapterType[] = [...AGENT_ADAPTER_TYPES];
 const ENABLED_INVITE_ADAPTERS = new Set([
@@ -28,14 +27,6 @@ const ENABLED_INVITE_ADAPTERS = new Set([
   "pi_local",
   "cursor",
 ]);
-const EMPTY_COMPANIES: Company[] = [];
-
-function normalizeCompanyList(value: unknown): Company[] {
-  if (Array.isArray(value)) return value as Company[];
-  if (!value || typeof value !== "object") return EMPTY_COMPANIES;
-  const companies = (value as { companies?: unknown }).companies;
-  return Array.isArray(companies) ? (companies as Company[]) : EMPTY_COMPANIES;
-}
 
 function readNestedString(value: unknown, path: string[]): string | null {
   let current: unknown = value;
@@ -256,17 +247,11 @@ export function InviteLandingPage() {
     retry: false,
   });
 
-  const companiesQuery = useQuery<CompanyListQueryData, Error, Company[]>({
-    queryKey: queryKeys.companies.all,
-    queryFn: async () => ({
-      companies: await companiesApi.list(),
-      unauthorized: false,
-    }),
+  const companiesQuery = useQuery({
+    ...companiesListQueryOptions,
     enabled: !!sessionQuery.data && !!inviteQuery.data?.companyId,
-    retry: false,
-    select: normalizeCompanyList,
   });
-  const accessibleCompanies = companiesQuery.data ?? EMPTY_COMPANIES;
+  const companyList = companiesQuery.data?.companies ?? [];
 
   useEffect(() => {
     if (token) rememberPendingInviteToken(token);
@@ -277,14 +262,12 @@ export function InviteLandingPage() {
   }, [token]);
 
   useEffect(() => {
-    if (!companiesQuery.data || !inviteQuery.data?.companyId) return;
-    const isMember = accessibleCompanies.some(
-      (c) => c.id === inviteQuery.data!.companyId
-    );
-    if (isMember) {
+    const list = companiesQuery.data?.companies;
+    if (!list || !inviteQuery.data?.companyId) return;
+    if (list.some((c) => c.id === inviteQuery.data!.companyId)) {
       clearPendingInviteToken(token);
     }
-  }, [accessibleCompanies, companiesQuery.data, inviteQuery.data, token]);
+  }, [companiesQuery.data, inviteQuery.data, token]);
 
   const invite = inviteQuery.data;
   const isCheckingExistingMembership =
@@ -293,7 +276,7 @@ export function InviteLandingPage() {
     companiesQuery.isLoading;
   const isCurrentMember =
     Boolean(invite?.companyId) &&
-    accessibleCompanies.some((company) => company.id === invite?.companyId);
+    companyList.some((company) => company.id === invite?.companyId);
   const companyName = invite?.companyName?.trim() || null;
   const companyDisplayName = companyName || "this Paperclip company";
   const companyLogoUrl = invite?.companyLogoUrl?.trim() || null;
@@ -391,13 +374,9 @@ export function InviteLandingPage() {
       rememberPendingInviteToken(token);
       await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
       await queryClient.invalidateQueries({ queryKey: queryKeys.access.currentBoardAccess });
-      const companies = normalizeCompanyList(await companiesApi.list());
-      queryClient.setQueryData(queryKeys.companies.all, {
-        companies,
-        unauthorized: false,
-      });
+      const { companies: freshCompanies } = await queryClient.fetchQuery(companiesListQueryOptions);
 
-      if (invite?.companyId && companies.some((company) => company.id === invite.companyId)) {
+      if (invite?.companyId && freshCompanies.some((company) => company.id === invite.companyId)) {
         clearPendingInviteToken(token);
         setSelectedCompanyId(invite.companyId, { source: "manual" });
         navigate("/", { replace: true });
