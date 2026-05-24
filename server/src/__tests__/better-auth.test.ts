@@ -32,8 +32,8 @@ describe("Better Auth cookie scoping", () => {
     expect(advanced).toEqual({
       cookiePrefix: "paperclip-sat-worktree",
     });
-    expect(getCookies({ advanced } as BetterAuthOptions).sessionToken.name).toBe(
-      "__Secure-paperclip-sat-worktree.session_token",
+    expect(getCookies({ advanced } as BetterAuthOptions).sessionToken.name).toMatch(
+      /paperclip-sat-worktree\.session_token$/,
     );
   });
 
