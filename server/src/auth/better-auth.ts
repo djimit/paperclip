@@ -53,7 +53,6 @@ export function shouldDisableSecureAuthCookies(input: {
 }): boolean {
   const publicUrl = (
     input.publicUrl?.trim() ||
-    process.env.PAPERCLIP_PUBLIC_URL?.trim() ||
     (input.authBaseUrlMode === "explicit" ? input.authPublicBaseUrl?.trim() : "")
   );
   if (publicUrl) return publicUrl.startsWith("http://");
@@ -115,6 +114,7 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
 
 export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins: string[]): BetterAuthInstance {
   const baseUrl = config.authBaseUrlMode === "explicit" ? config.authPublicBaseUrl : undefined;
+  const publicUrl = process.env.PAPERCLIP_PUBLIC_URL?.trim() || baseUrl;
   const secret = process.env.BETTER_AUTH_SECRET ?? process.env.PAPERCLIP_AGENT_JWT_SECRET;
   if (!secret) {
     throw new Error(
@@ -127,7 +127,7 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
     deploymentExposure: config.deploymentExposure,
     authBaseUrlMode: config.authBaseUrlMode,
     authPublicBaseUrl: config.authPublicBaseUrl,
-    publicUrl: process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl,
+    publicUrl,
   });
 
   const authConfig = {

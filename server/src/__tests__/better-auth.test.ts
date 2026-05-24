@@ -112,13 +112,14 @@ describe("Better Auth cookie scoping", () => {
     } as Parameters<typeof shouldDisableSecureAuthCookies>[0])).toBe(false);
   });
 
-  it("lets PAPERCLIP_PUBLIC_URL override the auth base URL for cookie security", () => {
-    process.env.PAPERCLIP_PUBLIC_URL = "http://paperclip-dev:46259";
+  it("uses the caller-resolved public URL for cookie security", () => {
+    process.env.PAPERCLIP_PUBLIC_URL = "https://ignored.example.test";
 
     expect(shouldDisableSecureAuthCookies({
       deploymentMode: "authenticated",
       authBaseUrlMode: "explicit",
       authPublicBaseUrl: "https://paperclip.example.test",
+      publicUrl: "http://paperclip-dev:46259",
     } as Parameters<typeof shouldDisableSecureAuthCookies>[0])).toBe(true);
   });
 
