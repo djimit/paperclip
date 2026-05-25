@@ -7,7 +7,6 @@ import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EntityRow } from "../components/EntityRow";
-import { StatusBadge } from "../components/StatusBadge";
 import { MembershipAction } from "../components/MembershipAction";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -18,59 +17,56 @@ import {
   useResourceMemberships,
 } from "../hooks/useResourceMemberships";
 import { Button } from "@/components/ui/button";
-import { ArrowUpDown, Hexagon, Plus } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ArrowUpDown, Check, Hexagon, Plus } from "lucide-react";
 
-type ProjectSortMode = "name" | "updated" | "targetDate" | "status";
+type ProjectSortField = "name" | "updated" | "created" | "targetDate";
+type ProjectSortDir = "asc" | "desc";
 
-const PROJECT_SORT_LABELS: Record<ProjectSortMode, string> = {
-  name: "Name",
-  updated: "Recently updated",
-  targetDate: "Target date",
-  status: "Status",
-};
+const PROJECT_SORT_OPTIONS: Array<{ field: ProjectSortField; label: string }> = [
+  { field: "name", label: "Name" },
+  { field: "updated", label: "Updated" },
+  { field: "created", label: "Created" },
+  { field: "targetDate", label: "Target date" },
+];
 
-const PROJECT_STATUS_RANK: Record<Project["status"], number> = {
-  in_progress: 0,
-  planned: 1,
-  backlog: 2,
-  completed: 3,
-  cancelled: 4,
-};
-
-function projectTime(project: Project, field: "createdAt" | "updatedAt"): number {
-  const value = project[field];
-  const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
-  return Number.isFinite(time) ? time : 0;
+function compareProjectNames(left: Project, right: Project) {
+  return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
 }
 
-function compareProjectNames(left: Project, right: Project): number {
-  const nameDiff = left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
-  return nameDiff !== 0 ? nameDiff : left.id.localeCompare(right.id);
+function projectTime(value: Date | string | null | undefined): number | null {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
 }
 
-function compareTargetDates(left: Project, right: Project): number {
-  if (!left.targetDate && !right.targetDate) return compareProjectNames(left, right);
-  if (!left.targetDate) return 1;
-  if (!right.targetDate) return -1;
-
-  const dateDiff = left.targetDate.localeCompare(right.targetDate);
-  return dateDiff !== 0 ? dateDiff : compareProjectNames(left, right);
+function compareOptionalTime(
+  left: Date | string | null | undefined,
+  right: Date | string | null | undefined,
+  sortDir: ProjectSortDir,
+) {
+  const leftTime = projectTime(left);
+  const rightTime = projectTime(right);
+  if (leftTime === null && rightTime === null) return 0;
+  if (leftTime === null) return 1;
+  if (rightTime === null) return -1;
+  return sortDir === "asc" ? leftTime - rightTime : rightTime - leftTime;
 }
 
-function sortProjects(projects: Project[], sortMode: ProjectSortMode): Project[] {
+function sortProjects(projects: Project[], sortField: ProjectSortField, sortDir: ProjectSortDir) {
   return [...projects].sort((left, right) => {
-    if (sortMode === "updated") {
-      const updatedDiff = projectTime(right, "updatedAt") - projectTime(left, "updatedAt");
-      return updatedDiff !== 0 ? updatedDiff : compareProjectNames(left, right);
+    let comparison = 0;
+    if (sortField === "name") {
+      comparison = compareProjectNames(left, right);
+      return sortDir === "asc" ? comparison : -comparison;
     }
-    if (sortMode === "targetDate") {
-      return compareTargetDates(left, right);
-    }
-    if (sortMode === "status") {
-      const statusDiff = PROJECT_STATUS_RANK[left.status] - PROJECT_STATUS_RANK[right.status];
-      return statusDiff !== 0 ? statusDiff : compareProjectNames(left, right);
-    }
-    return compareProjectNames(left, right);
+
+    if (sortField === "updated") comparison = compareOptionalTime(left.updatedAt, right.updatedAt, sortDir);
+    else if (sortField === "created") comparison = compareOptionalTime(left.createdAt, right.createdAt, sortDir);
+    else comparison = compareOptionalTime(left.targetDate, right.targetDate, sortDir);
+
+    if (comparison === 0) comparison = compareProjectNames(left, right);
+    return comparison;
   });
 }
 
@@ -78,7 +74,8 @@ export function Projects() {
   const { selectedCompanyId } = useCompany();
   const { openNewProject } = useDialogActions();
   const { setBreadcrumbs } = useBreadcrumbs();
-  const [sortMode, setSortMode] = useState<ProjectSortMode>("name");
+  const [sortField, setSortField] = useState<ProjectSortField>("name");
+  const [sortDir, setSortDir] = useState<ProjectSortDir>("asc");
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Projects" }]);
@@ -96,13 +93,13 @@ export function Projects() {
     [allProjects],
   );
   const sortedProjects = useMemo(
-    () => sortProjects(projects, sortMode),
-    [projects, sortMode],
+    () => sortProjects(projects, sortField, sortDir),
+    [projects, sortDir, sortField],
   );
   const groupedProjects = useMemo(() => {
     const groups = {
-      mine: [] as typeof projects,
-      other: [] as typeof projects,
+      mine: [] as typeof sortedProjects,
+      other: [] as typeof sortedProjects,
     };
 
     for (const project of sortedProjects) {
@@ -113,6 +110,7 @@ export function Projects() {
 
     return groups;
   }, [membershipsQuery.data, sortedProjects]);
+  const sortLabel = PROJECT_SORT_OPTIONS.find((option) => option.field === sortField)?.label ?? "Name";
 
   if (!selectedCompanyId) {
     return <EmptyState icon={Hexagon} message="Select a company to view projects." />;
@@ -124,22 +122,46 @@ export function Projects() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <ArrowUpDown className="h-4 w-4" />
-          <span>Sort</span>
-          <select
-            className="rounded-md border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
-            value={sortMode}
-            onChange={(event) => setSortMode(event.target.value as ProjectSortMode)}
-          >
-            {(Object.keys(PROJECT_SORT_LABELS) as ProjectSortMode[]).map((value) => (
-              <option key={value} value={value}>
-                {PROJECT_SORT_LABELS[value]}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="sm" className="w-fit text-xs" title="Sort">
+              <ArrowUpDown className="h-3.5 w-3.5 sm:h-3 sm:w-3 sm:mr-1" />
+              <span>Sort: {sortLabel}</span>
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-44 p-0">
+            <div className="p-2 space-y-0.5">
+              {PROJECT_SORT_OPTIONS.map((option) => (
+                <button
+                  key={option.field}
+                  type="button"
+                  className={`flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm ${
+                    sortField === option.field
+                      ? "bg-accent/50 text-foreground"
+                      : "text-muted-foreground hover:bg-accent/50"
+                  }`}
+                  onClick={() => {
+                    if (sortField === option.field) {
+                      setSortDir((current) => (current === "asc" ? "desc" : "asc"));
+                      return;
+                    }
+                    setSortField(option.field);
+                    setSortDir(option.field === "name" || option.field === "targetDate" ? "asc" : "desc");
+                  }}
+                >
+                  <span>{option.label}</span>
+                  {sortField === option.field ? (
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Check className="h-3 w-3" />
+                      {sortDir === "asc" ? "Asc" : "Desc"}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
         <Button size="sm" variant="outline" onClick={openNewProject}>
           <Plus className="h-4 w-4 mr-1" />
           Add Project
@@ -194,7 +216,6 @@ export function Projects() {
                                 {formatDate(project.targetDate)}
                               </span>
                             )}
-                            <StatusBadge status={project.status} />
                             <MembershipAction
                               state={state}
                               pending={pending}
