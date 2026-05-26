@@ -277,6 +277,63 @@ describe("IssueDocumentAnnotations", () => {
     expect(anchor?.className).toContain("fixed");
   });
 
+  it("keeps the desktop annotation panel inside the issue content area when properties are visible", async () => {
+    mockAnnotationsApi.list.mockResolvedValue([makeThread()]);
+    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+    const rectFor = (left: number, top: number, right: number, bottom: number) => ({
+      x: left,
+      y: top,
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top,
+      toJSON: () => ({}),
+    });
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this instanceof HTMLElement && this.id === "main-content") {
+        return rectFor(0, 0, 900, 800);
+      }
+      if (
+        this instanceof HTMLElement
+        && this.getAttribute("data-testid") === "document-annotation-body-plan"
+      ) {
+        return rectFor(80, 120, 640, 620);
+      }
+      return originalGetBoundingClientRect.call(this);
+    });
+
+    const root = createRoot(container);
+    const queryClient = makeQueryClient();
+    const doc = makeDoc();
+
+    try {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <main id="main-content">
+              <Harness doc={doc} initialPanelOpen />
+            </main>
+          </QueryClientProvider>,
+        );
+      });
+      await flush();
+      await flush();
+
+      const anchor = container.querySelector('[data-testid="document-annotation-panel-anchor"]') as HTMLElement | null;
+      const panel = container.querySelector('[data-testid="document-annotation-panel"]') as HTMLElement | null;
+      expect(anchor).not.toBeNull();
+      expect(panel).not.toBeNull();
+      expect(anchor!.style.left).toBe("524px");
+      expect(anchor!.style.width).toBe("360px");
+      expect(panel!.style.width).toBe("360px");
+      expect(parseFloat(anchor!.style.left) + parseFloat(anchor!.style.width)).toBeLessThanOrEqual(884);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it("auto-opens the panel and focuses the thread when deep-linked", async () => {
     mockAnnotationsApi.list.mockResolvedValue([makeThread({ id: "thread-99" })]);
     const root = createRoot(container);
@@ -437,12 +494,12 @@ describe("IssueDocumentAnnotations", () => {
 
     const expandedText = container.querySelector('[data-thread-id="open-1"]')?.textContent ?? "";
     expect(expandedText).toContain("Dotta");
-    expect(expandedText).toContain("· board");
+    expect(expandedText).not.toContain("· board");
     expect(expandedText).toContain("UXDesigner");
     expect(expandedText).toContain("· agent");
   });
 
-  it("exposes a persistent + New comment on selection CTA when panel is open", async () => {
+  it("does not render a persistent New comment on selection hint when panel is open", async () => {
     mockAnnotationsApi.list.mockResolvedValue([]);
     const root = createRoot(container);
     const queryClient = makeQueryClient();
@@ -459,12 +516,12 @@ describe("IssueDocumentAnnotations", () => {
     await flush();
 
     const cta = container.querySelector('[data-testid="document-annotation-new-comment-cta"]');
-    expect(cta).not.toBeNull();
-    expect(cta!.textContent).toMatch(/New comment on selection/i);
-    expect(cta!.textContent).toMatch(/⌘⇧M/);
+    expect(cta).toBeNull();
+    expect(container.textContent).not.toMatch(/New comment on selection/i);
+    expect(container.textContent).not.toMatch(/⌘⇧M/);
   });
 
-  it("keeps a captured selection available for the panel CTA without opening the composer early", async () => {
+  it("keeps a captured selection from opening the composer until the layer requests a comment", async () => {
     mockAnnotationsApi.list.mockResolvedValue([]);
     const root = createRoot(container);
     const queryClient = makeQueryClient();
@@ -491,12 +548,13 @@ describe("IssueDocumentAnnotations", () => {
 
     expect(container.querySelector('[data-testid="document-annotation-composer"]')).toBeNull();
 
-    const cta = container.querySelector(
-      '[data-testid="document-annotation-new-comment-cta"]',
+    expect(container.querySelector('[data-testid="document-annotation-new-comment-cta"]')).toBeNull();
+    const directRequestButton = container.querySelector(
+      '[data-testid="mock-annotation-selection"]',
     ) as HTMLButtonElement | null;
-    expect(cta).not.toBeNull();
+    expect(directRequestButton).not.toBeNull();
     await act(async () => {
-      cta!.click();
+      directRequestButton!.click();
     });
     await flush();
 

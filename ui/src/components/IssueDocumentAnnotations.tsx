@@ -12,6 +12,7 @@ import { DocumentAnnotationPanel } from "./DocumentAnnotationPanel";
 import type { CompanyUserProfile } from "@/lib/company-members";
 
 const DESKTOP_ANNOTATION_PANEL_WIDTH = 360;
+const DESKTOP_ANNOTATION_PANEL_MIN_WIDTH = 280;
 const DESKTOP_ANNOTATION_PANEL_GAP = 12;
 const DESKTOP_ANNOTATION_PANEL_VIEWPORT_MARGIN = 16;
 
@@ -64,6 +65,7 @@ export function IssueDocumentAnnotations({
     left: number;
     top: number;
     maxHeight: number;
+    width: number;
   } | null>(null);
   const hashHandledRef = useRef<string | null>(null);
   // Bus token to ask the body layer to capture the current selection into a pendingAnchor.
@@ -88,22 +90,39 @@ export function IssueDocumentAnnotations({
     }
 
     const updatePanelFrame = () => {
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) {
+      const container = containerRef.current;
+      const rect = container?.getBoundingClientRect();
+      if (!container || !rect) {
         setDesktopPanelFrame(null);
         return;
       }
+      const boundaryRect = container.closest("main")?.getBoundingClientRect();
+      const boundaryLeft = boundaryRect?.left ?? 0;
+      const boundaryRight = boundaryRect?.right ?? window.innerWidth;
+      const boundaryWidth = Math.max(0, boundaryRight - boundaryLeft);
+      const maxPanelWidth = Math.max(
+        DESKTOP_ANNOTATION_PANEL_MIN_WIDTH,
+        boundaryWidth - DESKTOP_ANNOTATION_PANEL_VIEWPORT_MARGIN * 2,
+      );
+      const desiredWidth = Math.min(DESKTOP_ANNOTATION_PANEL_WIDTH, maxPanelWidth);
       const top = Math.max(DESKTOP_ANNOTATION_PANEL_VIEWPORT_MARGIN, rect.top);
       const desiredLeft = rect.right + DESKTOP_ANNOTATION_PANEL_GAP;
-      const maxVisibleLeft = window.innerWidth
-        - DESKTOP_ANNOTATION_PANEL_WIDTH
+      const spaceRightOfDocument = boundaryRight
+        - desiredLeft
+        - DESKTOP_ANNOTATION_PANEL_VIEWPORT_MARGIN;
+      const width = spaceRightOfDocument >= DESKTOP_ANNOTATION_PANEL_MIN_WIDTH
+        ? Math.min(desiredWidth, spaceRightOfDocument)
+        : desiredWidth;
+      const maxVisibleLeft = boundaryRight
+        - width
         - DESKTOP_ANNOTATION_PANEL_VIEWPORT_MARGIN;
       setDesktopPanelFrame({
         left: Math.max(
-          DESKTOP_ANNOTATION_PANEL_VIEWPORT_MARGIN,
+          boundaryLeft + DESKTOP_ANNOTATION_PANEL_VIEWPORT_MARGIN,
           Math.min(desiredLeft, maxVisibleLeft),
         ),
         top,
+        width,
         maxHeight: Math.max(240, window.innerHeight - top - DESKTOP_ANNOTATION_PANEL_VIEWPORT_MARGIN),
       });
     };
@@ -111,9 +130,19 @@ export function IssueDocumentAnnotations({
     updatePanelFrame();
     window.addEventListener("resize", updatePanelFrame);
     window.addEventListener("scroll", updatePanelFrame, true);
+    const resizeObserver = typeof window.ResizeObserver === "function"
+      ? new window.ResizeObserver(updatePanelFrame)
+      : null;
+    const observedContainer = containerRef.current;
+    if (resizeObserver && observedContainer) {
+      resizeObserver.observe(observedContainer);
+      const main = observedContainer.closest("main");
+      if (main) resizeObserver.observe(main);
+    }
     return () => {
       window.removeEventListener("resize", updatePanelFrame);
       window.removeEventListener("scroll", updatePanelFrame, true);
+      resizeObserver?.disconnect();
     };
   }, [doc.key, isMobile, panelOpen]);
 
@@ -243,7 +272,7 @@ export function IssueDocumentAnnotations({
       newCommentDisabled={newCommentDisabled}
       newCommentDisabledReason={newCommentDisabledReason}
       isMobile={isMobile}
-      className={isMobile ? undefined : "lg:w-[360px] lg:max-w-[360px]"}
+      desktopWidth={desktopPanelFrame?.width}
       agentMap={agentMap}
       userProfileMap={userProfileMap}
     />
@@ -284,6 +313,7 @@ export function IssueDocumentAnnotations({
             left: desktopPanelFrame.left,
             maxHeight: desktopPanelFrame.maxHeight,
             top: desktopPanelFrame.top,
+            width: desktopPanelFrame.width,
           }}
         >
           {annotationPanel}

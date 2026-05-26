@@ -45,7 +45,7 @@ export interface AnnotationLayerProps {
   testWindow?: { innerWidth: number; innerHeight: number };
   /**
    * When this number changes, re-read the current document selection and emit a
-   * pending anchor (used by the panel's "+ New comment on selection" / ⌘⇧M CTA).
+   * pending anchor for the keyboard shortcut path.
    */
   captureSelectionRequestId?: number;
 }
@@ -265,15 +265,15 @@ export function DocumentAnnotationLayer({
               data-focused={isFocused || undefined}
               aria-label="Open annotation thread"
               className={cn(
-                "paperclip-doc-annotation-highlight pointer-events-auto absolute cursor-pointer rounded-sm transition-colors",
+                "paperclip-doc-annotation-highlight pointer-events-auto absolute cursor-pointer rounded-none transition-colors",
                 // base box treatment (replaces the previous baseline border)
                 isResolved
-                  ? "bg-muted-foreground/8 outline outline-1 outline-dashed outline-offset-0 outline-muted-foreground/45 hover:bg-muted-foreground/15"
+                  ? "bg-yellow-300/25 outline outline-1 outline-dashed outline-offset-0 outline-yellow-700/45 hover:bg-yellow-300/35 dark:bg-yellow-300/18 dark:outline-yellow-200/45"
                   : isStale
-                    ? "bg-amber-500/12 outline outline-2 outline-dashed outline-offset-0 outline-amber-500/70 hover:bg-amber-500/20 dark:bg-amber-500/18 dark:outline-amber-400/80"
+                    ? "bg-yellow-300/35 outline outline-2 outline-dashed outline-offset-0 outline-yellow-700/65 hover:bg-yellow-300/45 dark:bg-yellow-300/24 dark:outline-yellow-200/70"
                     : isFocused
-                      ? "bg-primary/20 outline outline-2 outline-offset-0 outline-primary/90 shadow-[0_0_0_1px_var(--color-primary-foreground)] dark:shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-background)_60%,transparent)]"
-                      : "bg-muted-foreground/15 hover:bg-muted-foreground/25",
+                      ? "bg-yellow-300/55 outline outline-2 outline-offset-0 outline-yellow-700/85 shadow-[0_0_0_1px_var(--color-background)] dark:bg-yellow-300/35 dark:outline-yellow-200/85"
+                      : "bg-yellow-300/40 hover:bg-yellow-300/55 dark:bg-yellow-300/24 dark:hover:bg-yellow-300/34",
               )}
               style={{
                 top: rect.top,

@@ -8,7 +8,6 @@ import type {
 import {
   Check,
   Copy,
-  MessageSquarePlus,
   MoreHorizontal,
   RotateCcw,
   X,
@@ -60,6 +59,8 @@ export interface AnnotationPanelProps {
   newCommentDisabledReason?: string | null;
   /** When mobile is true, render via shadcn Sheet at the bottom instead of side panel. */
   isMobile?: boolean;
+  /** Desktop panel width calculated by the document frame. */
+  desktopWidth?: number;
   className?: string;
   /** Resolve `<authorAgentId>` to a display name. */
   agentMap?: ReadonlyMap<string, Pick<Agent, "id" | "name">>;
@@ -74,7 +75,7 @@ export function DocumentAnnotationPanel(props: AnnotationPanelProps) {
         <SheetContent
           side="bottom"
           showCloseButton={false}
-          className="paperclip-doc-annotation-sheet flex max-h-[88vh] flex-col rounded-t-xl border-t border-border bg-background p-0"
+          className="paperclip-doc-annotation-sheet flex max-h-[88vh] flex-col rounded-none border-t border-border bg-background p-0"
         >
           <SheetTitle className="sr-only">
             Comments on {props.documentKey} revision {props.documentRevisionNumber}
@@ -94,9 +95,10 @@ export function DocumentAnnotationPanel(props: AnnotationPanelProps) {
       aria-label={`Annotations for ${props.documentKey.toUpperCase()}, revision ${props.documentRevisionNumber}`}
       data-testid="document-annotation-panel"
       className={cn(
-        "flex h-full max-h-[80vh] w-[360px] shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-md",
+        "flex h-full max-h-[80vh] w-[360px] shrink-0 flex-col overflow-hidden rounded-none border border-border bg-card shadow-md",
         props.className,
       )}
+      style={props.desktopWidth ? { width: props.desktopWidth, maxWidth: props.desktopWidth } : undefined}
     >
       <AnnotationPanelBody {...props} />
     </aside>
@@ -198,15 +200,6 @@ function AnnotationPanelBody(props: AnnotationPanelProps) {
     else if (focused.status === "resolved") setFilter("resolved");
     else setFilter("open");
   }, [props.focusedThreadId, props.threads]);
-
-  const startNewCommentFromSelection = useCallback(() => {
-    if (props.newCommentDisabled) return;
-    if (props.pendingAnchor) {
-      composerRef.current?.focus();
-      return;
-    }
-    props.onRequestCommentFromSelection?.();
-  }, [props]);
 
   return (
     <>
@@ -310,11 +303,8 @@ function AnnotationPanelBody(props: AnnotationPanelProps) {
       </div>
       {props.pendingAnchor ? (
         <div className="border-t border-border bg-muted/20 px-3 py-2">
-          <p className="mb-1 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-            New comment on selection
-          </p>
-          <blockquote className="mb-2 max-h-24 overflow-y-auto rounded-md border-l-2 border-muted-foreground/60 bg-background px-2 py-1 text-xs italic text-muted-foreground">
-            {truncate(props.pendingAnchor.selectedText, 240)}
+          <blockquote className="mb-2 line-clamp-3 overflow-hidden rounded-none bg-background px-2 py-1 text-xs italic text-muted-foreground">
+            {truncate(props.pendingAnchor.selectedText, 160)}
           </blockquote>
           <Textarea
             ref={composerRef}
@@ -324,7 +314,7 @@ function AnnotationPanelBody(props: AnnotationPanelProps) {
             onChange={(event) => setComposerValue(event.target.value)}
             placeholder="Write a comment…"
             disabled={props.newCommentDisabled}
-            className="resize-y text-sm"
+            className="resize-y rounded-none text-sm"
           />
           {createThread.isError ? (
             <p className="mt-1 text-xs text-destructive">
@@ -358,31 +348,7 @@ function AnnotationPanelBody(props: AnnotationPanelProps) {
             </Button>
           </div>
         </div>
-      ) : (
-        <div className="border-t border-border bg-card/60 px-3 py-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="w-full justify-start gap-2 text-[12px]"
-            onClick={startNewCommentFromSelection}
-            onMouseDown={(event) => {
-              if (!props.newCommentDisabled) event.preventDefault();
-            }}
-            disabled={props.newCommentDisabled}
-            title={props.newCommentDisabled
-              ? props.newCommentDisabledReason ?? undefined
-              : "Select text in the document, then click here (⌘⇧M)"}
-            data-testid="document-annotation-new-comment-cta"
-          >
-            <MessageSquarePlus className="h-3.5 w-3.5" />
-            <span className="flex-1 text-left">New comment on selection</span>
-            <kbd className="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-              ⌘⇧M
-            </kbd>
-          </Button>
-        </div>
-      )}
+      ) : null}
     </>
   );
 }
@@ -423,7 +389,7 @@ function ThreadCard(props: {
         data-focused={props.expanded || undefined}
         aria-labelledby={`thread-quote-${thread.id}`}
         className={cn(
-          "rounded-md border border-border bg-card transition-colors",
+          "rounded-none border border-border bg-card transition-colors",
           props.expanded && "ring-1 ring-ring/70",
           thread.status === "resolved" && "bg-muted/30",
         )}
@@ -439,13 +405,11 @@ function ThreadCard(props: {
         <blockquote
           id={`thread-quote-${thread.id}`}
           className={cn(
-            "mx-3 mt-1 max-h-20 overflow-hidden rounded-sm border-l-2 px-2 py-1 text-xs italic text-muted-foreground",
-            thread.anchorState === "stale" || thread.status === "resolved"
-              ? "border-dashed border-muted-foreground/40"
-              : "border-muted-foreground/60",
+            "mx-3 mt-1 line-clamp-2 overflow-hidden rounded-none bg-muted/40 px-2 py-1 text-xs italic text-muted-foreground",
+            (thread.anchorState === "stale" || thread.status === "resolved") && "bg-muted/30",
           )}
         >
-          {truncate(thread.selectedText, 160)}
+          {truncate(thread.selectedText, 120)}
         </blockquote>
         {props.expanded ? (
           <div className="space-y-2 px-3 py-2">
@@ -464,7 +428,7 @@ function ThreadCard(props: {
               value={props.replyDraft}
               onChange={(event) => props.onReplyChange(event.target.value)}
               placeholder="Reply…"
-              className="resize-y text-sm"
+              className="resize-y rounded-none text-sm"
               disabled={props.pendingReply}
             />
             <div className="flex items-center justify-end gap-2">
@@ -551,14 +515,16 @@ function CommentRow({
       id={`comment-${comment.id}`}
       data-focused={focused || undefined}
       className={cn(
-        "rounded-md border border-border bg-background px-2 py-1.5",
+        "rounded-none border border-border bg-background px-2 py-1.5",
         focused && "ring-2 ring-primary/40",
       )}
     >
       <div className="mb-0.5 flex items-center justify-between gap-2 text-[11px]">
         <span className="min-w-0 truncate">
           <span className="font-medium text-foreground">{author.name}</span>
-          <span className="ml-1 text-muted-foreground">· {author.role}</span>
+          {author.role === "agent" ? (
+            <span className="ml-1 text-muted-foreground">· agent</span>
+          ) : null}
         </span>
         <span className="text-muted-foreground">{relativeTime(comment.createdAt)}</span>
       </div>
