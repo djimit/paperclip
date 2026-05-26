@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, MessageSquarePlus } from "lucide-react";
 import type {
   DocumentAnnotationAnchorState,
@@ -67,6 +67,68 @@ interface ToolbarPosition {
   left: number;
 }
 
+type NativeHighlightKind = "open" | "focused" | "stale" | "resolved";
+
+type NativeHighlightRanges = Record<NativeHighlightKind, Range[]>;
+
+type CssHighlight = object;
+
+type HighlightConstructor = new (...ranges: Range[]) => CssHighlight;
+
+type HighlightRegistry = {
+  set: (name: string, highlight: CssHighlight) => void;
+  delete: (name: string) => void;
+};
+
+const NATIVE_HIGHLIGHT_NAMES: Record<NativeHighlightKind, string> = {
+  open: "paperclip-doc-annotation-open",
+  focused: "paperclip-doc-annotation-focused",
+  stale: "paperclip-doc-annotation-stale",
+  resolved: "paperclip-doc-annotation-resolved",
+};
+
+const nativeHighlightInstances = new Map<string, NativeHighlightRanges>();
+
+function getNativeHighlightApi(): { registry: HighlightRegistry; HighlightCtor: HighlightConstructor } | null {
+  const css = (globalThis as { CSS?: { highlights?: HighlightRegistry } }).CSS;
+  const HighlightCtor = (globalThis as { Highlight?: HighlightConstructor }).Highlight;
+  if (!css?.highlights || typeof HighlightCtor !== "function") return null;
+  return { registry: css.highlights, HighlightCtor };
+}
+
+function emptyNativeHighlightRanges(): NativeHighlightRanges {
+  return {
+    open: [],
+    focused: [],
+    stale: [],
+    resolved: [],
+  };
+}
+
+function syncNativeHighlights(api = getNativeHighlightApi()) {
+  if (!api) return;
+  for (const kind of Object.keys(NATIVE_HIGHLIGHT_NAMES) as NativeHighlightKind[]) {
+    const ranges = Array.from(nativeHighlightInstances.values()).flatMap((entry) => entry[kind]);
+    const name = NATIVE_HIGHLIGHT_NAMES[kind];
+    if (ranges.length === 0) {
+      api.registry.delete(name);
+    } else {
+      api.registry.set(name, new api.HighlightCtor(...ranges));
+    }
+  }
+}
+
+function setNativeHighlightRanges(instanceId: string, ranges: NativeHighlightRanges) {
+  if (!getNativeHighlightApi()) return;
+  nativeHighlightInstances.set(instanceId, ranges);
+  syncNativeHighlights();
+}
+
+function clearNativeHighlightRanges(instanceId: string) {
+  if (!nativeHighlightInstances.delete(instanceId)) return;
+  syncNativeHighlights();
+}
+
 function elementFromNode(node: Node | null | undefined): HTMLElement | null {
   if (!node) return null;
   if (node instanceof HTMLElement) return node;
@@ -117,6 +179,17 @@ function visibleClipRectForRange(range: Range, container: HTMLElement): DOMRect 
   return clipRect;
 }
 
+function nativeHighlightKind(input: {
+  focused: boolean;
+  stale: boolean;
+  resolved: boolean;
+}): NativeHighlightKind {
+  if (input.resolved) return "resolved";
+  if (input.stale) return "stale";
+  if (input.focused) return "focused";
+  return "open";
+}
+
 export function DocumentAnnotationLayer({
   containerRef,
   markdown,
@@ -135,6 +208,12 @@ export function DocumentAnnotationLayer({
   const [toolbarPosition, setToolbarPosition] = useState<ToolbarPosition | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const lastCaptureSelectionRequestIdRef = useRef<number>(0);
+  const reactId = useId();
+  const nativeHighlightInstanceId = useMemo(
+    () => `document-annotation-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+    [reactId],
+  );
+  const nativeHighlightsSupported = getNativeHighlightApi() !== null;
 
   const visibleThreads = useMemo(() => {
     if (!hideResolved) return threads;
@@ -145,13 +224,23 @@ export function DocumentAnnotationLayer({
     const container = containerRef.current;
     const overlay = overlayRef.current;
     if (!container || !overlay) {
+      clearNativeHighlightRanges(nativeHighlightInstanceId);
       setHighlightRects([]);
       return;
     }
     const overlayRect = overlay.getBoundingClientRect();
     const next: HighlightRect[] = [];
+    const nativeRanges = emptyNativeHighlightRanges();
     for (const thread of visibleThreads) {
       if (thread.anchorState === "orphaned") continue;
+      const isFocused = thread.id === focusedThreadId;
+      const isStale = thread.anchorState === "stale";
+      const isResolved = thread.status === "resolved";
+      const nativeKind = nativeHighlightKind({
+        focused: isFocused,
+        stale: isStale,
+        resolved: isResolved,
+      });
       const ranges = rangesForNormalizedSpan({
         container,
         selectedText: thread.selectedText,
@@ -160,10 +249,12 @@ export function DocumentAnnotationLayer({
       for (const range of ranges) {
         const visibleClipRect = visibleClipRectForRange(range, container);
         if (!visibleClipRect) continue;
+        let rangeIsVisible = false;
         for (const rect of Array.from(range.getClientRects())) {
           if (rect.width === 0 || rect.height === 0) continue;
           const visibleRect = intersectRects(rect, visibleClipRect);
           if (!visibleRect) continue;
+          rangeIsVisible = true;
           next.push({
             threadId: thread.id,
             status: thread.status,
@@ -175,17 +266,21 @@ export function DocumentAnnotationLayer({
             isTail: false,
           });
         }
+        if (rangeIsVisible) nativeRanges[nativeKind].push(range);
       }
       if (next.length > startIndex) {
         next[next.length - 1].isTail = true;
       }
     }
+    setNativeHighlightRanges(nativeHighlightInstanceId, nativeRanges);
     setHighlightRects(next);
-  }, [containerRef, visibleThreads]);
+  }, [containerRef, focusedThreadId, nativeHighlightInstanceId, visibleThreads]);
 
   useLayoutEffect(() => {
     computeHighlightRects();
   }, [computeHighlightRects]);
+
+  useEffect(() => () => clearNativeHighlightRanges(nativeHighlightInstanceId), [nativeHighlightInstanceId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -299,29 +394,62 @@ export function DocumentAnnotationLayer({
 
   return (
     <>
-      <div className="paperclip-doc-annotation-visual-layer pointer-events-none absolute inset-0 z-0" aria-hidden="true">
-        <div className="relative h-full w-full">
+      {!nativeHighlightsSupported ? (
+        <div className="paperclip-doc-annotation-visual-layer pointer-events-none absolute inset-0 z-0" aria-hidden="true">
+          <div className="relative h-full w-full">
+            {highlightRects.map((rect, index) => {
+              const isFocused = rect.threadId === focusedThreadId;
+              const isStale = rect.anchorState === "stale";
+              const isResolved = rect.status === "resolved";
+              return (
+                <span
+                  key={`visual-${rect.threadId}-${index}`}
+                  data-thread-id={rect.threadId}
+                  data-anchor-state={rect.anchorState}
+                  data-status={rect.status}
+                  data-focused={isFocused || undefined}
+                  className={cn(
+                    "paperclip-doc-annotation-highlight absolute rounded-none transition-colors",
+                    // base box treatment (replaces the previous baseline border)
+                    isResolved
+                      ? "bg-yellow-100 outline outline-1 outline-dashed outline-offset-0 outline-yellow-700/45 dark:bg-yellow-700 dark:outline-yellow-200/45"
+                      : isStale
+                        ? "bg-yellow-200 outline outline-2 outline-dashed outline-offset-0 outline-yellow-700/65 dark:bg-yellow-600 dark:outline-yellow-200/70"
+                        : isFocused
+                          ? "bg-yellow-300 outline outline-2 outline-offset-0 outline-yellow-700/85 shadow-[0_0_0_1px_var(--color-background)] dark:bg-yellow-500 dark:outline-yellow-200/85"
+                          : "bg-yellow-200 dark:bg-yellow-600",
+                  )}
+                  style={{
+                    top: rect.top,
+                    left: rect.left,
+                    width: rect.width,
+                    height: rect.height,
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+      <div
+        className="paperclip-doc-annotation-layer pointer-events-none absolute inset-0 z-[2]"
+        aria-hidden="true"
+      >
+        <div ref={overlayRef} className="relative h-full w-full">
           {highlightRects.map((rect, index) => {
             const isFocused = rect.threadId === focusedThreadId;
-            const isStale = rect.anchorState === "stale";
-            const isResolved = rect.status === "resolved";
             return (
-              <span
-                key={`visual-${rect.threadId}-${index}`}
+              <button
+                key={`${rect.threadId}-${index}`}
+                type="button"
                 data-thread-id={rect.threadId}
                 data-anchor-state={rect.anchorState}
                 data-status={rect.status}
                 data-focused={isFocused || undefined}
+                aria-label="Open annotation thread"
                 className={cn(
-                  "paperclip-doc-annotation-highlight absolute rounded-none transition-colors",
-                  // base box treatment (replaces the previous baseline border)
-                  isResolved
-                    ? "bg-yellow-100 outline outline-1 outline-dashed outline-offset-0 outline-yellow-700/45 dark:bg-yellow-700 dark:outline-yellow-200/45"
-                    : isStale
-                      ? "bg-yellow-200 outline outline-2 outline-dashed outline-offset-0 outline-yellow-700/65 dark:bg-yellow-600 dark:outline-yellow-200/70"
-                      : isFocused
-                        ? "bg-yellow-300 outline outline-2 outline-offset-0 outline-yellow-700/85 shadow-[0_0_0_1px_var(--color-background)] dark:bg-yellow-500 dark:outline-yellow-200/85"
-                        : "bg-yellow-200 dark:bg-yellow-600",
+                  "paperclip-doc-annotation-hit-target pointer-events-auto absolute cursor-pointer rounded-none bg-transparent",
+                  isFocused && "ring-1 ring-transparent",
                 )}
                 style={{
                   top: rect.top,
@@ -329,88 +457,57 @@ export function DocumentAnnotationLayer({
                   width: rect.width,
                   height: rect.height,
                 }}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  onThreadFocus(rect.threadId);
+                }}
               />
             );
           })}
-        </div>
-      </div>
-      <div
-        className="paperclip-doc-annotation-layer pointer-events-none absolute inset-0 z-[2]"
-        aria-hidden="true"
-      >
-        <div ref={overlayRef} className="relative h-full w-full">
-        {highlightRects.map((rect, index) => {
-          const isFocused = rect.threadId === focusedThreadId;
-          return (
-            <button
-              key={`${rect.threadId}-${index}`}
-              type="button"
-              data-thread-id={rect.threadId}
-              data-anchor-state={rect.anchorState}
-              data-status={rect.status}
-              data-focused={isFocused || undefined}
-              aria-label="Open annotation thread"
-              className={cn(
-                "paperclip-doc-annotation-hit-target pointer-events-auto absolute cursor-pointer rounded-none bg-transparent",
-                isFocused && "ring-1 ring-transparent",
-              )}
-              style={{
-                top: rect.top,
-                left: rect.left,
-                width: rect.width,
-                height: rect.height,
-              }}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                onThreadFocus(rect.threadId);
-              }}
-            />
-          );
-        })}
-        {highlightRects.map((rect, index) =>
-          rect.isTail && rect.anchorState === "stale" ? (
-            <span
-              key={`tail-${rect.threadId}-${index}`}
-              aria-hidden="true"
-              data-thread-id={rect.threadId}
-              className="paperclip-doc-annotation-tail pointer-events-none absolute inline-flex items-center justify-center rounded-sm bg-amber-500/95 text-amber-50 shadow-sm dark:bg-amber-500/90 dark:text-amber-50"
-              style={{
-                top: rect.top + Math.max(0, rect.height / 2 - 8),
-                left: rect.left + rect.width + 2,
-                width: 16,
-                height: 16,
-              }}
-              title="Anchor moved — needs review"
+          {highlightRects.map((rect, index) =>
+            rect.isTail && rect.anchorState === "stale" ? (
+              <span
+                key={`tail-${rect.threadId}-${index}`}
+                aria-hidden="true"
+                data-thread-id={rect.threadId}
+                className="paperclip-doc-annotation-tail pointer-events-none absolute inline-flex items-center justify-center rounded-sm bg-amber-500/95 text-amber-50 shadow-sm dark:bg-amber-500/90 dark:text-amber-50"
+                style={{
+                  top: rect.top + Math.max(0, rect.height / 2 - 8),
+                  left: rect.left + rect.width + 2,
+                  width: 16,
+                  height: 16,
+                }}
+                title="Anchor moved — needs review"
+              >
+                <AlertTriangle className="h-3 w-3" />
+              </span>
+            ) : null,
+          )}
+          {pendingAnchor && toolbarPosition ? (
+            <div
+              data-testid="document-annotation-selection-toolbar"
+              role="toolbar"
+              aria-label="Selection actions"
+              className="paperclip-doc-annotation-selection-toolbar pointer-events-auto absolute z-10 flex items-center gap-1 rounded-md border border-border bg-popover px-1 py-1 shadow-md"
+              style={{ top: toolbarPosition.top, left: toolbarPosition.left }}
+              onMouseDown={(event) => event.preventDefault()}
             >
-              <AlertTriangle className="h-3 w-3" />
-            </span>
-          ) : null,
-        )}
-        {pendingAnchor && toolbarPosition ? (
-          <div
-            data-testid="document-annotation-selection-toolbar"
-            role="toolbar"
-            aria-label="Selection actions"
-            className="paperclip-doc-annotation-selection-toolbar pointer-events-auto absolute z-10 flex items-center gap-1 rounded-md border border-border bg-popover px-1 py-1 shadow-md"
-            style={{ top: toolbarPosition.top, left: toolbarPosition.left }}
-            onMouseDown={(event) => event.preventDefault()}
-          >
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-7 gap-1 px-2 text-xs"
-              onClick={handleAddComment}
-              disabled={newCommentDisabled}
-              title={newCommentDisabled
-                ? newCommentDisabledReason ?? undefined
-                : "Add comment on selection (⌘⇧M)"}
-            >
-              <MessageSquarePlus className="h-3.5 w-3.5" aria-hidden="true" />
-              Comment
-            </Button>
-          </div>
-        ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={handleAddComment}
+                disabled={newCommentDisabled}
+                title={newCommentDisabled
+                  ? newCommentDisabledReason ?? undefined
+                  : "Add comment on selection (⌘⇧M)"}
+              >
+                <MessageSquarePlus className="h-3.5 w-3.5" aria-hidden="true" />
+                Comment
+              </Button>
+            </div>
+          ) : null}
         </div>
       </div>
     </>
