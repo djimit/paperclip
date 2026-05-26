@@ -121,6 +121,7 @@ interface AvailableBundledPlugin {
   description: string;
   localPath: string;
   tag: "example" | "first-party";
+  experimental: boolean;
 }
 
 /** Response body for GET /api/plugins/:pluginId/health */
@@ -150,6 +151,10 @@ const PLUGIN_SCOPED_API_RESPONSE_HEADER_ALLOWLIST = new Set([
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../..");
+const EXPERIMENTAL_BUNDLED_PLUGIN_PACKAGE_NAMES = new Set([
+  "@paperclipai/plugin-llm-wiki",
+  "@paperclipai/plugin-workspace-diff",
+]);
 
 function titleCasePluginName(packageName: string): string {
   const localName = packageName.split("/").pop() ?? packageName;
@@ -244,6 +249,14 @@ function bundledPluginMetadata(
   }
 }
 
+function isExperimentalBundledPlugin(packageRoot: string, packageName: string): boolean {
+  return (
+    EXPERIMENTAL_BUNDLED_PLUGIN_PACKAGE_NAMES.has(packageName)
+    || packageRoot.includes(`${path.sep}sandbox-providers${path.sep}`)
+    || packageName.includes("sandbox")
+  );
+}
+
 function listBundledPlugins(): AvailableBundledPlugin[] {
   const pluginRoot = path.resolve(REPO_ROOT, "packages/plugins");
   return findPackageJsonFiles(pluginRoot)
@@ -274,6 +287,7 @@ function listBundledPlugins(): AvailableBundledPlugin[] {
             ?? `Bundled Paperclip plugin from ${path.relative(REPO_ROOT, packageRoot)}.`,
           localPath: packageRoot,
           tag,
+          experimental: isExperimentalBundledPlugin(packageRoot, packageName),
         },
       ];
     })

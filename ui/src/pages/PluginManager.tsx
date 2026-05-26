@@ -43,6 +43,17 @@ function getPluginErrorSummary(plugin: PluginRecord): string {
   return firstNonEmptyLine(plugin.lastError) ?? "Plugin entered an error state without a stored error message.";
 }
 
+function ExperimentalBadge() {
+  return (
+    <Badge
+      variant="outline"
+      className="border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/10 dark:text-amber-200"
+    >
+      Experimental
+    </Badge>
+  );
+}
+
 /**
  * PluginManager page component.
  *
@@ -249,6 +260,7 @@ export function PluginManager() {
                         <Badge variant="outline">
                           {bundledPlugin.tag === "first-party" ? "First-party" : "Example"}
                         </Badge>
+                        {bundledPlugin.experimental && <ExperimentalBadge />}
                         {installedPlugin ? (
                           <Badge
                             variant={installedPlugin.status === "ready" ? "default" : "secondary"}
@@ -342,6 +354,7 @@ export function PluginManager() {
                             : "Example"}
                         </Badge>
                       )}
+                      {bundledByPackageName.get(plugin.packageName)?.experimental && <ExperimentalBadge />}
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground mt-0.5 truncate" title={plugin.packageName}>
