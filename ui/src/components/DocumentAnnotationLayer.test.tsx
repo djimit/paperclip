@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentAnnotationLayer } from "./DocumentAnnotationLayer";
@@ -15,6 +14,12 @@ vi.mock("@/lib/document-annotation-selection", () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+async function act(callback: () => void | Promise<void>) {
+  await callback();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 function makeRect(left: number, top: number, width: number, height: number): DOMRect {
   return {
@@ -49,9 +54,9 @@ describe("DocumentAnnotationLayer", () => {
     rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(makeRect(0, 0, 400, 300));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (root) {
-      act(() => root?.unmount());
+      await act(() => root?.unmount());
       root = null;
     }
     rectSpy.mockRestore();
