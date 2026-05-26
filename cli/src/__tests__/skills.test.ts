@@ -55,6 +55,29 @@ function skill(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function catalogSkill(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "paperclipai:bundled:software-development:github-pr-workflow",
+    key: "paperclipai/bundled/software-development/github-pr-workflow",
+    kind: "bundled",
+    category: "software-development",
+    slug: "github-pr-workflow",
+    name: "github-pr-workflow",
+    description: "Prepare pull requests, review responses, and verification notes.",
+    path: "catalog/bundled/software-development/github-pr-workflow",
+    entrypoint: "SKILL.md",
+    trustLevel: "markdown_only",
+    compatibility: "compatible",
+    defaultInstall: false,
+    recommendedForRoles: ["engineer"],
+    requires: [],
+    tags: ["github", "pull-requests"],
+    files: [{ path: "SKILL.md", kind: "skill", sizeBytes: 128, sha256: "sha256:abc" }],
+    contentHash: "sha256:catalog",
+    ...overrides,
+  };
+}
+
 function agent(overrides: Record<string, unknown> = {}) {
   return {
     id: "agent-1",
@@ -201,6 +224,123 @@ describe("skills CLI commands", () => {
 
     expect(logSpy).not.toHaveBeenCalled();
     expect(writeChunks.join("")).toBe("# Review PRs\n");
+  });
+
+  it("browses catalog skills with filters in table output", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([catalogSkill()]));
+
+    await runCommand([
+      "skills",
+      "browse",
+      "--kind",
+      "bundled",
+      "--category",
+      "software-development",
+      "--query",
+      "github",
+      "--api-base",
+      "http://paperclip.test",
+      "--api-key",
+      "token",
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://paperclip.test/api/skills/catalog?kind=bundled&category=software-development&q=github",
+      expect.objectContaining({ method: "GET" }),
+    );
+    const rendered = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(rendered).toContain("id");
+    expect(rendered).toContain("paperclipai:bundled:software-development:github-pr-workflow");
+    expect(rendered).toContain("roles");
+  });
+
+  it("searches catalog skills as JSON", async () => {
+    const rows = [catalogSkill()];
+    fetchMock.mockResolvedValueOnce(jsonResponse(rows));
+
+    await runCommand([
+      "skills",
+      "search",
+      "pull requests",
+      "--kind",
+      "bundled",
+      "--api-base",
+      "http://paperclip.test",
+      "--api-key",
+      "token",
+      "--json",
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://paperclip.test/api/skills/catalog?kind=bundled&q=pull+requests",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual(rows);
+  });
+
+  it("inspects catalog skill detail by query ref so keys with slashes work", async () => {
+    const detail = catalogSkill();
+    fetchMock.mockResolvedValueOnce(jsonResponse(detail));
+
+    await runCommand([
+      "skills",
+      "inspect",
+      "paperclipai/bundled/software-development/github-pr-workflow",
+      "--api-base",
+      "http://paperclip.test",
+      "--api-key",
+      "token",
+      "--json",
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://paperclip.test/api/skills/catalog/ref?ref=paperclipai%2Fbundled%2Fsoftware-development%2Fgithub-pr-workflow",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual(detail);
+  });
+
+  it("installs catalog skills into the company library without agent sync", async () => {
+    const result = {
+      action: "created",
+      skill: skill({
+        key: "paperclipai/bundled/software-development/github-pr-workflow",
+        slug: "pr-flow",
+        sourceType: "catalog",
+      }),
+      catalogSkill: catalogSkill(),
+      warnings: [],
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(result, 201));
+
+    await runCommand([
+      "skills",
+      "install",
+      "github-pr-workflow",
+      "--as",
+      "pr-flow",
+      "--force",
+      "--company-id",
+      "company-1",
+      "--api-base",
+      "http://paperclip.test",
+      "--api-key",
+      "token",
+      "--json",
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://paperclip.test/api/companies/company-1/skills/install-catalog",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          catalogSkillId: "github-pr-workflow",
+          slug: "pr-flow",
+          force: true,
+        }),
+      }),
+    );
+    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual(result);
   });
 
   it("syncs desired company skill refs to an agent and returns the runtime snapshot", async () => {
