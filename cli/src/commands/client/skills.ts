@@ -4,6 +4,7 @@ import type {
   AgentSkillSnapshot,
   CatalogSkill,
   CompanySkill,
+  CompanySkillAuditResult,
   CompanySkillDetail,
   CompanySkillFileDetail,
   CompanySkillImportResult,
@@ -58,10 +59,12 @@ interface CatalogInstallOptions extends SkillsOptions {
 
 interface SkillUpdateOptions extends SkillsOptions {
   all?: boolean;
+  force?: boolean;
 }
 
 interface ConfirmedSkillOptions extends SkillsOptions {
   yes?: boolean;
+  force?: boolean;
 }
 
 interface AgentSkillSyncOptions extends SkillsOptions {
@@ -369,6 +372,7 @@ export function registerSkillsCommands(program: Command): void {
       .description("Install company skill updates")
       .argument("[skillRef]", "Company skill ID, key, or unique slug")
       .option("--all", "Check all skills and install available updates", false)
+      .option("--force", "Discard local-modification or soft-audit holds; hard-stop audit findings still fail", false)
       .action(async (skillRef: string | undefined, opts: SkillUpdateOptions) => {
         try {
           const ctx = resolveCommandContext(opts, { requireCompany: true });
@@ -376,13 +380,62 @@ export function registerSkillsCommands(program: Command): void {
             throw new Error("Use either a skill reference or --all, not both.");
           }
           const rows = opts.all
-            ? await updateAllCompanySkills(ctx)
-            : [await updateOneCompanySkill(ctx, requireSkillRef(skillRef))];
+            ? await updateAllCompanySkills(ctx, opts)
+            : [await updateOneCompanySkill(ctx, requireSkillRef(skillRef), opts)];
           if (ctx.json) {
             printOutput(rows.length === 1 && !opts.all ? rows[0] : rows, { json: true });
             return;
           }
           printCompanySkillUpdateRows(rows);
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+    { includeCompany: true },
+  );
+
+  addCommonClientOptions(
+    skills
+      .command("audit")
+      .description("Audit installed company skill bytes without executing them")
+      .argument("[skillRef]", "Company skill ID, key, or unique slug")
+      .action(async (skillRef: string | undefined, opts: SkillsOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts, { requireCompany: true });
+          const rows = await auditCompanySkills(ctx, skillRef);
+          if (ctx.json) {
+            printOutput(rows.length === 1 && skillRef ? rows[0]?.audit : rows, { json: true });
+            return;
+          }
+          printCompanySkillAuditRows(rows);
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+    { includeCompany: true },
+  );
+
+  addCommonClientOptions(
+    skills
+      .command("reset")
+      .description("Reset a catalog-managed company skill to its pinned installed origin")
+      .argument("<skillRef>", "Company skill ID, key, or unique slug")
+      .option("--yes", "Confirm reset without prompting", false)
+      .option("--force", "Discard local modifications or accept soft audit warnings; hard-stop audit findings still fail", false)
+      .action(async (skillRef: string, opts: ConfirmedSkillOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts, { requireCompany: true });
+          const skill = await resolveCompanySkill(ctx, skillRef);
+          await confirmDangerousAction(opts.yes, `Reset catalog skill "${skill.name}" (${skill.key}) to its pinned origin?`);
+          const reset = await ctx.api.post<CompanySkill>(
+            `/api/companies/${ctx.companyId}/skills/${encodeURIComponent(skill.id)}/reset`,
+            { force: opts.force || undefined },
+          );
+          if (ctx.json) {
+            printOutput(reset, { json: true });
+            return;
+          }
+          console.log(`Reset skill ${reset?.name ?? skill.name} (${reset?.key ?? skill.key}) to pinned origin.`);
         } catch (err) {
           handleCommandError(err);
         }
@@ -596,10 +649,12 @@ async function checkCompanySkills(
 async function updateOneCompanySkill(
   ctx: ResolvedClientContext,
   skillRef: string,
+  opts: SkillUpdateOptions = {},
 ): Promise<CompanySkillUpdateRow> {
   const skill = await resolveCompanySkill(ctx, skillRef);
   const updated = await ctx.api.post<CompanySkill>(
     `/api/companies/${ctx.companyId}/skills/${encodeURIComponent(skill.id)}/install-update`,
+    { force: opts.force || undefined },
   );
   return {
     skillRef,
@@ -608,7 +663,7 @@ async function updateOneCompanySkill(
   };
 }
 
-async function updateAllCompanySkills(ctx: ResolvedClientContext): Promise<CompanySkillUpdateRow[]> {
+async function updateAllCompanySkills(ctx: ResolvedClientContext, opts: SkillUpdateOptions = {}): Promise<CompanySkillUpdateRow[]> {
   const checks = await checkCompanySkills(ctx, undefined);
   const rows: CompanySkillUpdateRow[] = [];
   for (const row of checks) {
@@ -633,6 +688,7 @@ async function updateAllCompanySkills(ctx: ResolvedClientContext): Promise<Compa
     try {
       const updated = await ctx.api.post<CompanySkill>(
         `/api/companies/${ctx.companyId}/skills/${encodeURIComponent(row.skill.id)}/install-update`,
+        { force: opts.force || undefined },
       );
       rows.push({
         skillRef: row.skill.key,
@@ -648,6 +704,26 @@ async function updateAllCompanySkills(ctx: ResolvedClientContext): Promise<Compa
         reason: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+  return rows;
+}
+
+async function auditCompanySkills(
+  ctx: ResolvedClientContext,
+  skillRef: string | undefined,
+): Promise<Array<{ skill: CompanySkillReferenceTarget; audit: CompanySkillAuditResult }>> {
+  const skills = await listCompanySkills(ctx);
+  const selected = skillRef ? [resolveCompanySkillReference(skills, skillRef)] : skills;
+  const rows: Array<{ skill: CompanySkillReferenceTarget; audit: CompanySkillAuditResult }> = [];
+  for (const skill of selected) {
+    const audit = await ctx.api.post<CompanySkillAuditResult>(
+      `/api/companies/${ctx.companyId}/skills/${encodeURIComponent(skill.id)}/audit`,
+      {},
+    );
+    if (!audit) {
+      throw new Error(`No audit result returned for skill ${skill.key}.`);
+    }
+    rows.push({ skill: toSkillReferenceTarget(skill), audit });
   }
   return rows;
 }
@@ -757,9 +833,43 @@ function printCompanySkillCheckRows(rows: CompanySkillCheckRow[]): void {
         hasUpdate: row.status.hasUpdate,
         currentRef: row.status.currentRef,
         latestRef: row.status.latestRef,
+        installedHash: row.status.installedHash,
+        originHash: row.status.originHash,
+        hold: row.status.updateHoldReason,
+        audit: row.status.auditVerdict,
         reason: row.status.reason,
       }),
     );
+  }
+}
+
+function printCompanySkillAuditRows(rows: Array<{ skill: CompanySkillReferenceTarget; audit: CompanySkillAuditResult }>): void {
+  if (rows.length === 0) {
+    printOutput([], { json: false });
+    return;
+  }
+  for (const row of rows) {
+    console.log(
+      formatInlineRecord({
+        id: row.skill.id,
+        key: row.skill.key,
+        slug: row.skill.slug,
+        verdict: row.audit.verdict,
+        installedHash: row.audit.installedHash,
+        originHash: row.audit.originHash,
+        codes: row.audit.codes.join(",") || null,
+      }),
+    );
+    for (const finding of row.audit.findings) {
+      console.log(
+        formatInlineRecord({
+          severity: finding.severity,
+          code: finding.code,
+          path: finding.path,
+          message: finding.message,
+        }),
+      );
+    }
   }
 }
 

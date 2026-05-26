@@ -6,7 +6,9 @@ import {
   companySkillFileUpdateSchema,
   companySkillImportSchema,
   companySkillInstallCatalogSchema,
+  companySkillInstallUpdateSchema,
   companySkillProjectScanRequestSchema,
+  companySkillResetSchema,
 } from "@paperclipai/shared";
 import { trackSkillImported } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
@@ -350,34 +352,120 @@ export function companySkillRoutes(db: Db) {
     res.json(result);
   });
 
-  router.post("/companies/:companyId/skills/:skillId/install-update", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const skillId = req.params.skillId as string;
-    await assertCanMutateCompanySkills(req, companyId);
-    const result = await svc.installUpdate(companyId, skillId);
-    if (!result) {
-      res.status(404).json({ error: "Skill not found" });
-      return;
-    }
+  router.post(
+    "/companies/:companyId/skills/:skillId/audit",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      await assertCanMutateCompanySkills(req, companyId);
+      const result = await svc.auditSkill(companyId, skillId);
+      if (!result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
 
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "company.skill_update_installed",
-      entityType: "company_skill",
-      entityId: result.id,
-      details: {
-        slug: result.slug,
-        sourceRef: result.sourceRef,
-      },
-    });
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "company.skill_audited",
+        entityType: "company_skill",
+        entityId: skillId,
+        details: {
+          verdict: result.verdict,
+          codes: result.codes,
+          installedHash: result.installedHash,
+          originHash: result.originHash,
+          scanVersion: result.scanVersion,
+        },
+      });
 
-    res.json(result);
-  });
+      res.json(result);
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/skills/:skillId/install-update",
+    validate(companySkillInstallUpdateSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      await assertCanMutateCompanySkills(req, companyId);
+      const before = await svc.getById(companyId, skillId);
+      const result = await svc.installUpdate(companyId, skillId, req.body);
+      if (!result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "company.skill_update_installed",
+        entityType: "company_skill",
+        entityId: result.id,
+        details: {
+          slug: result.slug,
+          previousOriginHash: before?.metadata?.originHash ?? before?.sourceRef ?? null,
+          previousOriginVersion: before?.metadata?.originVersion ?? null,
+          newOriginHash: result.metadata?.originHash ?? result.sourceRef,
+          newOriginVersion: result.metadata?.originVersion ?? null,
+          driftDetected: Boolean(before?.metadata?.userModifiedAt),
+          force: Boolean(req.body.force),
+          auditVerdict: result.metadata?.auditVerdict ?? null,
+        },
+      });
+
+      res.json(result);
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/skills/:skillId/reset",
+    validate(companySkillResetSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      await assertCanMutateCompanySkills(req, companyId);
+      const before = await svc.getById(companyId, skillId);
+      const result = await svc.resetSkill(companyId, skillId, req.body);
+      if (!result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "company.skill_reset",
+        entityType: "company_skill",
+        entityId: result.id,
+        details: {
+          slug: result.slug,
+          previousOriginHash: before?.metadata?.originHash ?? before?.sourceRef ?? null,
+          previousOriginVersion: before?.metadata?.originVersion ?? null,
+          newOriginHash: result.metadata?.originHash ?? result.sourceRef,
+          newOriginVersion: result.metadata?.originVersion ?? null,
+          driftDetected: Boolean(before?.metadata?.userModifiedAt),
+          force: Boolean(req.body.force),
+          auditVerdict: result.metadata?.auditVerdict ?? null,
+        },
+      });
+
+      res.json(result);
+    },
+  );
 
   return router;
 }

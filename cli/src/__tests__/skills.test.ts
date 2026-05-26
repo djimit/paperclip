@@ -343,6 +343,109 @@ describe("skills CLI commands", () => {
     expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual(result);
   });
 
+  it("passes force to skill updates", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse([skill()]))
+      .mockResolvedValueOnce(jsonResponse(skill({ sourceRef: "sha256:new" })));
+
+    await runCommand([
+      "skills",
+      "update",
+      "review-prs",
+      "--force",
+      "--company-id",
+      "company-1",
+      "--api-base",
+      "http://paperclip.test",
+      "--api-key",
+      "token",
+      "--json",
+    ]);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://paperclip.test/api/companies/company-1/skills/11111111-1111-1111-1111-111111111111/install-update",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ force: true }),
+      }),
+    );
+  });
+
+  it("audits installed skill bytes through the server", async () => {
+    const audit = {
+      skillId: "11111111-1111-1111-1111-111111111111",
+      installedHash: "sha256:installed",
+      originHash: "sha256:origin",
+      verdict: "warning",
+      codes: ["network_reference"],
+      findings: [{
+        code: "network_reference",
+        severity: "warning",
+        message: "Skill content references network-capable commands or URLs.",
+        path: "SKILL.md",
+      }],
+      scannedAt: "2026-05-26T00:00:00.000Z",
+      scanVersion: "skills-audit-v1",
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse([skill()]))
+      .mockResolvedValueOnce(jsonResponse(audit));
+
+    await runCommand([
+      "skills",
+      "audit",
+      "review-prs",
+      "--company-id",
+      "company-1",
+      "--api-base",
+      "http://paperclip.test",
+      "--api-key",
+      "token",
+      "--json",
+    ]);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://paperclip.test/api/companies/company-1/skills/11111111-1111-1111-1111-111111111111/audit",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual(audit);
+  });
+
+  it("requires confirmation for reset and sends force when confirmed", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse([skill({ sourceType: "catalog" })]))
+      .mockResolvedValueOnce(jsonResponse(skill({ sourceType: "catalog" })));
+
+    await runCommand([
+      "skills",
+      "reset",
+      "review-prs",
+      "--yes",
+      "--force",
+      "--company-id",
+      "company-1",
+      "--api-base",
+      "http://paperclip.test",
+      "--api-key",
+      "token",
+      "--json",
+    ]);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://paperclip.test/api/companies/company-1/skills/11111111-1111-1111-1111-111111111111/reset",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ force: true }),
+      }),
+    );
+  });
+
   it("syncs desired company skill refs to an agent and returns the runtime snapshot", async () => {
     const snapshot = {
       adapterType: "codex_local",

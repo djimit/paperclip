@@ -64,7 +64,45 @@ export const companySkillUpdateStatusSchema = z.object({
   currentRef: z.string().nullable(),
   latestRef: z.string().nullable(),
   hasUpdate: z.boolean(),
+  installedHash: z.string().nullable(),
+  originHash: z.string().nullable(),
+  userModifiedAt: z.string().nullable(),
+  updateHoldReason: z.enum([
+    "local_modifications",
+    "audit_hard_stop",
+    "origin_unavailable",
+    "compatibility_invalid",
+    "operator_hold",
+  ]).nullable(),
+  auditVerdict: z.enum(["pass", "warning", "fail"]).nullable(),
+  auditCodes: z.array(z.string()),
 });
+
+export const companySkillAuditFindingSchema = z.object({
+  code: z.string().min(1),
+  severity: z.enum(["warning", "error"]),
+  message: z.string().min(1),
+  path: z.string().nullable(),
+});
+
+export const companySkillAuditResultSchema = z.object({
+  skillId: z.string().uuid(),
+  installedHash: z.string().nullable(),
+  originHash: z.string().nullable(),
+  verdict: z.enum(["pass", "warning", "fail"]),
+  codes: z.array(z.string()),
+  findings: z.array(companySkillAuditFindingSchema),
+  scannedAt: z.string().min(1),
+  scanVersion: z.string().min(1),
+});
+
+export const companySkillInstallUpdateSchema = z.object({
+  force: z.boolean().optional(),
+}).default({});
+
+export const companySkillResetSchema = z.object({
+  force: z.boolean().optional(),
+}).default({});
 
 export const companySkillImportSchema = z.object({
   source: z.string().min(1),
@@ -194,3 +232,5 @@ export type CompanySkillCreate = z.infer<typeof companySkillCreateSchema>;
 export type CompanySkillFileUpdate = z.infer<typeof companySkillFileUpdateSchema>;
 export type CatalogSkillListQuery = z.infer<typeof catalogSkillListQuerySchema>;
 export type CompanySkillInstallCatalog = z.infer<typeof companySkillInstallCatalogSchema>;
+export type CompanySkillInstallUpdate = z.infer<typeof companySkillInstallUpdateSchema>;
+export type CompanySkillReset = z.infer<typeof companySkillResetSchema>;

@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   catalogSkillFileDetailSchema,
   catalogSkillListQuerySchema,
+  companySkillAuditResultSchema,
   companySkillInstallCatalogResultSchema,
   companySkillInstallCatalogSchema,
+  companySkillInstallUpdateSchema,
+  companySkillResetSchema,
+  companySkillUpdateStatusSchema,
 } from "./company-skill.js";
 
 const catalogSkill = {
@@ -105,5 +109,50 @@ describe("company skill catalog validators", () => {
         id: catalogSkill.id,
       },
     });
+  });
+
+  it("accepts update status, audit, update, and reset contract shapes", () => {
+    expect(companySkillUpdateStatusSchema.parse({
+      supported: true,
+      reason: null,
+      trackingRef: catalogSkill.id,
+      currentRef: "sha256:old",
+      latestRef: catalogSkill.contentHash,
+      hasUpdate: true,
+      installedHash: "sha256:installed",
+      originHash: catalogSkill.contentHash,
+      userModifiedAt: "2026-05-26T00:00:00.000Z",
+      updateHoldReason: "local_modifications",
+      auditVerdict: "warning",
+      auditCodes: ["local_modifications"],
+    })).toMatchObject({
+      supported: true,
+      updateHoldReason: "local_modifications",
+      auditVerdict: "warning",
+    });
+
+    expect(companySkillAuditResultSchema.parse({
+      skillId: companySkill.id,
+      installedHash: "sha256:installed",
+      originHash: catalogSkill.contentHash,
+      verdict: "fail",
+      codes: ["remote_fetch_exec"],
+      findings: [{
+        code: "remote_fetch_exec",
+        severity: "error",
+        message: "Remote-fetch or dynamic execution pattern is not allowed.",
+        path: "SKILL.md",
+      }],
+      scannedAt: "2026-05-26T00:00:00.000Z",
+      scanVersion: "skills-audit-v1",
+    })).toMatchObject({
+      verdict: "fail",
+      codes: ["remote_fetch_exec"],
+    });
+
+    expect(companySkillInstallUpdateSchema.parse(undefined)).toEqual({});
+    expect(companySkillInstallUpdateSchema.parse({ force: true })).toEqual({ force: true });
+    expect(companySkillResetSchema.parse(undefined)).toEqual({});
+    expect(companySkillResetSchema.parse({ force: true })).toEqual({ force: true });
   });
 });

@@ -84,6 +84,49 @@ export interface CompanySkillUpdateStatus {
   currentRef: string | null;
   latestRef: string | null;
   hasUpdate: boolean;
+  installedHash: string | null;
+  originHash: string | null;
+  userModifiedAt: string | null;
+  updateHoldReason: CompanySkillUpdateHoldReason | null;
+  auditVerdict: CompanySkillAuditVerdict | null;
+  auditCodes: string[];
+}
+
+export type CompanySkillAuditSeverity = "warning" | "error";
+
+export type CompanySkillAuditVerdict = "pass" | "warning" | "fail";
+
+export type CompanySkillUpdateHoldReason =
+  | "local_modifications"
+  | "audit_hard_stop"
+  | "origin_unavailable"
+  | "compatibility_invalid"
+  | "operator_hold";
+
+export interface CompanySkillAuditFinding {
+  code: string;
+  severity: CompanySkillAuditSeverity;
+  message: string;
+  path: string | null;
+}
+
+export interface CompanySkillAuditResult {
+  skillId: string;
+  installedHash: string | null;
+  originHash: string | null;
+  verdict: CompanySkillAuditVerdict;
+  codes: string[];
+  findings: CompanySkillAuditFinding[];
+  scannedAt: string;
+  scanVersion: string;
+}
+
+export interface CompanySkillInstallUpdateRequest {
+  force?: boolean;
+}
+
+export interface CompanySkillResetRequest {
+  force?: boolean;
 }
 
 export interface CompanySkillImportRequest {
