@@ -691,26 +691,24 @@ async function isGitCheckout(cwd: string): Promise<boolean> {
 }
 
 async function detectDefaultBranch(repoRoot: string): Promise<string | null> {
-  const originMasterRef = "origin/master";
-  await refreshRemoteTrackingBaseRef(repoRoot, originMasterRef);
-  if (await resolveBaseRefSha(repoRoot, originMasterRef)) {
-    return originMasterRef;
-  }
-
   // Try the explicit remote HEAD first (set by git clone or git remote set-head)
   try {
     const remoteHead = await runGit(
       ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
       repoRoot,
     );
-    if (remoteHead) return remoteHead;
+    if (remoteHead) {
+      await refreshRemoteTrackingBaseRef(repoRoot, remoteHead);
+      if (await resolveBaseRefSha(repoRoot, remoteHead)) return remoteHead;
+    }
   } catch {
     // Not set — fall through to heuristic
   }
 
   // Fallback: check for common default branch names on the remote
-  for (const candidate of ["origin/main", "main", "master"]) {
+  for (const candidate of ["origin/master", "origin/main", "main", "master"]) {
     try {
+      await refreshRemoteTrackingBaseRef(repoRoot, candidate);
       await runGit(["rev-parse", "--verify", `${candidate}^{commit}`], repoRoot);
       return candidate;
     } catch {

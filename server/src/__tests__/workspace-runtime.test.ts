@@ -1922,18 +1922,16 @@ describe("realizeExecutionWorkspace", () => {
   }, 10_000);
 
   it("auto-detects the default branch via symbolic-ref when origin/HEAD is set", async () => {
-    // Create a repo with "master" as default branch
-    const repoRoot = await createTempRepo("master");
+    const repoRoot = await createTempRepo("main");
 
-    // Set up a bare remote and push
     const bareRemote = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-bare-symref-"));
     await runGit(bareRemote, ["init", "--bare"]);
     await runGit(repoRoot, ["remote", "add", "origin", bareRemote]);
-    await runGit(repoRoot, ["push", "-u", "origin", "master"]);
+    await runGit(repoRoot, ["push", "-u", "origin", "main", "master"]);
     await runGit(repoRoot, ["fetch", "origin"]);
     // Explicitly set refs/remotes/origin/HEAD to exercise the symbolic-ref path
     // (git remote set-head -a requires the remote to advertise HEAD, so we set it manually)
-    await runGit(repoRoot, ["remote", "set-head", "origin", "master"]);
+    await runGit(repoRoot, ["remote", "set-head", "origin", "main"]);
 
     const { recorder, operations } = createWorkspaceOperationRecorderDouble();
 
@@ -1949,7 +1947,7 @@ describe("realizeExecutionWorkspace", () => {
       config: {
         workspaceStrategy: {
           type: "git_worktree",
-          // No baseRef configured — origin/master is preferred over the symbolic-ref.
+          // No baseRef configured — origin/HEAD should win over fallback branches.
         },
       },
       issue: {
@@ -1969,7 +1967,7 @@ describe("realizeExecutionWorkspace", () => {
     expect(workspace.created).toBe(true);
     const worktreeOp = operations.find(op => op.phase === "worktree_prepare" && op.metadata?.created);
     expect(worktreeOp).toBeDefined();
-    expect(worktreeOp!.metadata!.baseRef).toBe("origin/master");
+    expect(worktreeOp!.metadata!.baseRef).toBe("origin/main");
   }, 10_000);
 
   it("removes a created git worktree and branch during cleanup", async () => {

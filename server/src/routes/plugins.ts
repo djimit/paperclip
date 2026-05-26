@@ -18,7 +18,7 @@
  * @see doc/plugins/PLUGIN_SPEC.md for the full plugin specification
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -167,34 +167,39 @@ function titleCasePluginName(packageName: string): string {
     .join(" ");
 }
 
-function readJsonFile(filePath: string): Record<string, unknown> | null {
+async function fileExists(filePath: string): Promise<boolean> {
+  return access(filePath).then(() => true, () => false);
+}
+
+async function readJsonFile(filePath: string): Promise<Record<string, unknown> | null> {
   try {
-    return JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    return JSON.parse(await readFile(filePath, "utf8")) as Record<string, unknown>;
   } catch {
     return null;
   }
 }
 
-function findPackageJsonFiles(root: string, maxDepth = 4): string[] {
-  if (!existsSync(root)) return [];
+async function findPackageJsonFiles(root: string, maxDepth = 4): Promise<string[]> {
+  if (!(await fileExists(root))) return [];
 
   const packageJsonFiles: string[] = [];
-  const walk = (dir: string, depth: number) => {
+  const walk = async (dir: string, depth: number): Promise<void> => {
     if (depth > maxDepth) return;
 
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
       if (entry.name === "node_modules" || entry.name === "dist") continue;
       const entryPath = path.join(dir, entry.name);
 
       if (entry.isFile() && entry.name === "package.json") {
         packageJsonFiles.push(entryPath);
       } else if (entry.isDirectory()) {
-        walk(entryPath, depth + 1);
+        await walk(entryPath, depth + 1);
       }
     }
   };
 
-  walk(root, 0);
+  await walk(root, 0);
   return packageJsonFiles;
 }
 
@@ -224,15 +229,15 @@ function firstStringLiteral(source: string, key: string): string | null {
   return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
 }
 
-function bundledPluginMetadata(
+async function bundledPluginMetadata(
   packageRoot: string,
   pkgJson: Record<string, unknown>,
-): { pluginKey?: string; displayName?: string; description?: string } {
+): Promise<{ pluginKey?: string; displayName?: string; description?: string }> {
   const sourcePath = manifestSourcePath(packageRoot, pkgJson);
-  if (!sourcePath || !existsSync(sourcePath)) return {};
+  if (!sourcePath || !(await fileExists(sourcePath))) return {};
 
   try {
-    const source = readFileSync(sourcePath, "utf8");
+    const source = await readFile(sourcePath, "utf8");
     const pluginId = source
       .match(/(?:export\s+)?const\s+PLUGIN_ID\s*=\s*(?:"([^"]*)"|'([^']*)'|`([^`]*)`)/)
       ?.slice(1)
@@ -257,44 +262,43 @@ function isExperimentalBundledPlugin(packageRoot: string, packageName: string): 
   );
 }
 
-function listBundledPlugins(): AvailableBundledPlugin[] {
+async function listBundledPlugins(): Promise<AvailableBundledPlugin[]> {
   const pluginRoot = path.resolve(REPO_ROOT, "packages/plugins");
-  return findPackageJsonFiles(pluginRoot)
-    .flatMap((packageJsonPath): AvailableBundledPlugin[] => {
-      const packageRoot = path.dirname(packageJsonPath);
-      const pkgJson = readJsonFile(packageJsonPath);
-      const paperclipPlugin = pkgJson?.paperclipPlugin;
-      if (
-        !pkgJson
-        || !paperclipPlugin
-        || typeof paperclipPlugin !== "object"
-        || Array.isArray(paperclipPlugin)
-      ) {
-        return [];
-      }
+  const bundledPlugins: AvailableBundledPlugin[] = [];
+  for (const packageJsonPath of await findPackageJsonFiles(pluginRoot)) {
+    const packageRoot = path.dirname(packageJsonPath);
+    const pkgJson = await readJsonFile(packageJsonPath);
+    const paperclipPlugin = pkgJson?.paperclipPlugin;
+    if (
+      !pkgJson
+      || !paperclipPlugin
+      || typeof paperclipPlugin !== "object"
+      || Array.isArray(paperclipPlugin)
+    ) {
+      continue;
+    }
 
-      const packageName = pkgJson.name;
-      if (typeof packageName !== "string" || packageName.length === 0) return [];
+    const packageName = pkgJson.name;
+    if (typeof packageName !== "string" || packageName.length === 0) continue;
 
-      const metadata = bundledPluginMetadata(packageRoot, pkgJson);
-      const tag = packageRoot.includes(`${path.sep}examples${path.sep}`) ? "example" : "first-party";
-      return [
-        {
-          packageName,
-          pluginKey: metadata.pluginKey ?? packageName,
-          displayName: metadata.displayName ?? titleCasePluginName(packageName),
-          description: metadata.description
-            ?? `Bundled Paperclip plugin from ${path.relative(REPO_ROOT, packageRoot)}.`,
-          localPath: packageRoot,
-          tag,
-          experimental: isExperimentalBundledPlugin(packageRoot, packageName),
-        },
-      ];
-    })
-    .sort((left, right) => {
-      if (left.tag !== right.tag) return left.tag === "first-party" ? -1 : 1;
-      return left.displayName.localeCompare(right.displayName);
+    const metadata = await bundledPluginMetadata(packageRoot, pkgJson);
+    const tag = packageRoot.includes(`${path.sep}examples${path.sep}`) ? "example" : "first-party";
+    bundledPlugins.push({
+      packageName,
+      pluginKey: metadata.pluginKey ?? packageName,
+      displayName: metadata.displayName ?? titleCasePluginName(packageName),
+      description: metadata.description
+        ?? `Bundled Paperclip plugin from ${path.relative(REPO_ROOT, packageRoot)}.`,
+      localPath: packageRoot,
+      tag,
+      experimental: isExperimentalBundledPlugin(packageRoot, packageName),
     });
+  }
+
+  return bundledPlugins.sort((left, right) => {
+    if (left.tag !== right.tag) return left.tag === "first-party" ? -1 : 1;
+    return left.displayName.localeCompare(right.displayName);
+  });
 }
 
 /**
@@ -777,7 +781,7 @@ export function pluginRoutes(
    */
   router.get("/plugins/examples", async (req, res) => {
     assertBoardOrgAccess(req);
-    res.json(listBundledPlugins());
+    res.json(await listBundledPlugins());
   });
 
   // IMPORTANT: Static routes must come before parameterized routes
