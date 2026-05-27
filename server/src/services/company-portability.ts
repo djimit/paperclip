@@ -70,6 +70,7 @@ import { issueService } from "./issues.js";
 import { projectService } from "./projects.js";
 import { routineService } from "./routines.js";
 import { secretService } from "./secrets.js";
+import { PORTABLE_CATALOG_PROVENANCE_STRING_KEYS } from "./catalog-provenance.js";
 
 /** Build OrgNode tree from manifest agent list (slug + reportsToSlug). */
 function buildOrgTreeFromManifest(agents: CompanyPortabilityManifest["agents"]): OrgNode[] {
@@ -227,25 +228,6 @@ function readSkillSourceKind(skill: CompanySkill) {
   const metadata = isPlainRecord(skill.metadata) ? skill.metadata : null;
   return asString(metadata?.sourceKind);
 }
-
-const PORTABLE_CATALOG_PROVENANCE_STRING_KEYS = [
-  "sourceRef",
-  "originHash",
-  "catalogId",
-  "catalogKey",
-  "catalogKind",
-  "catalogCategory",
-  "catalogPath",
-  "packageName",
-  "packageVersion",
-  "originVersion",
-  "installedHash",
-  "userModifiedAt",
-  "updateHoldReason",
-  "auditVerdict",
-  "auditScannedAt",
-  "auditScanVersion",
-] as const;
 
 function readStringList(value: unknown) {
   if (!Array.isArray(value)) return null;

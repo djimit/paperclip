@@ -235,6 +235,11 @@ describeEmbeddedPostgres("companySkillService.installFromCatalog", () => {
     const result = await svc.installFromCatalog(companyId, { catalogSkillId: sampleCatalogSkill.id });
 
     expect(result.action).toBe("unchanged");
+    expect(result.skill.metadata).toEqual(expect.objectContaining({
+      installedHash: sampleCatalogSkill.contentHash,
+      auditVerdict: "pass",
+      auditScanVersion: "skills-audit-v1",
+    }));
     const rows = await db
       .select()
       .from(companySkills)

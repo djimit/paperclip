@@ -1,0 +1,18 @@
+export const PORTABLE_CATALOG_PROVENANCE_STRING_KEYS = [
+  "sourceRef",
+  "originHash",
+  "catalogId",
+  "catalogKey",
+  "catalogKind",
+  "catalogCategory",
+  "catalogPath",
+  "packageName",
+  "packageVersion",
+  "originVersion",
+  "installedHash",
+  "userModifiedAt",
+  "updateHoldReason",
+  "auditVerdict",
+  "auditScannedAt",
+  "auditScanVersion",
+] as const;

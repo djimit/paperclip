@@ -44,6 +44,7 @@ import {
   getCatalogSkillOrThrow,
   readCatalogSkillFile,
 } from "./skills-catalog.js";
+import { PORTABLE_CATALOG_PROVENANCE_STRING_KEYS } from "./catalog-provenance.js";
 
 type CompanySkillRow = typeof companySkills.$inferSelect;
 type CompanySkillListDbRow = Pick<
@@ -770,25 +771,6 @@ function deriveImportedSkillSlug(frontmatter: Record<string, unknown>, fallback:
     ?? normalizeAgentUrlKey(fallback)
     ?? "skill";
 }
-
-const PORTABLE_CATALOG_PROVENANCE_STRING_KEYS = [
-  "sourceRef",
-  "originHash",
-  "catalogId",
-  "catalogKey",
-  "catalogKind",
-  "catalogCategory",
-  "catalogPath",
-  "packageName",
-  "packageVersion",
-  "originVersion",
-  "installedHash",
-  "userModifiedAt",
-  "updateHoldReason",
-  "auditVerdict",
-  "auditScannedAt",
-  "auditScanVersion",
-] as const;
 
 function readStringList(value: unknown) {
   if (!Array.isArray(value)) return null;
@@ -2887,11 +2869,11 @@ export function companySkillService(db: Db) {
         && asString(metadata.originHash) === catalogSkill.contentHash
       ) {
         const audit = await auditInstalledSkillBytes(existingByKey);
-        await persistAuditMetadata(existingByKey, audit);
+        const audited = await persistAuditMetadata(existingByKey, audit);
         if (audit.installedHash === catalogSkill.contentHash && audit.verdict !== "fail") {
           return {
             action: "unchanged",
-            skill: existingByKey,
+            skill: audited,
             catalogSkill,
             warnings: audit.findings.map((finding) => finding.message),
           };

@@ -305,8 +305,9 @@ function readonlyMetadataKind(metadata: Record<string, unknown> | null | undefin
 }
 
 function classifySource(skill: { sourceBadge: CompanySkillSourceBadge; sourceType: string; metadata?: Record<string, unknown> | null }): SourceFilter {
-  if (skill.sourceBadge === "paperclip" || skill.sourceType === "local_path" && !skill.sourceBadge.toString().includes("github")) {
-    if (skill.sourceBadge === "paperclip") return "company";
+  if (skill.sourceBadge === "paperclip") return "company";
+  if (skill.sourceType === "local_path" && !skill.sourceBadge.toString().includes("github")) {
+    return "company";
   }
   if (skill.sourceType === "catalog" || skill.sourceBadge === "catalog") {
     const kind = readonlyMetadataKind(skill.metadata);

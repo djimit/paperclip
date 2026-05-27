@@ -242,6 +242,21 @@ describe("company skill mutation permissions", () => {
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
+  it("requires authentication for catalog read routes", async () => {
+    const app = await createApp({ type: "none" });
+
+    const list = await request(app).get("/api/skills/catalog");
+    const detail = await request(app).get("/api/skills/catalog/review");
+    const file = await request(app).get("/api/skills/catalog/review/files?path=SKILL.md");
+
+    expect(list.status, JSON.stringify(list.body)).toBe(401);
+    expect(detail.status, JSON.stringify(detail.body)).toBe(401);
+    expect(file.status, JSON.stringify(file.body)).toBe(401);
+    expect(mockCatalogService.listCatalogSkills).not.toHaveBeenCalled();
+    expect(mockCatalogService.getCatalogSkillOrThrow).not.toHaveBeenCalled();
+    expect(mockCatalogService.readCatalogSkillFile).not.toHaveBeenCalled();
+  });
+
   it("serves catalog detail and files by catalog reference", async () => {
     const app = await createApp({
       type: "board",

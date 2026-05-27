@@ -15,7 +15,7 @@ import { validate } from "../middleware/validate.js";
 import { accessService, agentService, companySkillService, logActivity } from "../services/index.js";
 import { getCatalogSkillOrThrow, listCatalogSkills, readCatalogSkillFile } from "../services/skills-catalog.js";
 import { forbidden } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { getTelemetryClient } from "../telemetry.js";
 
 type SkillTelemetryInput = {
@@ -93,6 +93,7 @@ export function companySkillRoutes(db: Db) {
   }
 
   router.get("/skills/catalog", async (req, res) => {
+    assertAuthenticated(req);
     const query = catalogSkillListQuerySchema.parse({
       kind: firstQueryString(req.query.kind),
       category: firstQueryString(req.query.category),
@@ -102,12 +103,14 @@ export function companySkillRoutes(db: Db) {
   });
 
   router.get("/skills/catalog/:catalogId/files", async (req, res) => {
+    assertAuthenticated(req);
     const catalogRef = firstQueryString(req.query.ref) ?? (req.params.catalogId as string);
     const relativePath = firstQueryString(req.query.path) ?? "SKILL.md";
     res.json(await readCatalogSkillFile(catalogRef, relativePath));
   });
 
   router.get("/skills/catalog/:catalogId", async (req, res) => {
+    assertAuthenticated(req);
     const catalogRef = firstQueryString(req.query.ref) ?? (req.params.catalogId as string);
     res.json(getCatalogSkillOrThrow(catalogRef));
   });
