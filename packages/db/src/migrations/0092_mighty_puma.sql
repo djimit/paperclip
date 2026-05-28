@@ -1,21 +1,22 @@
 CREATE TABLE "issue_plan_decompositions" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-  "company_id" uuid NOT NULL,
-  "source_issue_id" uuid NOT NULL,
-  "accepted_plan_revision_id" uuid NOT NULL,
-  "accepted_interaction_id" uuid,
-  "status" text DEFAULT 'in_flight' NOT NULL,
-  "request_fingerprint" text NOT NULL,
-  "requested_child_count" integer DEFAULT 0 NOT NULL,
-  "requested_children" jsonb DEFAULT '[]'::jsonb NOT NULL,
-  "child_issue_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
-  "owner_agent_id" uuid,
-  "owner_user_id" text,
-  "owner_run_id" uuid,
-  "completed_at" timestamp with time zone,
-  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
-  "updated_at" timestamp with time zone DEFAULT now() NOT NULL
-);--> statement-breakpoint
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"company_id" uuid NOT NULL,
+	"source_issue_id" uuid NOT NULL,
+	"accepted_plan_revision_id" uuid NOT NULL,
+	"accepted_interaction_id" uuid,
+	"status" text DEFAULT 'in_flight' NOT NULL,
+	"request_fingerprint" text NOT NULL,
+	"requested_child_count" integer DEFAULT 0 NOT NULL,
+	"requested_children" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"child_issue_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"owner_agent_id" uuid,
+	"owner_user_id" text,
+	"owner_run_id" uuid,
+	"completed_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 ALTER TABLE "issue_plan_decompositions" ADD CONSTRAINT "issue_plan_decompositions_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "issue_plan_decompositions" ADD CONSTRAINT "issue_plan_decompositions_source_issue_id_issues_id_fk" FOREIGN KEY ("source_issue_id") REFERENCES "public"."issues"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "issue_plan_decompositions" ADD CONSTRAINT "issue_plan_decompositions_accepted_plan_revision_id_document_revisions_id_fk" FOREIGN KEY ("accepted_plan_revision_id") REFERENCES "public"."document_revisions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
