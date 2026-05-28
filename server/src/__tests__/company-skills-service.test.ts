@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { companies, companySkills, createDb } from "@paperclipai/db";
+import { agents, companies, companySkills, createDb } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -32,6 +32,7 @@ describeEmbeddedPostgres("companySkillService.list", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(agents);
     await db.delete(companySkills);
     await db.delete(companies);
     await Promise.all(Array.from(cleanupDirs, (dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -95,5 +96,150 @@ describeEmbeddedPostgres("companySkillService.list", () => {
       status: 404,
       message: "Company not found",
     });
+  });
+
+  it("preserves missing local-path skills that active agents still desire", async () => {
+    const companyId = randomUUID();
+    const skillId = randomUUID();
+    const skillKey = `company/${companyId}/reflection-coach`;
+    const missingSkillDir = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-missing-used-skill-")), "gone");
+    cleanupDirs.add(path.dirname(missingSkillDir));
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: skillId,
+      companyId,
+      key: skillKey,
+      slug: "reflection-coach",
+      name: "Reflection Coach",
+      description: null,
+      markdown: "# Reflection Coach\n",
+      sourceType: "local_path",
+      sourceLocator: missingSkillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+      metadata: { sourceKind: "local_path" },
+    });
+    await db.insert(agents).values({
+      id: randomUUID(),
+      companyId,
+      name: "Reviewer",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {
+        paperclipSkillSync: {
+          desiredSkills: [skillKey],
+        },
+      },
+    });
+
+    const listed = await svc.list(companyId);
+    const listedSkill = listed.find((skill) => skill.id === skillId);
+    const detail = await svc.detail(companyId, skillId);
+    const stored = await svc.getById(companyId, skillId);
+    const marker = stored?.metadata?.missingSource;
+
+    expect(listedSkill).toMatchObject({
+      id: skillId,
+      attachedAgentCount: 1,
+    });
+    expect(detail?.usedByAgents).toEqual([
+      expect.objectContaining({
+        name: "Reviewer",
+        desired: true,
+      }),
+    ]);
+    expect(marker).toMatchObject({
+      reason: "local_source_missing",
+      sourceType: "local_path",
+      sourceLocator: missingSkillDir,
+      sourcePath: missingSkillDir,
+    });
+    expect(Number.isNaN(Date.parse(String((marker as Record<string, unknown>).detectedAt)))).toBe(false);
+  });
+
+  it("continues pruning missing local-path skills that no active agent desires", async () => {
+    const companyId = randomUUID();
+    const skillId = randomUUID();
+    const missingSkillDir = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-missing-unused-skill-")), "gone");
+    cleanupDirs.add(path.dirname(missingSkillDir));
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: skillId,
+      companyId,
+      key: `company/${companyId}/unused-skill`,
+      slug: "unused-skill",
+      name: "Unused Skill",
+      description: null,
+      markdown: "# Unused Skill\n",
+      sourceType: "local_path",
+      sourceLocator: missingSkillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+      metadata: { sourceKind: "local_path" },
+    });
+
+    const listed = await svc.list(companyId);
+
+    expect(listed.find((skill) => skill.id === skillId)).toBeUndefined();
+    await expect(svc.getById(companyId, skillId)).resolves.toBeNull();
+  });
+
+  it("clears the missing-source marker when a local-path skill source returns", async () => {
+    const companyId = randomUUID();
+    const skillId = randomUUID();
+    const skillDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-restored-skill-"));
+    cleanupDirs.add(skillDir);
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Restored Skill\n", "utf8");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: skillId,
+      companyId,
+      key: `company/${companyId}/restored-skill`,
+      slug: "restored-skill",
+      name: "Restored Skill",
+      description: null,
+      markdown: "# Restored Skill\n",
+      sourceType: "local_path",
+      sourceLocator: skillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+      metadata: {
+        sourceKind: "local_path",
+        missingSource: {
+          reason: "local_source_missing",
+          sourceType: "local_path",
+          sourceLocator: skillDir,
+          sourcePath: skillDir,
+          detectedAt: "2026-05-28T00:00:00.000Z",
+        },
+      },
+    });
+
+    await svc.list(companyId);
+    const stored = await svc.getById(companyId, skillId);
+
+    expect(stored?.metadata).toEqual({ sourceKind: "local_path" });
   });
 });

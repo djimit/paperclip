@@ -135,6 +135,7 @@ type ParsedSkillImportSource = {
 type SkillSourceMeta = {
   skillKey?: string;
   sourceKind?: string;
+  missingSource?: SkillMissingSourceMarker;
   hostname?: string;
   owner?: string;
   repo?: string;
@@ -157,6 +158,14 @@ type SkillSourceMeta = {
   auditCodes?: string[];
   auditScannedAt?: string;
   auditScanVersion?: string;
+};
+
+type SkillMissingSourceMarker = {
+  reason: "local_source_missing";
+  sourceType: "local_path";
+  sourceLocator: string | null;
+  sourcePath: string | null;
+  detectedAt: string;
 };
 
 export type LocalSkillInventoryMode = "full" | "project_root";
@@ -1343,6 +1352,41 @@ function getSkillMeta(skill: Pick<CompanySkill, "metadata">): SkillSourceMeta {
   return isPlainRecord(skill.metadata) ? skill.metadata as SkillSourceMeta : {};
 }
 
+function getMissingSourceMarker(metadata: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!isPlainRecord(metadata)) return null;
+  return isPlainRecord(metadata.missingSource) ? metadata.missingSource : null;
+}
+
+function buildMissingLocalSourceMarker(
+  skill: Pick<CompanySkill, "sourceLocator" | "metadata">,
+): SkillMissingSourceMarker {
+  const existing = getMissingSourceMarker(skill.metadata);
+  return {
+    reason: "local_source_missing",
+    sourceType: "local_path",
+    sourceLocator: skill.sourceLocator ?? null,
+    sourcePath: normalizeSourceLocatorDirectory(skill.sourceLocator),
+    detectedAt: asString(existing?.detectedAt) ?? new Date().toISOString(),
+  };
+}
+
+function withMissingSourceMarker(
+  metadata: Record<string, unknown> | null,
+  marker: SkillMissingSourceMarker,
+) {
+  return {
+    ...(isPlainRecord(metadata) ? metadata : {}),
+    missingSource: marker,
+  };
+}
+
+function withoutMissingSourceMarker(metadata: Record<string, unknown> | null) {
+  if (!isPlainRecord(metadata) || !isPlainRecord(metadata.missingSource)) return metadata;
+  const next = { ...metadata };
+  delete next.missingSource;
+  return next;
+}
+
 function resolveSkillReference(
   skills: SkillReferenceTarget[],
   reference: string,
@@ -1868,7 +1912,7 @@ export function companySkillService(db: Db) {
     return [];
   }
 
-  async function pruneMissingLocalPathSkills(companyId: string) {
+  async function reconcileLocalPathSkillSources(companyId: string) {
     const rows = await db
       .select({
         id: companySkills.id,
@@ -1876,18 +1920,48 @@ export function companySkillService(db: Db) {
         slug: companySkills.slug,
         sourceType: companySkills.sourceType,
         sourceLocator: companySkills.sourceLocator,
+        metadata: companySkills.metadata,
       })
       .from(companySkills)
       .where(eq(companySkills.companyId, companyId));
     const skills = rows.map((row) => ({
       ...row,
       sourceType: row.sourceType as CompanySkillSourceType,
+      metadata: isPlainRecord(row.metadata) ? row.metadata : null,
     }));
     const missingIds = new Set(await findMissingLocalSkillIds(skills));
-    if (missingIds.size === 0) return;
 
     for (const skill of skills) {
-      if (!missingIds.has(skill.id)) continue;
+      if (skill.sourceType !== "local_path") continue;
+
+      if (!missingIds.has(skill.id)) {
+        if (getMissingSourceMarker(skill.metadata)) {
+          await db
+            .update(companySkills)
+            .set({
+              metadata: withoutMissingSourceMarker(skill.metadata),
+              updatedAt: new Date(),
+            })
+            .where(eq(companySkills.id, skill.id));
+        }
+        continue;
+      }
+
+      const usedByAgents = await usage(companyId, skill.key);
+      if (usedByAgents.length > 0) {
+        const metadata = withMissingSourceMarker(
+          skill.metadata,
+          buildMissingLocalSourceMarker(skill),
+        );
+        if (JSON.stringify(metadata) !== JSON.stringify(skill.metadata ?? {})) {
+          await db
+            .update(companySkills)
+            .set({ metadata, updatedAt: new Date() })
+            .where(eq(companySkills.id, skill.id));
+        }
+        continue;
+      }
+
       await db
         .delete(companySkills)
         .where(eq(companySkills.id, skill.id));
@@ -1912,7 +1986,7 @@ export function companySkillService(db: Db) {
         throw notFound("Company not found");
       }
       await ensureBundledSkills(companyId);
-      await pruneMissingLocalPathSkills(companyId);
+      await reconcileLocalPathSkillSources(companyId);
     })();
 
     skillInventoryRefreshPromises.set(companyId, refreshPromise);
