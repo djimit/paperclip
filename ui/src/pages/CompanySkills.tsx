@@ -570,6 +570,7 @@ function CatalogList({
   kindFilter,
   categoryFilter,
   catalogFilter,
+  installedByKey,
   selectedCatalogRef,
   selectedPath,
   expandedSkillId,
@@ -583,6 +584,7 @@ function CatalogList({
   kindFilter: "all" | "bundled" | "optional";
   categoryFilter: string;
   catalogFilter: string;
+  installedByKey: Map<string, CompanySkillListItem>;
   selectedCatalogRef: string | null;
   selectedPath: string;
   expandedSkillId: string | null;
@@ -609,8 +611,10 @@ function CatalogList({
     );
   }
 
-  const bundled = filtered.filter((skill) => skill.kind === "bundled");
-  const optional = filtered.filter((skill) => skill.kind === "optional");
+  const available = filtered.filter((skill) => !installedByKey.has(skill.key));
+  const installed = filtered.filter((skill) => installedByKey.has(skill.key));
+  const bundled = available.filter((skill) => skill.kind === "bundled");
+  const optional = available.filter((skill) => skill.kind === "optional");
 
   function renderRow(skill: CatalogSkill) {
     const isSelected = selectedCatalogRef === skill.id || selectedCatalogRef === skill.key;
@@ -690,6 +694,14 @@ function CatalogList({
             Optional · {optional.length}
           </div>
           {optional.map(renderRow)}
+        </div>
+      ) : null}
+      {installed.length > 0 ? (
+        <div>
+          <div className="sticky top-0 z-[1] border-b border-border bg-background px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Installed · {installed.length}
+          </div>
+          {installed.map(renderRow)}
         </div>
       ) : null}
     </div>
@@ -2559,6 +2571,7 @@ export function CompanySkills() {
                   kindFilter={catalogKindFilter}
                   categoryFilter={catalogCategoryFilter}
                   catalogFilter={catalogFilter}
+                  installedByKey={installedByKey}
                   selectedCatalogRef={selectedCatalogRef}
                   selectedPath={catalogSelectedPath}
                   expandedSkillId={expandedCatalogSkillId}
