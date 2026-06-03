@@ -12,6 +12,7 @@ interface EntityRowProps {
   to?: string;
   onClick?: () => void;
   className?: string;
+  titleClassName?: string;
   reserveSubtitleSpace?: boolean;
 }
 
@@ -25,6 +26,7 @@ export function EntityRow({
   to,
   onClick,
   className,
+  titleClassName,
   reserveSubtitleSpace,
 }: EntityRowProps) {
   const isClickable = !!(to || onClick);
@@ -38,7 +40,7 @@ export function EntityRow({
   const content = (
     <>
       {leading && <div className="flex items-center gap-2 shrink-0">{leading}</div>}
-      <div className="flex-1 min-w-0">
+      <div className={cn("flex-1 min-w-0", titleClassName)}>
         <div className="flex items-center gap-2">
           {identifier && (
             <span className="text-xs text-muted-foreground font-mono shrink-0 relative top-[1px]">

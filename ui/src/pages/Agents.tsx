@@ -238,6 +238,7 @@ export function Agents() {
               <EntityRow
                 key={agent.id}
                 title={agent.name}
+                titleClassName="min-w-[7rem]"
                 subtitle={`${roleLabels[agent.role] ?? agent.role}${agent.title ? ` - ${agent.title}` : ""}`}
                 to={agentUrl(agent)}
                 className={cn(
@@ -273,11 +274,11 @@ export function Agents() {
                           liveCount={liveRunByAgent.get(agent.id)!.liveCount}
                         />
                       )}
-                      <span className="w-28 whitespace-nowrap text-left font-mono text-xs text-muted-foreground">
+                      <span className="hidden 2xl:inline w-28 whitespace-nowrap text-left font-mono text-xs text-muted-foreground">
                         {getAdapterLabel(agent.adapterType)}
                       </span>
                       <span
-                        className="w-36 truncate text-left font-mono text-xs text-muted-foreground"
+                        className="hidden 2xl:inline w-36 truncate text-left font-mono text-xs text-muted-foreground"
                         title={getConfiguredModel(agent) ?? undefined}
                       >
                         {getConfiguredModel(agent) ?? "—"}
@@ -417,7 +418,7 @@ function OrgTreeNode({
         <span className="relative flex h-2.5 w-2.5 shrink-0">
           <span className={`absolute inline-flex h-full w-full rounded-full ${statusColor}`} />
         </span>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-[7rem]">
           <span className="text-sm font-medium">{node.name}</span>
           <span className="text-xs text-muted-foreground ml-2">
             {roleLabels[node.role] ?? node.role}
@@ -446,11 +447,11 @@ function OrgTreeNode({
             )}
             {agent && (
               <>
-                <span className="w-28 whitespace-nowrap text-left font-mono text-xs text-muted-foreground">
+                <span className="hidden 2xl:inline w-28 whitespace-nowrap text-left font-mono text-xs text-muted-foreground">
                   {getAdapterLabel(agent.adapterType)}
                 </span>
                 <span
-                  className="w-36 truncate text-left font-mono text-xs text-muted-foreground"
+                  className="hidden 2xl:inline w-36 truncate text-left font-mono text-xs text-muted-foreground"
                   title={getConfiguredModel(agent) ?? undefined}
                 >
                   {getConfiguredModel(agent) ?? "—"}
