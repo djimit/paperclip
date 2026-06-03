@@ -801,6 +801,28 @@ export async function preflightLowTrustWorkspaceIsolation(input: {
   return selectedEnvironmentDriver ?? null;
 }
 
+export async function resolveWorkspaceAfterLowTrustPreflight<TWorkspace>(input: {
+  trustPreset: TrustPresetResolution;
+  isolatedWorkspacesEnabled: boolean;
+  effectiveExecutionWorkspaceMode: string | null | undefined;
+  issue: { companyId: string; id?: string | null; projectId?: string | null } | null;
+  resolveSelectedEnvironmentDriver: () => Promise<string | null | undefined>;
+  resolveWorkspace: () => Promise<TWorkspace>;
+}): Promise<{ selectedEnvironmentDriver: string | null; workspace: TWorkspace }> {
+  const selectedEnvironmentDriver = await preflightLowTrustWorkspaceIsolation({
+    trustPreset: input.trustPreset,
+    isolatedWorkspacesEnabled: input.isolatedWorkspacesEnabled,
+    effectiveExecutionWorkspaceMode: input.effectiveExecutionWorkspaceMode,
+    issue: input.issue,
+    resolveSelectedEnvironmentDriver: input.resolveSelectedEnvironmentDriver,
+  });
+
+  return {
+    selectedEnvironmentDriver,
+    workspace: await input.resolveWorkspace(),
+  };
+}
+
 function deriveRepoNameFromRepoUrl(repoUrl: string | null): string | null {
   const trimmed = repoUrl?.trim() ?? "";
   if (!trimmed) return null;
@@ -7485,12 +7507,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       trustPreset.kind === "low_trust_review" && resolvedExecutionWorkspaceMode === "shared_workspace"
         ? "isolated_workspace"
         : resolvedExecutionWorkspaceMode;
-    const resolvedWorkspace = await resolveWorkspaceForRun(
-      agent,
-      context,
-      previousSessionParams,
-      { useProjectWorkspace: requestedExecutionWorkspaceMode !== "agent_default" },
-    );
     const issueRef = issueContext
       ? {
           id: issueContext.id,
@@ -7646,7 +7662,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         ? persistedExecutionWorkspaceMode
         : requestedExecutionWorkspaceMode;
     const selectedEnvironmentId = environmentResolution.environmentId;
-    const lowTrustPreflightEnvironmentDriver = await preflightLowTrustWorkspaceIsolation({
+    const {
+      selectedEnvironmentDriver: lowTrustPreflightEnvironmentDriver,
+      workspace: resolvedWorkspace,
+    } = await resolveWorkspaceAfterLowTrustPreflight({
       trustPreset,
       isolatedWorkspacesEnabled,
       effectiveExecutionWorkspaceMode,
@@ -7665,6 +7684,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         });
         return preflightEnvironment.driver;
       },
+      resolveWorkspace: () =>
+        resolveWorkspaceForRun(
+          agent,
+          context,
+          previousSessionParams,
+          { useProjectWorkspace: requestedExecutionWorkspaceMode !== "agent_default" },
+        ),
     });
     const workspaceManagedConfig = shouldReuseExisting
       ? { ...config }
