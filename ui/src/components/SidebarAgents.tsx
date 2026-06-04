@@ -284,7 +284,8 @@ export function SidebarAgents() {
   );
 
   // IA Phase 5: if any agent has a live run, show only those active agents.
-  // Otherwise fall back to up to RECENT_AGENT_LIMIT agents plus "See all agents".
+  // Otherwise fall back to up to RECENT_AGENT_LIMIT agents. Either way a
+  // "See all agents" link is shown so the full list is always reachable.
   const runningAgents = useMemo(
     () => sortedAgents.filter((agent: Agent) => (liveCountByAgent.get(agent.id) ?? 0) > 0),
     [sortedAgents, liveCountByAgent],
@@ -293,7 +294,9 @@ export function SidebarAgents() {
   const displayedAgents = hasActiveAgents
     ? runningAgents
     : sortedAgents.slice(0, RECENT_AGENT_LIMIT);
-  const showSeeAllLink = !hasActiveAgents && sortedAgents.length > 0;
+  // Always expose "See all agents" whenever there are agents — even in the
+  // active-only state — so users never lose the entry point to the full list.
+  const showSeeAllLink = sortedAgents.length > 0;
 
   const agentMatch = location.pathname.match(/^\/(?:[^/]+\/)?agents\/([^/]+)(?:\/([^/]+))?/);
   const activeAgentId = agentMatch?.[1] ?? null;

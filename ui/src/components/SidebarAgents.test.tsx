@@ -491,7 +491,9 @@ describe("SidebarAgents", () => {
     const labels = agentLinkLabels(container);
     expect(labels).toHaveLength(1);
     expect(labels[0]).toContain("Bravo");
-    expect(seeAllAgentsLink(container)).toBeNull();
+    // PAP-76: the full-list entry point stays visible even when only active
+    // agents are shown.
+    expect(seeAllAgentsLink(container)?.getAttribute("href")).toBe("/agents/all");
   });
 
   it("shows up to 5 recently-active agents plus a See all link when none are running", async () => {
