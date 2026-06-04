@@ -1462,7 +1462,7 @@ export function DesignGuide() {
       {/* ============================================================ */}
       <Section title="Team Catalog">
         <p className="text-sm text-muted-foreground">
-          Components from the Team Catalog browse/install surface (<code className="font-mono text-xs">/teams</code>).
+          Components from the Team Catalog browse/install surface (<code className="font-mono text-xs">/teams-catalog</code>).
           Fixtures are shared with the Storybook stories.
         </p>
 

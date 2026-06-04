@@ -184,6 +184,8 @@ function decodeTeamFilePath(encoded: string | undefined): string | null {
 
 type ParsedRoute = { catalogRef: string | null; filePath: string | null };
 
+const TEAM_CATALOG_ROUTE_ROOT = "/teams-catalog";
+
 function parseTeamRoute(routePath: string | undefined): ParsedRoute {
   if (!routePath) return { catalogRef: null, filePath: null };
   const segments = routePath.split("/").filter(Boolean);
@@ -196,7 +198,7 @@ function parseTeamRoute(routePath: string | undefined): ParsedRoute {
 }
 
 function teamRoute(catalogRef: string, filePath?: string | null): string {
-  const base = `/teams/${encodeURIComponent(catalogRef)}`;
+  const base = `${TEAM_CATALOG_ROUTE_ROOT}/${encodeURIComponent(catalogRef)}`;
   if (filePath) return `${base}/files/${encodeTeamFilePath(filePath)}`;
   return base;
 }
@@ -2184,7 +2186,7 @@ export function TeamCatalog() {
 
   // Preserve the active filter query (search/kind/category/risk) across in-page
   // navigation. Without this, auto-select and team-row / file-tree clicks rebuild
-  // a fresh `/teams/<key>` path from `teamRoute()` and drop the query string, so a
+  // a fresh `/teams-catalog/<key>` path from `teamRoute()` and drop the query string, so a
   // landing `?search=…` unfiltered the list and emptied the search box (PAP-10257
   // follow-up). `applyCompanyPrefix` already preserves query strings.
   const filterQuery = searchParams.toString();
@@ -2199,7 +2201,7 @@ export function TeamCatalog() {
   useEffect(() => {
     setBreadcrumbs([
       { label: "Org Chart", href: "/org" },
-      { label: "Teams", href: "/teams" },
+      { label: "Teams", href: TEAM_CATALOG_ROUTE_ROOT },
     ]);
   }, [setBreadcrumbs]);
 
@@ -2485,7 +2487,7 @@ export function TeamCatalog() {
             {!isDesktop && selectedTeam && (
               <button
                 type="button"
-                onClick={() => navigate(withFilters("/teams"))}
+                onClick={() => navigate(withFilters(TEAM_CATALOG_ROUTE_ROOT))}
                 className="flex items-center gap-1.5 border-b border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
               >
                 <ChevronLeft className="h-4 w-4" /> Back to catalog
