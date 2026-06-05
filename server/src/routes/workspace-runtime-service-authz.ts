@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, heartbeatRuns, issues, projects } from "@paperclipai/db";
+import { isUuidLike } from "@paperclipai/shared";
 import type { Request } from "express";
 import { forbidden } from "../errors.js";
 import { assertCompanyAccess } from "./authz.js";
@@ -19,10 +20,10 @@ const WORKSPACE_RUNTIME_ELIGIBLE_ISSUE_STATUSES: string[] = [
 
 function readRunIssueId(context: Record<string, unknown> | null) {
   const directIssueId = context?.issueId;
-  if (typeof directIssueId === "string" && directIssueId.length > 0) return directIssueId;
+  if (typeof directIssueId === "string" && isUuidLike(directIssueId)) return directIssueId;
   const paperclipIssue = readObject(context?.paperclipIssue);
   const nestedIssueId = paperclipIssue?.id;
-  return typeof nestedIssueId === "string" && nestedIssueId.length > 0 ? nestedIssueId : null;
+  return typeof nestedIssueId === "string" && isUuidLike(nestedIssueId) ? nestedIssueId : null;
 }
 
 async function listReportingSubtreeAgentIds(db: Db, companyId: string, actorAgentId: string) {

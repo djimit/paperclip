@@ -3722,28 +3722,81 @@ export function issueRoutes(
       promotedByActorId: actor.actorId,
       promotedAt,
     });
-    const product = await workProductsSvc.createForIssue(issue.id, issue.companyId, {
-      projectId: issue.projectId ?? null,
-      type: "artifact",
-      provider: "paperclip",
-      externalId: req.body.sourceArtifactId,
-      title: req.body.title,
-      status: "approved",
-      reviewState: "approved",
-      isPrimary: false,
-      healthStatus: "unknown",
-      summary: req.body.summary,
-      metadata: {
-        promotion: {
-          sourceArtifactKind: req.body.sourceArtifactKind,
-          sourceArtifactId: req.body.sourceArtifactId,
-        },
-      },
-      sourceTrust: promotionTrust,
-      createdByRunId: actor.runId ?? null,
+    const product = await db.transaction(async (tx) => {
+      const markPromoted = { sourceTrust: promotionTrust, updatedAt: promotedAt };
+      const updatedSource = await (async () => {
+        if (req.body.sourceArtifactKind === "issue") {
+          return tx
+            .update(issueRows)
+            .set(markPromoted)
+            .where(and(
+              eq(issueRows.id, req.body.sourceArtifactId),
+              eq(issueRows.sourceTrust, sourceTrust),
+            ))
+            .returning({ id: issueRows.id });
+        }
+        if (req.body.sourceArtifactKind === "comment") {
+          return tx
+            .update(issueComments)
+            .set(markPromoted)
+            .where(and(
+              eq(issueComments.id, req.body.sourceArtifactId),
+              eq(issueComments.issueId, issue.id),
+              eq(issueComments.sourceTrust, sourceTrust),
+            ))
+            .returning({ id: issueComments.id });
+        }
+        if (req.body.sourceArtifactKind === "document") {
+          return tx
+            .update(documents)
+            .set(markPromoted)
+            .where(and(
+              eq(documents.id, req.body.sourceArtifactId),
+              eq(documents.sourceTrust, sourceTrust),
+            ))
+            .returning({ id: documents.id });
+        }
+        return tx
+          .update(issueWorkProducts)
+          .set(markPromoted)
+          .where(and(
+            eq(issueWorkProducts.id, req.body.sourceArtifactId),
+            eq(issueWorkProducts.issueId, issue.id),
+            eq(issueWorkProducts.sourceTrust, sourceTrust),
+          ))
+          .returning({ id: issueWorkProducts.id });
+      })();
+      if (!updatedSource[0]) return null;
+
+      return tx
+        .insert(issueWorkProducts)
+        .values({
+          companyId: issue.companyId,
+          issueId: issue.id,
+          projectId: issue.projectId ?? null,
+          type: "artifact",
+          provider: "paperclip",
+          externalId: req.body.sourceArtifactId,
+          title: req.body.title,
+          status: "approved",
+          reviewState: "approved",
+          isPrimary: false,
+          healthStatus: "unknown",
+          summary: req.body.summary,
+          metadata: {
+            promotion: {
+              sourceArtifactKind: req.body.sourceArtifactKind,
+              sourceArtifactId: req.body.sourceArtifactId,
+            },
+          },
+          sourceTrust: promotionTrust,
+          createdByRunId: actor.runId ?? null,
+        })
+        .returning()
+        .then((rows) => rows[0] ?? null);
     });
     if (!product) {
-      res.status(422).json({ error: "Could not create promoted work product" });
+      res.status(422).json({ error: "Source artifact is not quarantined low-trust output" });
       return;
     }
 

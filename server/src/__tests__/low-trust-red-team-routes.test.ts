@@ -1003,5 +1003,38 @@ describeEmbeddedPostgres("low-trust red-team HTTP route regression suite", () =>
     });
     expect(typeof promotion.body.sourceTrust.promotedAt).toBe("string");
     expectNoCanary(promotion.body, fixture.canaries.raw);
+
+    const [promotedSource] = await db
+      .select({ sourceTrust: issueWorkProducts.sourceTrust })
+      .from(issueWorkProducts)
+      .where(eq(issueWorkProducts.id, rawProduct!.id));
+    expect(promotedSource?.sourceTrust).toMatchObject({
+      preset: LOW_TRUST_REVIEW_PRESET,
+      disposition: "promoted",
+      promotedFrom: {
+        artifactKind: "work_product",
+        artifactId: rawProduct!.id,
+        issueId: fixture.issues.assignedReview.id,
+      },
+      promotedByActorType: "user",
+      promotedByActorId: "board-user",
+    });
+
+    const duplicatePromotion = await request(app)
+      .post(`/api/issues/${fixture.issues.assignedReview.id}/low-trust/promotions`)
+      .send({
+        sourceArtifactKind: "work_product",
+        sourceArtifactId: rawProduct!.id,
+        title: "Duplicate sanitized finding",
+        summary: "Should not create another promoted artifact.",
+      });
+    expect(duplicatePromotion.status, JSON.stringify(duplicatePromotion.body)).toBe(422);
+    expect(duplicatePromotion.body.error).toBe("Source artifact is not quarantined low-trust output");
+
+    const productsForSource = await db
+      .select({ id: issueWorkProducts.id })
+      .from(issueWorkProducts)
+      .where(eq(issueWorkProducts.externalId, rawProduct!.id));
+    expect(productsForSource).toHaveLength(1);
   });
 });
