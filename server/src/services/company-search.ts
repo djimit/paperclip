@@ -324,7 +324,7 @@ function artifactResult(artifact: CompanyArtifact, normalizedQuery: string, toke
   return {
     id: artifact.id,
     type: "artifact",
-    score: score + 120,
+    score,
     title: artifact.title,
     href: artifact.href,
     matchedFields: ["artifact"],

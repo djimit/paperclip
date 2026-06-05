@@ -1,5 +1,5 @@
 import { buffer } from "node:stream/consumers";
-import { and, desc, eq, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import {
@@ -18,8 +18,7 @@ import {
   attachmentArtifactWorkProductMetadataSchema,
   COMPANY_ARTIFACTS_MAX_LIMIT,
   companyArtifactsQuerySchema,
-  ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
-  isSystemIssueDocumentKey,
+  SYSTEM_ISSUE_DOCUMENT_KEYS,
   type CompanyArtifact,
   type CompanyArtifactMediaKind,
   type CompanyArtifactsQuery,
@@ -161,7 +160,7 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
         const documentConditions: SQL[] = [
           eq(documents.companyId, companyId),
           or(isNotNull(documents.createdByAgentId), isNotNull(documents.updatedByAgentId))!,
-          sql`${issueDocuments.key} != ${ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY}`,
+          notInArray(issueDocuments.key, SYSTEM_ISSUE_DOCUMENT_KEYS),
         ];
         const documentCursor = cursorCondition(sql<Date>`${documents.updatedAt}`, documentArtifactId, cursor);
         if (documentCursor) documentConditions.push(documentCursor);
@@ -202,7 +201,6 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
           .limit(fetchLimit);
 
         for (const row of documentRows) {
-          if (isSystemIssueDocumentKey(row.key)) continue;
           const identifier = row.issueIdentifier ?? row.issueId;
           artifacts.push({
             id: row.artifactId,

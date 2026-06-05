@@ -2894,7 +2894,7 @@ export function IssueDetail() {
       }
       element.scrollIntoView({ behavior: "smooth", block: "center" });
       element.classList.add("ring-2", "ring-primary/50", "transition-shadow");
-      timer = setTimeout(() => element.classList.remove("ring-2", "ring-primary/50"), 3000);
+      timer = setTimeout(() => element.classList.remove("ring-2", "ring-primary/50", "transition-shadow"), 3000);
     };
     tryScroll();
     return () => {
