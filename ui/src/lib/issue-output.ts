@@ -95,6 +95,7 @@ const DOCUMENT_LIKE_APPLICATION_TYPES = new Set([
   "application/x-javascript",
   "application/x-python",
   "application/x-sh",
+  "application/x-yaml",
   "application/xhtml+xml",
   "application/xml",
   "application/yaml",

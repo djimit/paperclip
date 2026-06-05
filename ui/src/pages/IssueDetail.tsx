@@ -2883,7 +2883,7 @@ export function IssueDetail() {
     () => (attachments ?? []).filter((attachment) => !promotedOutputAttachmentIds.has(attachment.id)),
     [attachments, promotedOutputAttachmentIds],
   );
-  const imageAttachments = attachmentList.filter(isImageAttachment);
+  const imageAttachments = useMemo(() => (attachments ?? []).filter(isImageAttachment), [attachments]);
 
   const handleChatImageClick = useCallback(
     (src: string) => {

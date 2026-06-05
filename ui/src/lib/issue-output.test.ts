@@ -132,6 +132,7 @@ describe("isOutputEligibleContentType", () => {
     expect(isOutputEligibleContentType("text/html")).toBe(false);
     expect(isOutputEligibleContentType("application/xml")).toBe(false);
     expect(isOutputEligibleContentType("text/csv")).toBe(false);
+    expect(isOutputEligibleContentType("application/x-yaml")).toBe(false);
     expect(isOutputEligibleContentType("application/octet-stream", "report.md")).toBe(false);
     expect(isOutputEligibleContentType("application/octet-stream", "notes.txt")).toBe(false);
   });

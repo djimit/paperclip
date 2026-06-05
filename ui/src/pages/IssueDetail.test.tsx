@@ -73,6 +73,7 @@ const mockSetMobileToolbar = vi.hoisted(() => vi.fn());
 const mockPushToast = vi.hoisted(() => vi.fn());
 const mockIssuesListRender = vi.hoisted(() => vi.fn());
 const mockIssueChatThreadRender = vi.hoisted(() => vi.fn());
+const mockImageGalleryRender = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/issues", () => ({
   issuesApi: mockIssuesApi,
@@ -270,7 +271,10 @@ vi.mock("../components/IssueWorkspaceCard", () => ({
 }));
 
 vi.mock("../components/ImageGalleryModal", () => ({
-  ImageGalleryModal: () => null,
+  ImageGalleryModal: (props: { images: IssueAttachment[]; initialIndex: number; open: boolean }) => {
+    mockImageGalleryRender(props);
+    return null;
+  },
 }));
 
 vi.mock("../components/ScrollToBottom", () => ({
@@ -918,6 +922,7 @@ describe("IssueDetail", () => {
     mockIssuesApi.listAcceptedPlanDecompositions.mockResolvedValue([]);
     mockIssuesListRender.mockClear();
     mockIssueChatThreadRender.mockClear();
+    mockImageGalleryRender.mockClear();
   });
 
   afterEach(async () => {
@@ -1499,13 +1504,18 @@ describe("IssueDetail", () => {
       contentType: "video/mp4",
       originalFilename: "demo.mp4",
     });
+    const imageAttachment = createAttachment({
+      id: "33333333-3333-4333-8333-333333333333",
+      contentType: "image/png",
+      originalFilename: "screenshot.png",
+    });
     const markdownAttachment = createAttachment({
       id: "22222222-2222-4222-8222-222222222222",
       contentType: "text/markdown",
       originalFilename: "report.md",
     });
     mockIssuesApi.get.mockResolvedValue(issue);
-    mockIssuesApi.listAttachments.mockResolvedValue([videoAttachment, markdownAttachment]);
+    mockIssuesApi.listAttachments.mockResolvedValue([videoAttachment, imageAttachment, markdownAttachment]);
     mockIssuesApi.listWorkProducts.mockResolvedValue([
       createArtifactWorkProduct({
         id: "wp-video",
@@ -1513,6 +1523,12 @@ describe("IssueDetail", () => {
         contentType: "video/mp4",
         originalFilename: "demo.mp4",
         isPrimary: true,
+      }),
+      createArtifactWorkProduct({
+        id: "wp-image",
+        attachmentId: imageAttachment.id,
+        contentType: "image/png",
+        originalFilename: "screenshot.png",
       }),
       createArtifactWorkProduct({
         id: "wp-markdown",
@@ -1538,6 +1554,9 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("report.md");
     expect(container.textContent).toContain("Attachments1");
     expect(container.querySelectorAll("video")).toHaveLength(1);
+    expect(mockImageGalleryRender.mock.calls.at(-1)?.[0].images.map((attachment: IssueAttachment) => attachment.id)).toEqual([
+      imageAttachment.id,
+    ]);
   });
 
   it("renders Paused by board distinctly and defaults leaf resume to wake the assignee", async () => {
