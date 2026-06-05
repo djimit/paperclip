@@ -160,7 +160,7 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
         const documentConditions: SQL[] = [
           eq(documents.companyId, companyId),
           or(isNotNull(documents.createdByAgentId), isNotNull(documents.updatedByAgentId))!,
-          notInArray(issueDocuments.key, SYSTEM_ISSUE_DOCUMENT_KEYS),
+          notInArray(issueDocuments.key, [...SYSTEM_ISSUE_DOCUMENT_KEYS]),
         ];
         const documentCursor = cursorCondition(sql<Date>`${documents.updatedAt}`, documentArtifactId, cursor);
         if (documentCursor) documentConditions.push(documentCursor);
