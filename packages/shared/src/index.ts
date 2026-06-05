@@ -404,6 +404,7 @@ export type {
   ProjectManagedByPlugin,
   ProjectWorkspace,
   CompanySearchHighlight,
+  CompanySearchArtifactSummary,
   CompanySearchIssueSummary,
   CompanySearchResponse,
   CompanySearchResult,

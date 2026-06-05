@@ -162,6 +162,7 @@ export type {
 export type { Project, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectManagedByPlugin, ProjectWorkspace } from "./project.js";
 export type {
   CompanySearchHighlight,
+  CompanySearchArtifactSummary,
   CompanySearchIssueSummary,
   CompanySearchResponse,
   CompanySearchResult,
