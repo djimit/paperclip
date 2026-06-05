@@ -17,7 +17,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { StatusBadge } from "./StatusBadge";
+import { AgentStatusBadge } from "./StatusBadge";
 import { agentsApi } from "../api/agents";
 import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
@@ -285,7 +285,7 @@ export function AgentActionButtons({
       />
       {showStatus && (
         <span className="hidden sm:inline">
-          <StatusBadge status={agent.status} />
+          <AgentStatusBadge status={agent.status} />
         </span>
       )}
       {children}
