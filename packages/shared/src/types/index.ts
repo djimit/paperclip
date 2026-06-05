@@ -214,6 +214,15 @@ export type {
   AttachmentArtifactWorkProductMetadata,
 } from "./work-product.js";
 export type {
+  CompanyArtifact,
+  CompanyArtifactAgentSummary,
+  CompanyArtifactIssueSummary,
+  CompanyArtifactMediaKind,
+  CompanyArtifactProjectSummary,
+  CompanyArtifactSource,
+  CompanyArtifactsResponse,
+} from "./artifact.js";
+export type {
   Issue,
   IssueWorkMode,
   IssueAssigneeAdapterOverrides,
