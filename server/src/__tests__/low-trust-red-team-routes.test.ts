@@ -61,6 +61,21 @@ async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 
   throw new Error("Timed out waiting for condition");
 }
 
+async function deleteHeartbeatRunsAfterActivityLogDrains(db: Db) {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await db.delete(activityLog);
+    try {
+      await db.delete(heartbeatRuns);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw lastError;
+}
+
 function expectNoCanary(value: unknown, ...markers: string[]) {
   const serialized = JSON.stringify(value);
   for (const marker of markers) expect(serialized).not.toContain(marker);
@@ -512,8 +527,7 @@ describeEmbeddedPostgres("low-trust red-team HTTP route regression suite", () =>
     await db.delete(issueRelations);
     await db.delete(activityLog);
     await db.delete(heartbeatRunEvents);
-    await db.delete(activityLog);
-    await db.delete(heartbeatRuns);
+    await deleteHeartbeatRunsAfterActivityLogDrains(db);
     await db.delete(agentWakeupRequests);
     await db.delete(issues);
     await db.delete(agentRuntimeState);
