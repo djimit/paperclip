@@ -64,6 +64,10 @@ const GENERIC_BINARY_CONTENT_TYPES = new Set([
   "application/x-binary",
 ]);
 
+const BINARY_OUTPUT_APPLICATION_TYPES = new Set([
+  "application/wasm",
+]);
+
 const ZIP_CONTENT_TYPES = new Set([
   "application/zip",
   "application/x-zip",
@@ -87,7 +91,6 @@ const DOCUMENT_LIKE_APPLICATION_TYPES = new Set([
   "application/ld+json",
   "application/sql",
   "application/toml",
-  "application/wasm",
   "application/x-httpd-php",
   "application/x-javascript",
   "application/x-python",
@@ -158,6 +161,7 @@ export function isOutputEligibleContentType(
     type.startsWith("video/") ||
     type.startsWith("image/") ||
     type === "application/pdf" ||
+    BINARY_OUTPUT_APPLICATION_TYPES.has(type) ||
     isZipContentType(type) ||
     GENERIC_BINARY_CONTENT_TYPES.has(type)
   );
@@ -188,6 +192,7 @@ export function getOutputFileGlyph(contentType: string | null | undefined): Outp
   if (type === "application/xml" || type === "text/xml" || type.endsWith("+xml")) {
     return { label: "XML", tone: "bin" };
   }
+  if (type === "application/wasm") return { label: "WASM", tone: "bin" };
   return { label: "BIN", tone: "bin" };
 }
 

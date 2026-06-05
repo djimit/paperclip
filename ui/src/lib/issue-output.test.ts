@@ -109,6 +109,7 @@ describe("getOutputFileGlyph", () => {
     expect(getOutputFileGlyph("text/plain")).toEqual({ label: "TXT", tone: "bin" });
     expect(getOutputFileGlyph("text/markdown")).toEqual({ label: "MD", tone: "bin" });
     expect(getOutputFileGlyph("application/json; charset=utf-8")).toEqual({ label: "JSON", tone: "bin" });
+    expect(getOutputFileGlyph("application/wasm")).toEqual({ label: "WASM", tone: "bin" });
   });
 });
 
@@ -118,6 +119,7 @@ describe("isOutputEligibleContentType", () => {
     expect(isOutputEligibleContentType("image/png")).toBe(true);
     expect(isOutputEligibleContentType("application/pdf")).toBe(true);
     expect(isOutputEligibleContentType("application/vnd.example.bundle+zip")).toBe(true);
+    expect(isOutputEligibleContentType("application/wasm")).toBe(true);
     expect(isOutputEligibleContentType("application/octet-stream")).toBe(true);
     expect(isOutputEligibleContentType("application/octet-stream", "build.bin")).toBe(true);
   });
@@ -175,9 +177,10 @@ describe("getIssueOutputs", () => {
       makeWorkProduct({ id: "image", metadata: artifactMetadata("image/png", "screenshot.png") }),
       makeWorkProduct({ id: "pdf", metadata: artifactMetadata("application/pdf", "brief.pdf") }),
       makeWorkProduct({ id: "zip", metadata: artifactMetadata("application/zip; charset=binary", "bundle.zip") }),
+      makeWorkProduct({ id: "wasm", metadata: artifactMetadata("application/wasm", "module.wasm") }),
       makeWorkProduct({ id: "binary", metadata: artifactMetadata("application/octet-stream", "build.bin") }),
     ]);
-    expect(result.items.map((item) => item.id)).toEqual(["video", "image", "pdf", "zip", "binary"]);
+    expect(result.items.map((item) => item.id)).toEqual(["video", "image", "pdf", "zip", "wasm", "binary"]);
   });
 
   it("orders the explicit primary first, then most recent", () => {
