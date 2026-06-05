@@ -124,6 +124,10 @@ import {
   secretProviderConfigDiscoveryPreviewSchema,
   remoteSecretImportPreviewSchema,
   remoteSecretImportSchema,
+  // Team catalog
+  catalogTeamInstallSchema,
+  catalogTeamListQuerySchema,
+  catalogTeamPreviewSchema,
 } from "@paperclipai/shared";
 
 type JsonSchema = Record<string, unknown>;
@@ -869,6 +873,79 @@ registry.registerPath({
   summary: "Apply company import",
   request: { params: z.object({ companyId: z.string() }) },
   responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized },
+});
+
+// ─── Team Catalog ────────────────────────────────────────────────────────────
+
+registry.registerPath({
+  method: "get",
+  path: "/api/teams/catalog",
+  tags: ["team-catalog"],
+  summary: "List catalog teams",
+  request: { query: catalogTeamListQuerySchema },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/teams/catalog/{catalogId}/files",
+  tags: ["team-catalog"],
+  summary: "Read a catalog team file",
+  request: {
+    params: z.object({ catalogId: z.string() }),
+    query: z.object({
+      ref: z.string().optional(),
+      path: z.string().optional(),
+    }),
+  },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 404: r.notFound },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/teams/catalog/{catalogId}",
+  tags: ["team-catalog"],
+  summary: "Get a catalog team",
+  request: {
+    params: z.object({ catalogId: z.string() }),
+    query: z.object({ ref: z.string().optional() }),
+  },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 404: r.notFound },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/companies/{companyId}/teams/catalog/installed",
+  tags: ["team-catalog"],
+  summary: "List installed catalog teams for a company",
+  request: { params: z.object({ companyId: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/companies/{companyId}/teams/catalog/{catalogId}/preview",
+  tags: ["team-catalog"],
+  summary: "Preview catalog team installation",
+  request: {
+    params: z.object({ companyId: z.string(), catalogId: z.string() }),
+    query: z.object({ ref: z.string().optional() }),
+    body: jsonBody(catalogTeamPreviewSchema),
+  },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/companies/{companyId}/teams/catalog/{catalogId}/install",
+  tags: ["team-catalog"],
+  summary: "Install a catalog team",
+  request: {
+    params: z.object({ companyId: z.string(), catalogId: z.string() }),
+    query: z.object({ ref: z.string().optional() }),
+    body: jsonBody(catalogTeamInstallSchema),
+  },
+  responses: { 201: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
 });
 
 // ─── Agents ──────────────────────────────────────────────────────────────────
