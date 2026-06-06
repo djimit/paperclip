@@ -216,7 +216,7 @@ function SidebarAgentItem({
   );
 }
 
-export function SidebarAgents({ streamlined = true }: { streamlined?: boolean } = {}) {
+export function SidebarAgents({ streamlined = false }: { streamlined?: boolean } = {}) {
   const [open, setOpen] = useState(true);
   const [pendingAgentIds, setPendingAgentIds] = useState<Set<string>>(() => new Set());
   const queryClient = useQueryClient();

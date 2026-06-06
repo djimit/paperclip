@@ -272,6 +272,20 @@ describe("SidebarAgents", () => {
     await flushReact();
   }
 
+  async function renderSidebarAgentsWithDefaultProps() {
+    const currentRoot = createRoot(container);
+    root = currentRoot;
+
+    await act(async () => {
+      currentRoot.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarAgents />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+  }
+
   it("keeps top mode in stored org-aware order", async () => {
     localStorage.setItem("paperclip.agentOrder:company-1:user-1", JSON.stringify(["agent-b", "agent-a", "agent-c"]));
     mockAgentsApi.list.mockResolvedValue([
@@ -550,6 +564,24 @@ describe("SidebarAgents", () => {
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
 
     await renderSidebarAgents(false);
+
+    expect(agentLinkLabels(container)).toHaveLength(7);
+    expect(seeAllAgentsLink(container)).toBeNull();
+  });
+
+  it("defaults to classic mode when rendered outside the Sidebar flag path", async () => {
+    mockAgentsApi.list.mockResolvedValue(
+      Array.from({ length: 7 }, (_, index) =>
+        makeAgent({
+          id: `agent-${index}`,
+          name: `Agent ${index}`,
+          urlKey: `agent-${index}`,
+        }),
+      ),
+    );
+    mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
+
+    await renderSidebarAgentsWithDefaultProps();
 
     expect(agentLinkLabels(container)).toHaveLength(7);
     expect(seeAllAgentsLink(container)).toBeNull();

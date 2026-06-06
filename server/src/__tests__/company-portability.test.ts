@@ -1156,6 +1156,57 @@ describe("company portability", () => {
     }));
   });
 
+  it("normalizes invalid imported project icon names to null", async () => {
+    const portability = companyPortabilityService({} as any);
+
+    companySvc.create.mockResolvedValue({
+      id: "company-imported",
+      name: "Imported Paperclip",
+    });
+    accessSvc.ensureMembership.mockResolvedValue(undefined);
+    agentSvc.list.mockResolvedValue([]);
+    projectSvc.list.mockResolvedValue([]);
+    projectSvc.create.mockResolvedValue({
+      id: "project-imported",
+      name: "Launch",
+      urlKey: "launch",
+    });
+
+    const files = {
+      "COMPANY.md": [
+        "---",
+        'schema: "agentcompanies/v1"',
+        'name: "Imported Paperclip"',
+        "---",
+        "",
+      ].join("\n"),
+      "projects/launch/PROJECT.md": [
+        "---",
+        'name: "Launch"',
+        "---",
+        "",
+      ].join("\n"),
+      ".paperclip.yaml": [
+        'schema: "paperclip/v1"',
+        "projects:",
+        "  launch:",
+        '    icon: "not-a-project-icon"',
+        "",
+      ].join("\n"),
+    };
+
+    await portability.importBundle({
+      source: { type: "inline", rootPath: "paperclip-demo", files },
+      include: { company: true, agents: false, projects: true, issues: false },
+      target: { mode: "new_company", newCompanyName: "Imported Paperclip" },
+      collisionStrategy: "rename",
+    }, "user-1");
+
+    expect(projectSvc.create).toHaveBeenCalledWith("company-imported", expect.objectContaining({
+      icon: null,
+    }));
+  });
+
   it("infers portable git metadata from a local checkout without task warning fan-out", async () => {
     const portability = companyPortabilityService({} as any);
     const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-portability-git-"));

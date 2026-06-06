@@ -35,6 +35,7 @@ import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
+  PROJECT_ICON_NAMES,
   PROJECT_STATUSES,
   ROUTINE_CATCH_UP_POLICIES,
   ROUTINE_CONCURRENCY_POLICIES,
@@ -469,6 +470,10 @@ function isSensitiveEnvKey(key: string) {
 function normalizePortableProjectEnv(value: unknown): AgentEnvConfig | null {
   const parsed = envConfigSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+
+function normalizeProjectIconName(value: string | null | undefined): string | null {
+  return value && PROJECT_ICON_NAMES.includes(value as typeof PROJECT_ICON_NAMES[number]) ? value : null;
 }
 
 function extractPortableScopedEnvInputs(
@@ -4711,7 +4716,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
             leadAgentId: projectLeadAgentId,
             targetDate: manifestProject.targetDate,
             color: manifestProject.color,
-            icon: manifestProject.icon,
+            icon: normalizeProjectIconName(manifestProject.icon),
             status: manifestProject.status && PROJECT_STATUSES.includes(manifestProject.status as any)
               ? manifestProject.status as typeof PROJECT_STATUSES[number]
               : "backlog",
