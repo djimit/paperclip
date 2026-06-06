@@ -12,8 +12,6 @@ import {
   Repeat,
   GitBranch,
   Settings,
-  MessagesSquare,
-  Package,
   FolderOpen,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -75,7 +73,6 @@ export function Sidebar() {
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 pointer-coarse:gap-3 px-3 py-2">
         <div className="flex flex-col gap-0.5">
-          <SidebarNavItem to="/conference-room" label="Conference room" icon={MessagesSquare} />
           {/* New Task button aligned with nav items */}
           <button
             onClick={() => openNewIssue()}
@@ -103,7 +100,6 @@ export function Sidebar() {
           {showWorkspacesLink ? (
             <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
           ) : null}
-          <SidebarNavItem to="/artifacts" label="Artifacts" icon={Package} />
           <SidebarNavItem to="/projects" label="Projects" icon={FolderOpen} />
           <PluginSlotOutlet
             slotTypes={["sidebar"]}
