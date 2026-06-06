@@ -32,7 +32,7 @@ const IDENTIFIER_PATTERN = /^[A-Z]+-\d+$/;
 
 const SCOPE_LABELS: Record<CompanySearchScope, string> = {
   all: "All",
-  issues: "Tasks",
+  issues: "Issues",
   comments: "Comments",
   documents: "Documents",
   artifacts: "Artifacts",
@@ -45,7 +45,7 @@ type SubGroupKey = "issues" | "comments" | "documents" | "artifacts" | "agents" 
 const SUBGROUP_ORDER: SubGroupKey[] = ["issues", "comments", "documents", "artifacts", "agents", "projects"];
 
 const SUBGROUP_LABELS: Record<SubGroupKey, string> = {
-  issues: "Tasks",
+  issues: "Issues",
   comments: "Comments",
   documents: "Documents",
   artifacts: "Artifacts",
@@ -346,7 +346,7 @@ export function Search() {
                 }
               }
             }}
-            placeholder="Search tasks, comments, documents, agents, projects…"
+            placeholder="Search issues, comments, documents, agents, projects…"
             aria-label="Search query"
             className="h-10 pl-9 pr-20 text-sm"
           />
@@ -456,7 +456,7 @@ function SearchTabContent({
         <div>
           <h2 className="text-lg font-semibold">Type to search company memory.</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Tasks, comments, plan documents, agents, projects — same surface, ranked by relevance.
+            Issues, comments, plan documents, agents, projects — same surface, ranked by relevance.
           </p>
         </div>
         {recentSearches.length > 0 ? (
@@ -483,7 +483,7 @@ function SearchTabContent({
         <ul className="space-y-1 text-xs text-muted-foreground">
           <li>
             <span className="font-medium text-foreground">Identifier lookup:</span> type{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-[11px]">PAP-123</code> to jump straight to a task.
+            <code className="rounded bg-muted px-1 py-0.5 text-[11px]">PAP-123</code> to jump straight to an issue.
           </li>
           <li>
             <span className="font-medium text-foreground">Quoted phrases:</span> wrap a phrase in quotes to match the
@@ -506,14 +506,14 @@ function SearchTabContent({
         <div className="text-base font-semibold">Couldn’t run that search</div>
         <p className="text-sm text-muted-foreground">
           {status ? `The server returned ${status}.` : "The request failed."} Your input and filters are still here, so
-          you can retry or fall back to the Tasks filter.
+          you can retry or fall back to the Issues filter.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           <Button onClick={refetch} variant="default" size="sm">
             Retry
           </Button>
           <Button onClick={navigateIssuesFallback} variant="outline" size="sm">
-            Open Tasks filter view
+            Open Issues filter view
           </Button>
         </div>
       </div>
@@ -561,10 +561,10 @@ function SearchTabContent({
           ) : null}
           <Button onClick={openNewIssue} size="sm" variant="default">
             <Plus className="mr-1.5 h-4 w-4" />
-            Create task from this query
+            Create issue from this query
           </Button>
           <Button onClick={navigateIssuesFallback} size="sm" variant="ghost">
-            Open Tasks filter view
+            Open Issues filter view
           </Button>
         </div>
         <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">

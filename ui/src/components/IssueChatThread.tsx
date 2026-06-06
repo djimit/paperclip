@@ -501,7 +501,7 @@ function IssueChatFallbackThread({
           <div className="space-y-1">
             <p className="font-medium">Chat renderer hit an internal state error.</p>
             <p className="text-xs opacity-80">
-              Showing a safe fallback transcript instead of crashing the tasks page.
+              Showing a safe fallback transcript instead of crashing the issues page.
             </p>
           </div>
         </div>
@@ -3534,7 +3534,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
             <div className="min-w-0">
               <div className="text-sm font-medium text-foreground">Drop to upload</div>
               <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                Images insert into the reply. Other files are added to this task.
+                Images insert into the reply. Other files are added to this issue.
               </div>
             </div>
           </div>
@@ -3569,12 +3569,12 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
             const sizeLabel = formatAttachmentSize(attachment.size);
             const statusLabel =
               attachment.status === "uploading"
-                ? "Uploading to task"
+                ? "Uploading to issue"
                 : attachment.status === "error"
                   ? attachment.error ?? "Upload failed"
                   : attachment.inline
                     ? "Inserted inline"
-                    : "Attached to task";
+                    : "Attached to issue";
             return (
               <div
                 key={attachment.id}
@@ -4315,7 +4315,7 @@ export function IssueChatThread({
   const resolvedEmptyMessage = emptyMessage
     ?? (variant === "embedded"
       ? "No run output yet."
-      : "This task conversation is empty. Start with a message below.");
+      : "This issue conversation is empty. Start with a message below.");
   const previousErrorBoundaryMessagesRef = useRef<readonly ThreadMessage[] | null>(null);
   const errorBoundaryResetVersionRef = useRef(0);
   if (previousErrorBoundaryMessagesRef.current !== messages) {
@@ -4405,10 +4405,10 @@ export function IssueChatThread({
                   {legacyRecoverySourceIssue ? (
                     <SystemNotice
                       tone="info"
-                      label="Legacy recovery task"
+                      label="Legacy recovery issue"
                       body={
                         <span>
-                          Legacy recovery task. Newer recovery actions live on the source task
+                          Legacy recovery issue. Newer recovery actions live on the source issue
                           {legacyRecoverySourceIssue.identifier ? (
                             <>
                               {" — "}

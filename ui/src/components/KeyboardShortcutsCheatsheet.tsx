@@ -28,7 +28,7 @@ const sections: ShortcutSection[] = [
     ],
   },
   {
-    title: "Task detail",
+    title: "Issue detail",
     shortcuts: [
       { keys: ["y"], label: "Quick-archive back to inbox" },
       { keys: ["g", "i"], label: "Go to inbox" },
@@ -39,7 +39,7 @@ const sections: ShortcutSection[] = [
     title: "Global",
     shortcuts: [
       { keys: ["/"], label: "Search current page or quick search" },
-      { keys: ["c"], label: "New task" },
+      { keys: ["c"], label: "New issue" },
       { keys: ["["], label: "Toggle sidebar" },
       { keys: ["]"], label: "Toggle panel" },
       { keys: ["?"], label: "Show keyboard shortcuts" },
