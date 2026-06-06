@@ -19,6 +19,7 @@ import { NavLink } from "@/lib/router";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { SidebarAgents } from "./SidebarAgents";
+import { SidebarProjects } from "./SidebarProjects";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
@@ -46,6 +47,11 @@ export function Sidebar() {
   });
   const liveRunCount = liveRuns?.length ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
+  // IA flag (PAP-89): branch the sidebar nav presentation. Default OFF = classic
+  // ("New Issue", "Issues", per-project collapsible, no Projects nav link).
+  // ON = streamlined (current: "New Task", "Tasks", top-level Projects link).
+  // Gating is navigation-only; all routes stay registered in both modes.
+  const streamlined = experimentalSettings?.enableStreamlinedLeftNavigation === true;
 
   const pluginContext = {
     companyId: selectedCompanyId,
@@ -73,14 +79,14 @@ export function Sidebar() {
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 pointer-coarse:gap-3 px-3 py-2">
         <div className="flex flex-col gap-0.5">
-          {/* New Task button aligned with nav items */}
+          {/* New Task / New Issue button aligned with nav items */}
           <button
             onClick={() => openNewIssue()}
             data-slot="icon-button"
             className="flex items-center gap-2.5 px-3 py-2 pointer-coarse:py-1.5 text-[13px] font-medium text-foreground/80 hover:bg-accent/50 hover:text-foreground transition-colors"
           >
             <SquarePen className="h-4 w-4 shrink-0" />
-            <span className="truncate">New Task</span>
+            <span className="truncate">{streamlined ? "New Task" : "New Issue"}</span>
           </button>
           <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
           <SidebarNavItem
@@ -94,13 +100,15 @@ export function Sidebar() {
         </div>
 
         <SidebarSection label="Work">
-          <SidebarNavItem to="/issues" label="Tasks" icon={CircleDot} />
+          <SidebarNavItem to="/issues" label={streamlined ? "Tasks" : "Issues"} icon={CircleDot} />
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
           {showWorkspacesLink ? (
             <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
           ) : null}
-          <SidebarNavItem to="/projects" label="Projects" icon={FolderOpen} />
+          {streamlined ? (
+            <SidebarNavItem to="/projects" label="Projects" icon={FolderOpen} />
+          ) : null}
           <PluginSlotOutlet
             slotTypes={["sidebar"]}
             context={pluginContext}
@@ -116,7 +124,10 @@ export function Sidebar() {
           />
         </SidebarSection>
 
-        <SidebarAgents />
+        {/* Classic mode restores the per-project collapsible below Work. */}
+        {streamlined ? null : <SidebarProjects />}
+
+        <SidebarAgents streamlined={streamlined} />
 
         <SidebarSection label="Company">
           <SidebarNavItem to="/org" label="Org" icon={Network} />
