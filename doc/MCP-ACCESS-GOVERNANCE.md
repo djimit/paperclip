@@ -76,10 +76,10 @@ curl -fsS -X POST \
   -H "Authorization: Bearer $BOARD_API_KEY" \
   -H "Content-Type: application/json" \
   "$PAPERCLIP_URL/api/companies/$COMPANY_ID/tools/examples/safe-read-only-todo-kv/smoke" \
-  -d '{}' | jq '{checks, overall}'
+  -d '{}' | jq '{ok, checks: [.checks[] | {name, ok, decision, reasonCode}]}'
 ```
 
-Expected: `overall: "pass"` with three green checks (`allowed_call`, `denied_call`, `audit_visible`).
+Expected: `ok: true` with three green checks: `allow_read_tool`, `deny_write_tool`, `audit_written`.
 
 If the smoke fails, fix the failing check before introducing any production connection. The bundled fixture only depends on local code, so any failure is a control-plane problem rather than an upstream MCP issue.
 
@@ -249,16 +249,23 @@ Order of evaluation:
 3. Policies in priority order. `block` short-circuits. `require_approval` short-circuits to an action request. `rate_limit` evaluates the counter.
 4. If no policy matched and the profile allowed the tool: `allow`.
 
-To dry-run a policy decision without making a real call:
+To dry-run a policy decision without making a real call. The dry-run endpoint takes a structured `{ companyId, actor, request, runContext? }` body and returns the decision under `.decision`:
 
 ```sh
 curl -fsS -X POST -H "Authorization: Bearer $BOARD_API_KEY" -H "Content-Type: application/json" \
   "$PAPERCLIP_URL/api/companies/$COMPANY_ID/tools/policy/test" \
   -d '{
-    "agentId": "'"$AGENT_ID"'",
-    "toolName": "create_item",
-    "arguments": { "title": "test" }
-  }' | jq '{decision, matchedPolicyIds, reasonCode}'
+    "companyId": "'"$COMPANY_ID"'",
+    "actor": {
+      "actorType": "agent",
+      "actorId": "'"$AGENT_ID"'",
+      "agentId": "'"$AGENT_ID"'"
+    },
+    "request": {
+      "toolName": "create_item",
+      "arguments": { "title": "test" }
+    }
+  }' | jq '{decision: .decision.decision, matchedPolicyIds: .decision.matchedPolicyIds, reasonCode: .decision.reasonCode}'
 ```
 
 Decisions: `allow`, `deny`, `require_approval`, `rate_limited`, `defer_runtime`. `defer_runtime` means the policy engine asked the gateway to consult runtime state (e.g. slot availability) before producing the final verdict.
@@ -269,23 +276,37 @@ When a call resolves to `require_approval`, the gateway opens an **Action Reques
 - the agent, run, and tool identity,
 - a canonical hash of the arguments (so we can match later trust rules),
 - a `signedArguments` payload the approver sees verbatim,
+- a linked issue-thread `request_confirmation` interaction for the in-app card,
 - an expiry.
 
-The human approver reviews the action card in the UI and either approves or rejects. The agent is paused on this exact call until a decision lands.
+The gateway responds to the agent's tool call with HTTP `409`, `reasonCode: "approval_required"`, and the new `actionRequestId` in the body. The agent's run is paused on this exact call until a decision lands. Once approved, the agent retries the same tool call with `approvedActionRequestId` set; the gateway re-validates that the canonical arguments hash matches and then executes the tool.
 
 After approval, the operator can promote that approval into a **trust rule**: a policy of `policyType: trust_rule` that allows the same tool with the same argument shape for the same actor scope, optionally for a limited number of approvals or until an expiry. This is how you avoid clicking *Approve* on every safe repetition of the same action.
 
 ```sh
-# Approve via API (UI does the same)
+# Approve via API (UI does the same). Approval requires companyId — body or query.
 curl -fsS -X POST -H "Authorization: Bearer $BOARD_API_KEY" -H "Content-Type: application/json" \
   "$PAPERCLIP_URL/api/tool-gateway/action-requests/$ACTION_REQUEST_ID/approve" \
-  -d '{ "comment": "Looked correct." }' | jq '{status, decidedAt}'
+  -d '{ "companyId": "'"$COMPANY_ID"'" }' | jq '{id, status, resolvedAt, resolvedByUserId}'
+
+# Retry the original tool call with approvedActionRequestId (the agent does this).
+curl -fsS -X POST -H "X-Paperclip-Tool-Gateway-Token: $GATEWAY_TOKEN" -H "Content-Type: application/json" \
+  "$PAPERCLIP_URL/api/tool-gateway/tools/call" \
+  -d '{
+    "tool": "create_item",
+    "parameters": { "title": "Approved item" },
+    "approvedActionRequestId": "'"$ACTION_REQUEST_ID"'"
+  }' | jq '{invocationId, status, tool, result}'
 
 # Promote the approval to a trust rule
 curl -fsS -X POST -H "Authorization: Bearer $BOARD_API_KEY" -H "Content-Type: application/json" \
   "$PAPERCLIP_URL/api/companies/$COMPANY_ID/tools/action-requests/$ACTION_REQUEST_ID/trust-rule" \
-  -d '{ "approvalThreshold": 10, "expiresAt": "2026-09-01T00:00:00.000Z" }' \
-  | jq '{id, policyType, config}'
+  -d '{
+    "approvalThreshold": 2,
+    "scope": { "includeAgent": true, "includeTool": true },
+    "argumentFilters": { "allowAny": false, "fieldEquals": { "title": "Approved item" } },
+    "expiresAt": "2026-09-01T00:00:00.000Z"
+  }' | jq '{id, policyType, priority, config: {trustRule: .config.trustRule}}'
 
 # Revoke a trust rule (audit-safe; does not delete)
 curl -fsS -X POST -H "Authorization: Bearer $BOARD_API_KEY" -H "Content-Type: application/json" \
@@ -293,7 +314,7 @@ curl -fsS -X POST -H "Authorization: Bearer $BOARD_API_KEY" -H "Content-Type: ap
   -d '{ "reason": "Catalog schema changed." }' | jq '{id, enabled, config: {revokedAt: .config.trustRule.revokedAt}}'
 ```
 
-Trust rules carry `catalogVersionHash` and `schemaHash`. If the upstream tool changes its schema or argument shape, the hash no longer matches and the trust rule stops applying — the next matching call falls back to `require_approval`. This is intentional: an approval is for a specific argument shape, not for "future versions of this tool, sight unseen".
+Trust rules carry the catalog and schema hashes captured at approval time. If the upstream tool changes its schema or the canonical argument hash drifts, the trust rule stops applying — the next matching call falls back to `require_approval`. The retry-with-`approvedActionRequestId` flow enforces the same invariant for a single approval: change the arguments between approval and retry and the call fails with `reasonCode: "signed_arguments_mismatch"`. This is intentional: an approval is for a specific argument shape, not for "future versions of this tool, sight unseen".
 
 ## Runtime slots
 
@@ -331,7 +352,7 @@ curl -fsS -H "Authorization: Bearer $BOARD_API_KEY" \
 Two practical patterns:
 
 - **Per-run timeline:** `GET /api/companies/:companyId/tools/runs/:runId/decisions` returns every policy decision attached to a single agent run. Use this in QA to prove an agent never touched a denied tool.
-- **Approval audit:** `GET /api/tool-gateway/action-requests` returns pending and resolved action requests with approver identity and timestamps. Use this when answering "who approved this?".
+- **Approval audit:** the audit log itself is the approval-request ledger — filter the gateway audit response for `action == "tool_gateway.approval_requested"` to get the queue, and pair each row with the matching `tool_gateway.call_allowed` / `tool_gateway.call_denied` entry to see how the approval resolved. Approver identity lands on the action request itself; once approved, the action request body shows `resolvedByUserId` and `resolvedAt`.
 
 Audit is the source of truth for the security memo. It is intentionally append-only — there is no edit or delete route.
 
@@ -383,8 +404,10 @@ These are intentional gaps as of the MCP Access Governance v1 launch. Track or w
 | Bindings | `POST /api/companies/:companyId/tools/profiles/:id/bind` and `…/unbind` | Targets: `company`, `agent`, `project`, `routine`, `issue`. |
 | Effective profile | `GET /api/companies/:companyId/tools/profiles/effective/agents/:agentId` | Use for QA proofs and debugging selector misses. |
 | Policies | `GET\|POST /api/companies/:companyId/tools/policies`, `PATCH\|DELETE /api/companies/:companyId/tools/policies/:id` | Types: `allow`, `block`, `require_approval`, `rate_limit`, `trust_rule`. |
-| Policy dry-run | `POST /api/companies/:companyId/tools/policy/test` | Returns decision + matched policy IDs. |
-| Action requests | `GET /api/tool-gateway/action-requests`, `POST /api/tool-gateway/action-requests/:id/approve\|reject` | Approval queue. |
+| Policy dry-run | `POST /api/companies/:companyId/tools/policy/test` | Structured `{ companyId, actor, request, runContext? }` body; decision returned under `.decision`. |
+| Gateway sessions | `POST /api/tool-gateway/sessions` | Board callers must supply `companyId`, `agentId`, `runId`; agent JWTs auto-fill from the token. |
+| Gateway calls | `POST /api/tool-gateway/tools/call` | `X-Paperclip-Tool-Gateway-Token` header; body uses `tool` + `parameters`. Approval-required calls respond `409` with `reasonCode: approval_required` and an `actionRequestId`; the agent retries with `approvedActionRequestId`. |
+| Action requests | `POST /api/tool-gateway/action-requests/:id/approve` | Requires `companyId` (body or query). Listing is via the audit log: filter for `tool_gateway.approval_requested`. |
 | Trust rules | `POST /api/companies/:companyId/tools/action-requests/:id/trust-rule`, `POST /api/companies/:companyId/tools/trust-rules/:id/revoke` | Approval-derived allow policies. |
 | Runtime health | `GET /api/companies/:companyId/tools/runtime-health` | Alerts and metrics. Pair with [MCP-RUNTIME-OPERATIONS.md](./MCP-RUNTIME-OPERATIONS.md). |
 | Runtime slots | `GET /api/companies/:companyId/tools/runtime-slots`, `POST /api/tool-gateway/runtime-slots/:id/stop\|restart` | Process supervision. |
