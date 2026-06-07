@@ -137,6 +137,8 @@ export function IssueDocumentsTab({ issueId, companyId, issueIdentifier, agentMa
           <EmptyState
             icon={FileText}
             message="Only the plan document is linked. Add a spec, brief, or report to keep more context here."
+            action="Add document"
+            onAction={() => setLinkPickerOpen(true)}
           />
         )
       ) : (

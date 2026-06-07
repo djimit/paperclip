@@ -156,8 +156,13 @@ function InlineDocumentCard({ doc, docKey }: { doc: CompanyDocumentSummary; docK
         </div>
       </div>
       <div className="mt-3 text-[15px] leading-7 text-muted-foreground">
+        {/*
+          Production renders the body through `MarkdownBody`; this static fixture uses
+          plain prose (no raw markdown literal) so the sign-off screenshot reflects what
+          users actually see rather than printing unrendered "## Goal" syntax.
+        */}
         {docKey === "plan"
-          ? "## Goal\nPreserve inline plan editing while making linked docs discoverable…"
+          ? "Preserve inline plan editing while making linked docs discoverable from the issue."
           : doc.summary}
       </div>
     </div>

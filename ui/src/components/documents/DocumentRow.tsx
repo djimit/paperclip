@@ -89,6 +89,7 @@ export function DocumentRow({ document, to, owner, identifier, selected, company
     <EntityRow
       to={to}
       selected={selected}
+      responsive
       leading={
         <>
           <span
