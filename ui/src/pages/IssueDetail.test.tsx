@@ -3,10 +3,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent, Issue, IssueAttachment, IssueTreeControlPreview, IssueTreeHold, IssueWorkProduct } from "@paperclipai/shared";
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from "react";
+import { NavigationType } from "react-router-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { canBoardResolveRecoveryAction, IssueDetail } from "./IssueDetail";
+import { canBoardResolveRecoveryAction, IssueDetail, shouldScrollIssueDetailToTopOnNavigation } from "./IssueDetail";
 
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -1959,5 +1960,31 @@ describe("canBoardResolveRecoveryAction", () => {
         userId: "user-1",
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldScrollIssueDetailToTopOnNavigation", () => {
+  it("does not scroll when only URL search params changed for the same issue", () => {
+    expect(shouldScrollIssueDetailToTopOnNavigation({
+      previousIssueId: "PAP-10306",
+      nextIssueId: "PAP-10306",
+      navigationType: NavigationType.Push,
+    })).toBe(false);
+  });
+
+  it("scrolls on forward navigation to a different issue", () => {
+    expect(shouldScrollIssueDetailToTopOnNavigation({
+      previousIssueId: "PAP-1",
+      nextIssueId: "PAP-2",
+      navigationType: NavigationType.Push,
+    })).toBe(true);
+  });
+
+  it("does not scroll on browser back or forward restoration", () => {
+    expect(shouldScrollIssueDetailToTopOnNavigation({
+      previousIssueId: "PAP-1",
+      nextIssueId: "PAP-2",
+      navigationType: NavigationType.Pop,
+    })).toBe(false);
   });
 });

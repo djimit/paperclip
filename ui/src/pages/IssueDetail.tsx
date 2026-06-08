@@ -267,6 +267,15 @@ export function canBoardResolveRecoveryAction(
   return membership.membershipRole !== "viewer" && membership.membershipRole !== null;
 }
 
+export function shouldScrollIssueDetailToTopOnNavigation(input: {
+  previousIssueId: string | undefined;
+  nextIssueId: string | undefined;
+  navigationType: ReturnType<typeof useNavigationType>;
+}): boolean {
+  if (input.navigationType === "POP") return false;
+  return input.previousIssueId !== input.nextIssueId;
+}
+
 function resolveRunningIssueRun(
   activeRun: ActiveRunForIssue | null | undefined,
   liveRuns: readonly LiveRunForIssue[] | undefined,
@@ -1312,6 +1321,7 @@ export function IssueDetail() {
   const [pendingCommentComposerFocusKey, setPendingCommentComposerFocusKey] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastMarkedReadIssueIdRef = useRef<string | null>(null);
+  const lastScrollIssueIdRef = useRef<string | undefined>(undefined);
   const commentComposerRef = useRef<IssueChatComposerHandle | null>(null);
   const cancelledQueuedOptimisticCommentIdsRef = useRef(new Set<string>());
   const resolvedIssueDetailState = useMemo(
@@ -2775,7 +2785,9 @@ export function IssueDetail() {
   // Scroll to top on forward navigation (PUSH/REPLACE) so issue doesn't
   // inherit the inbox/issues-list scroll position on mobile.
   useEffect(() => {
-    if (navigationType === "POP") return;
+    const previousIssueId = lastScrollIssueIdRef.current;
+    lastScrollIssueIdRef.current = issueId;
+    if (!shouldScrollIssueDetailToTopOnNavigation({ previousIssueId, nextIssueId: issueId, navigationType })) return;
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     const main = document.getElementById("main-content");
     if (main) main.scrollTop = 0;
