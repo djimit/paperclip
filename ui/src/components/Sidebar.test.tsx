@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const mockHeartbeatsApi = vi.hoisted(() => ({
   liveRunsForCompany: vi.fn(),
@@ -118,7 +119,9 @@ describe("Sidebar", () => {
     flushSync(() => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <Sidebar />
+          <TooltipProvider>
+            <Sidebar />
+          </TooltipProvider>
         </QueryClientProvider>,
       );
     });

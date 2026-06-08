@@ -32,6 +32,8 @@ import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "../lib/utils";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
 import { SidebarCompanyMenu } from "./SidebarCompanyMenu";
@@ -40,6 +42,7 @@ export function Sidebar() {
   const { openNewIssue } = useDialogActions();
   const { selectedCompanyId, selectedCompany } = useCompany();
   const { isMobile, collapsed, peeking, toggleCollapsed, setCollapsed } = useSidebar();
+  const rail = collapsed && !peeking;
   const inboxBadge = useInboxBadge(selectedCompanyId);
   const { data: experimentalSettings } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
@@ -116,20 +119,34 @@ export function Sidebar() {
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 pointer-coarse:gap-3 px-3 py-2">
         <div className="flex flex-col gap-0.5">
           {/* New Task button aligned with nav items */}
-          <button
-            onClick={() => openNewIssue()}
-            data-slot="icon-button"
-            className="flex items-center gap-2.5 px-3 py-2 pointer-coarse:py-1.5 text-[13px] font-medium text-foreground/80 hover:bg-accent/50 hover:text-foreground transition-colors"
-          >
-            <SquarePen className="h-4 w-4 shrink-0" />
-            <span className="truncate">New Task</span>
-          </button>
+          {(() => {
+            const newTaskButton = (
+              <button
+                onClick={() => openNewIssue()}
+                data-slot="icon-button"
+                aria-label={rail ? "New Task" : undefined}
+                className="flex items-center gap-2.5 px-3 py-2 pointer-coarse:py-1.5 text-[13px] font-medium text-foreground/80 hover:bg-accent/50 hover:text-foreground transition-colors"
+              >
+                <SquarePen className="h-4 w-4 shrink-0" />
+                <span className={cn("truncate", rail && "sr-only")}>New Task</span>
+              </button>
+            );
+            return rail ? (
+              <Tooltip>
+                <TooltipTrigger asChild>{newTaskButton}</TooltipTrigger>
+                <TooltipContent side="right">New Task</TooltipContent>
+              </Tooltip>
+            ) : (
+              newTaskButton
+            );
+          })()}
           <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
           <SidebarNavItem
             to="/inbox"
             label="Inbox"
             icon={Inbox}
             badge={inboxBadge.inbox}
+            badgeLabel="unread"
             badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
             alert={inboxBadge.failedRuns > 0}
           />

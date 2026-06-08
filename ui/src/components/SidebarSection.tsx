@@ -189,7 +189,25 @@ export function SidebarSection({
   menu,
   headerAction,
 }: SidebarSectionProps) {
+  const { collapsed, peeking } = useSidebar();
+  const rail = collapsed && !peeking;
   const content = <div className="flex flex-col gap-0.5 mt-0.5">{children}</div>;
+
+  // Collapsed rail: the section header would only show a clipped sliver of its
+  // label, so replace it with a thin divider. The label stays in the a11y tree,
+  // per-section carets/menus are dropped (no room + no toggle target in the
+  // rail), and the items always render so their icons stay reachable.
+  if (rail) {
+    return (
+      <div>
+        <div className="px-3 py-1.5">
+          <span className="sr-only">{label}</span>
+          <div className="h-px bg-border/60" aria-hidden="true" />
+        </div>
+        {content}
+      </div>
+    );
+  }
 
   if (collapsible) {
     return (

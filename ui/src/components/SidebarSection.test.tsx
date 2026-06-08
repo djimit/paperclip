@@ -9,6 +9,8 @@ import { Plus } from "lucide-react";
 
 const sidebarState = vi.hoisted(() => ({
   isMobile: false,
+  collapsed: false,
+  peeking: false,
 }));
 
 vi.mock("@/lib/router", () => ({
@@ -53,6 +55,8 @@ describe("SidebarSection", () => {
 
   beforeEach(() => {
     sidebarState.isMobile = false;
+    sidebarState.collapsed = false;
+    sidebarState.peeking = false;
     container = document.createElement("div");
     document.body.appendChild(container);
     root = null;
@@ -257,6 +261,59 @@ describe("SidebarSection", () => {
       reopenedNewProjectItem?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(onAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces the header with a divider and drops the caret in the collapsed rail", async () => {
+    sidebarState.collapsed = true;
+    const currentRoot = createRoot(container);
+    root = currentRoot;
+
+    await act(async () => {
+      currentRoot.render(
+        <SidebarSection
+          label="Projects"
+          collapsible={{ open: true, onOpenChange: vi.fn() }}
+          menu={{
+            ariaLabel: "Projects section actions",
+            actions: [{ type: "item", label: "Browse projects", href: "/projects" }],
+          }}
+        >
+          <a href="/projects">Projects</a>
+        </SidebarSection>,
+      );
+    });
+    await flushReact();
+
+    // The clipped header text is gone; the caret/menu trigger is not rendered.
+    expect(container.querySelector('button[aria-label="Collapse Projects"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Projects section actions"]')).toBeNull();
+
+    // The label is preserved in the a11y tree (sr-only) and the items still render.
+    const label = Array.from(container.querySelectorAll("span"))
+      .find((element) => element.textContent === "Projects");
+    expect(label?.className).toContain("sr-only");
+    expect(container.querySelector('a[href="/projects"]')).toBeTruthy();
+  });
+
+  it("restores the full header while peeking even when collapsed", async () => {
+    sidebarState.collapsed = true;
+    sidebarState.peeking = true;
+    const currentRoot = createRoot(container);
+    root = currentRoot;
+
+    await act(async () => {
+      currentRoot.render(
+        <SidebarSection label="Projects" collapsible={{ open: true, onOpenChange: vi.fn() }}>
+          <a href="/projects">Projects</a>
+        </SidebarSection>,
+      );
+    });
+    await flushReact();
+
+    const label = Array.from(container.querySelectorAll("span"))
+      .find((element) => element.textContent === "Projects");
+    expect(label?.className).not.toContain("sr-only");
+    expect(container.querySelector('button[aria-label="Collapse Projects"]')).toBeTruthy();
   });
 
   it("keeps section header controls visible on mobile", async () => {

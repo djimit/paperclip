@@ -43,6 +43,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Agent } from "@paperclipai/shared";
 
 /**
@@ -95,6 +96,7 @@ function SidebarAgentItem({
   leaving,
   onLeaveAgent,
   onPauseResume,
+  rail,
   runCount,
   setSidebarOpen,
 }: {
@@ -106,6 +108,7 @@ function SidebarAgentItem({
   leaving: boolean;
   onLeaveAgent: (agent: Agent) => void;
   onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
+  rail: boolean;
   runCount: number;
   setSidebarOpen: (open: boolean) => void;
 }) {
@@ -126,46 +129,58 @@ function SidebarAgentItem({
         ? "Invalid org chain"
       : pauseResumeLabel;
 
+  const link = (
+    <NavLink
+      to={href}
+      state={SIDEBAR_SCROLL_RESET_STATE}
+      onClick={() => {
+        if (isMobile) setSidebarOpen(false);
+      }}
+      className={cn(
+        "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 pointer-coarse:py-1 pr-8 text-[13px] font-medium transition-colors",
+        isActive
+          ? "bg-accent text-foreground"
+          : "text-foreground/80 hover:bg-accent/50 hover:text-foreground"
+      )}
+    >
+      <AgentIcon icon={agent.icon} className="shrink-0 h-3.5 w-3.5 text-muted-foreground" />
+      <span className={cn("flex-1 truncate", rail && "sr-only")}>{agent.name}</span>
+      {!rail && hasInvalidOrgChain ? (
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-label="Invalid reporting chain" />
+      ) : null}
+      {!rail && (agent.pauseReason === "budget" || runCount > 0) && (
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {agent.pauseReason === "budget" ? (
+            <BudgetSidebarMarker title="Agent paused by budget" />
+          ) : null}
+          {runCount > 0 ? (
+            <span className="relative flex h-2 w-2">
+              <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+            </span>
+          ) : null}
+          {runCount > 0 ? (
+            <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">
+              {runCount} live
+            </span>
+          ) : null}
+        </span>
+      )}
+    </NavLink>
+  );
+
   return (
     <div className="group/agent relative flex items-center">
-      <NavLink
-        to={href}
-        state={SIDEBAR_SCROLL_RESET_STATE}
-        onClick={() => {
-          if (isMobile) setSidebarOpen(false);
-        }}
-        className={cn(
-          "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 pointer-coarse:py-1 pr-8 text-[13px] font-medium transition-colors",
-          isActive
-            ? "bg-accent text-foreground"
-            : "text-foreground/80 hover:bg-accent/50 hover:text-foreground"
-        )}
-      >
-        <AgentIcon icon={agent.icon} className="shrink-0 h-3.5 w-3.5 text-muted-foreground" />
-        <span className="flex-1 truncate">{agent.name}</span>
-        {hasInvalidOrgChain ? (
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-label="Invalid reporting chain" />
-        ) : null}
-        {(agent.pauseReason === "budget" || runCount > 0) && (
-          <span className="ml-auto flex items-center gap-1.5 shrink-0">
-            {agent.pauseReason === "budget" ? (
-              <BudgetSidebarMarker title="Agent paused by budget" />
-            ) : null}
-            {runCount > 0 ? (
-              <span className="relative flex h-2 w-2">
-                <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
-              </span>
-            ) : null}
-            {runCount > 0 ? (
-              <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">
-                {runCount} live
-              </span>
-            ) : null}
-          </span>
-        )}
-      </NavLink>
+      {rail ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{link}</TooltipTrigger>
+          <TooltipContent side="right">{agent.name}</TooltipContent>
+        </Tooltip>
+      ) : (
+        link
+      )}
 
+      {!rail && (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -219,6 +234,7 @@ function SidebarAgentItem({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      )}
     </div>
   );
 }
@@ -229,7 +245,8 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
   const queryClient = useQueryClient();
   const { selectedCompanyId } = useCompany();
   const { openNewAgent } = useDialogActions();
-  const { isMobile, setSidebarOpen } = useSidebar();
+  const { isMobile, setSidebarOpen, collapsed, peeking } = useSidebar();
+  const rail = collapsed && !peeking;
   const { pushToast } = useToastActions();
   const location = useLocation();
 
@@ -451,24 +468,36 @@ export function SidebarAgents({ streamlined = false }: { streamlined?: boolean }
             leaving={agentLeaving(agent)}
             onLeaveAgent={leaveAgent}
             onPauseResume={(targetAgent, action) => pauseResumeAgent.mutate({ agent: targetAgent, action })}
+            rail={rail}
             runCount={runCount}
             setSidebarOpen={setSidebarOpen}
           />
         );
       })}
-      {showSeeAllLink && (
-        <Link
-          to="/agents/all"
-          state={SIDEBAR_SCROLL_RESET_STATE}
-          onClick={() => {
-            if (isMobile) setSidebarOpen(false);
-          }}
-          className="flex items-center gap-2.5 px-3 py-1.5 pointer-coarse:py-1 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-        >
-          <Users className="shrink-0 h-3.5 w-3.5" />
-          <span>See all agents</span>
-        </Link>
-      )}
+      {showSeeAllLink && (() => {
+        const seeAllLink = (
+          <Link
+            to="/agents/all"
+            state={SIDEBAR_SCROLL_RESET_STATE}
+            aria-label={rail ? "See all agents" : undefined}
+            onClick={() => {
+              if (isMobile) setSidebarOpen(false);
+            }}
+            className="flex items-center gap-2.5 px-3 py-1.5 pointer-coarse:py-1 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          >
+            <Users className="shrink-0 h-3.5 w-3.5" />
+            <span className={cn(rail && "sr-only")}>See all agents</span>
+          </Link>
+        );
+        return rail ? (
+          <Tooltip>
+            <TooltipTrigger asChild>{seeAllLink}</TooltipTrigger>
+            <TooltipContent side="right">See all agents</TooltipContent>
+          </Tooltip>
+        ) : (
+          seeAllLink
+        );
+      })()}
     </SidebarSection>
   );
 }
