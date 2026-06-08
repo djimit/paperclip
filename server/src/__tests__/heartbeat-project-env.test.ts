@@ -274,11 +274,9 @@ describe("resolveExecutionRunAdapterConfig", () => {
 });
 
 describe("extractMentionedSkillIdsFromSources", () => {
-  it("collects UUID skill mention ids across issue sources", () => {
-    const releaseSkillId = "11111111-1111-4111-8111-111111111111";
-    const browserSkillId = "22222222-2222-4222-8222-222222222222";
-    const releaseHref = buildSkillMentionHref(releaseSkillId, "release-changelog");
-    const browserHref = buildSkillMentionHref(browserSkillId, "agent-browser");
+  it("collects explicit skill mention ids across issue sources", () => {
+    const releaseHref = buildSkillMentionHref("skill-1", "release-changelog");
+    const browserHref = buildSkillMentionHref("skill-2", "agent-browser");
 
     expect(
       extractMentionedSkillIdsFromSources([
@@ -286,19 +284,7 @@ describe("extractMentionedSkillIdsFromSources", () => {
         `And also [/agent-browser](${browserHref})`,
         `Duplicate mention [/release-changelog](${releaseHref})`,
       ]),
-    ).toEqual([releaseSkillId, browserSkillId]);
-  });
-
-  it("ignores legacy non-UUID skill mention ids before runtime database lookup", () => {
-    const validSkillId = "33333333-3333-4333-8333-333333333333";
-    const validHref = buildSkillMentionHref(validSkillId, "greploop");
-    const legacyHref = buildSkillMentionHref("skill-greploop", "greploop");
-
-    expect(
-      extractMentionedSkillIdsFromSources([
-        `Use [/greploop](${legacyHref}) and [/prcheckloop](${validHref})`,
-      ]),
-    ).toEqual([validSkillId]);
+    ).toEqual(["skill-1", "skill-2"]);
   });
 });
 
