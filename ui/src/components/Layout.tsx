@@ -17,7 +17,7 @@ import { MobileBottomNav } from "./MobileBottomNav";
 import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { StandaloneBrowserControls } from "./StandaloneBrowserControls";
-import { ResizableSidebarPane } from "./ResizableSidebarPane";
+import { SidebarShell } from "./SidebarShell";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
 import { useDialogActions } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
@@ -48,7 +48,16 @@ function getCompanyRouteSegment(pathname: string, companyPrefix: string | undefi
 }
 
 export function Layout() {
-  const { sidebarOpen, setSidebarOpen, toggleSidebar, toggleCollapsed, isMobile } = useSidebar();
+  const {
+    sidebarOpen,
+    setSidebarOpen,
+    toggleSidebar,
+    toggleCollapsed,
+    collapsed,
+    peeking,
+    setPeeking,
+    isMobile,
+  } = useSidebar();
   const { openNewIssue, openOnboarding } = useDialogActions();
   const { togglePanelVisible } = usePanel();
   const {
@@ -195,6 +204,54 @@ export function Layout() {
       cancelable: true,
     }));
   }, []);
+
+  // Peek (hover flyout) triggers for the collapsed rail. Opening has a tiny
+  // delay so a pointer merely sweeping across the rail doesn't flash it open;
+  // closing is debounced to avoid flicker on the rail→overlay seam. Keyboard
+  // focus opens immediately so tabbing reaches the full nav. Context gates the
+  // effective `peeking` to desktop + collapsed + hover-capable pointers, so
+  // these handlers are inert otherwise.
+  const peekTimer = useRef<number | null>(null);
+  const clearPeekTimer = useCallback(() => {
+    if (peekTimer.current !== null) {
+      window.clearTimeout(peekTimer.current);
+      peekTimer.current = null;
+    }
+  }, []);
+  const openPeek = useCallback(() => {
+    clearPeekTimer();
+    peekTimer.current = window.setTimeout(() => setPeeking(true), 50);
+  }, [clearPeekTimer, setPeeking]);
+  const openPeekImmediate = useCallback(() => {
+    clearPeekTimer();
+    setPeeking(true);
+  }, [clearPeekTimer, setPeeking]);
+  const closePeek = useCallback(() => {
+    clearPeekTimer();
+    peekTimer.current = window.setTimeout(() => setPeeking(false), 120);
+  }, [clearPeekTimer, setPeeking]);
+
+  // Tidy up any pending peek timer on unmount.
+  useEffect(() => clearPeekTimer, [clearPeekTimer]);
+
+  // Close peek on navigation so it never lingers over a freshly routed page.
+  useEffect(() => {
+    clearPeekTimer();
+    setPeeking(false);
+  }, [location.pathname, clearPeekTimer, setPeeking]);
+
+  // Escape closes an open peek without trapping the pointer.
+  useEffect(() => {
+    if (!peeking) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        clearPeekTimer();
+        setPeeking(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [peeking, clearPeekTimer, setPeeking]);
 
   useCompanyPageMemory();
 
@@ -373,21 +430,28 @@ export function Layout() {
             />
           </div>
         ) : (
-          <div className="flex h-full flex-col shrink-0">
+          <SidebarShell
+            open={sidebarOpen}
+            collapsed={collapsed}
+            peeking={peeking}
+            resizable
+            onPanelMouseEnter={collapsed ? openPeek : undefined}
+            onPanelMouseLeave={collapsed ? closePeek : undefined}
+            onPanelFocusCapture={collapsed ? openPeekImmediate : undefined}
+            onPanelBlurCapture={collapsed ? closePeek : undefined}
+          >
             <div className="flex flex-1 min-h-0">
-              <ResizableSidebarPane open={sidebarOpen} resizable className="h-full shrink-0">
-                {isCompanySettingsRoute ? (
-                  <CompanySettingsSidebar />
-                ) : (
-                  companySidebar
-                )}
-              </ResizableSidebarPane>
+              {isCompanySettingsRoute ? (
+                <CompanySettingsSidebar />
+              ) : (
+                companySidebar
+              )}
             </div>
             <SidebarAccountMenu
               deploymentMode={health?.deploymentMode}
               version={health?.version}
             />
-          </div>
+          </SidebarShell>
         )}
 
         <div className={cn("flex min-w-0 flex-col", isMobile ? "w-full" : "h-full flex-1")}>

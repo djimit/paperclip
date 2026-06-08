@@ -167,6 +167,10 @@ vi.mock("../context/SidebarContext", () => ({
     sidebarOpen: mockSidebarState.sidebarOpen,
     setSidebarOpen: mockSetSidebarOpen,
     toggleSidebar: vi.fn(),
+    toggleCollapsed: vi.fn(),
+    collapsed: false,
+    peeking: false,
+    setPeeking: vi.fn(),
     isMobile: mockSidebarState.isMobile,
   }),
 }));
