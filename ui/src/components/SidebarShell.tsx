@@ -114,8 +114,8 @@ export function SidebarShell({
 
   // Unified width function (plan §5): one code path for every pinned state.
   const expandedWidth = open ? width : 0;
-  const reservedWidth = collapsed ? SIDEBAR_RAIL_WIDTH : expandedWidth;
-  const panelWidth = collapsed && !peeking ? SIDEBAR_RAIL_WIDTH : expandedWidth;
+  const reservedWidth = !open ? 0 : collapsed ? SIDEBAR_RAIL_WIDTH : expandedWidth;
+  const panelWidth = !open ? 0 : collapsed && !peeking ? SIDEBAR_RAIL_WIDTH : expandedWidth;
   const isOverlay = panelWidth > reservedWidth;
 
   // The drag handle can only resize the expanded width, so it is disabled while

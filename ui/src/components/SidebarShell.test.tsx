@@ -147,6 +147,23 @@ describe("SidebarShell", () => {
     expect(handle()).toBeNull();
   });
 
+  it("hides all sidebar width when closed, even if pinned collapsed", () => {
+    window.localStorage.setItem("test.sidebar.width", "320");
+
+    act(() => {
+      root.render(
+        <SidebarShell open={false} collapsed resizable storageKey="test.sidebar.width">
+          <div>Sidebar</div>
+        </SidebarShell>,
+      );
+    });
+
+    expect(spacer().style.width).toBe("0px");
+    expect(panel().style.width).toBe("0px");
+    expect(panel().getAttribute("data-sidebar-overlay")).toBeNull();
+    expect(handle()).toBeNull();
+  });
+
   it("overlays content while peeking without expanding the reserved spacer", () => {
     window.localStorage.setItem("test.sidebar.width", "300");
 
