@@ -58,7 +58,7 @@ export function Layout() {
     peeking,
     setPeeking,
     isMobile,
-    setRouteRequestsCollapsed,
+    setForceCollapsed,
   } = useSidebar();
   const { openNewIssue, openOnboarding } = useDialogActions();
   const { togglePanelVisible } = usePanel();
@@ -143,14 +143,15 @@ export function Layout() {
     queryFn: () => instanceSettingsApi.getGeneral(),
   }).data?.keyboardShortcuts === true;
 
-  // While a secondary sidebar is shown, ask the app sidebar to default to its
-  // collapsed rail (still peek-able). An explicit user pin always wins — that
-  // precedence lives in SidebarContext. Clearing on cleanup restores the
-  // default when navigating off the takeover route (PAP-10695).
+  // A secondary sidebar always collapses the app sidebar to its rail (still
+  // peek-able) — a hard invariant that overrides the user pin while the route
+  // is active, but does NOT mutate the persisted preference. Clearing the force
+  // on cleanup restores the user's expanded/collapsed choice when navigating
+  // off the takeover route (PAP-10694).
   useEffect(() => {
-    setRouteRequestsCollapsed(hasSecondarySidebar);
-    return () => setRouteRequestsCollapsed(false);
-  }, [hasSecondarySidebar, setRouteRequestsCollapsed]);
+    setForceCollapsed(hasSecondarySidebar);
+    return () => setForceCollapsed(false);
+  }, [hasSecondarySidebar, setForceCollapsed]);
 
   useEffect(() => {
     if (companiesLoading || onboardingTriggered.current) return;

@@ -346,9 +346,11 @@ route is active the host collapses the app `<Sidebar/>` to its 64px icon rail
 
 Because the host drives this collapse, a plugin should **not** mount
 `RequestCollapsedSidebar` or otherwise try to collapse the app sidebar itself —
-doing so is redundant and fights the host. The host restores the user's previous
-sidebar state when they navigate away, and an explicit user pin (expanded or
-collapsed) always takes precedence over the route-driven collapse.
+doing so is redundant and fights the host. While your route is active the app
+rail is forced collapsed (its expand toggle is hidden), overriding any user pin
+— a secondary sidebar always collapses the primary. This force never changes the
+user's saved expanded/collapsed preference, so the host restores exactly what
+the user chose as soon as they navigate away.
 
 ## Shared host components
 

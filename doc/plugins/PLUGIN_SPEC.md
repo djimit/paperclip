@@ -1144,9 +1144,13 @@ host's own company-settings sidebar.
 The host owns the collapse. Plugins must not mount `RequestCollapsedSidebar` or
 otherwise attempt to collapse the app sidebar from a `routeSidebar` — the host
 applies the collapse while the route is mounted and restores the previous state
-on navigation away. Collapse precedence is: explicit user pin (expanded or
-collapsed) > route-requested collapse > default expanded, so a user's pin always
-wins over the route-driven collapse.
+on navigation away. The collapse is a **hard invariant**: while a secondary
+sidebar is shown the app rail is forced collapsed and its expand/toggle
+affordance is hidden, *overriding* any user pin. Crucially, this force is
+ephemeral — it never mutates the user's persisted expanded/collapsed preference,
+so navigating back to a normal route restores exactly what the user chose.
+Precedence is therefore: secondary-sidebar force > explicit user pin >
+route-requested collapse (`RequestCollapsedSidebar`) > default expanded.
 
 ## 19.6 Shared Components In `@paperclipai/plugin-sdk/ui`
 

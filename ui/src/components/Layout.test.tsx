@@ -17,7 +17,7 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
-const mockSetRouteRequestsCollapsed = vi.hoisted(() => vi.fn());
+const mockSetForceCollapsed = vi.hoisted(() => vi.fn());
 const mockCompanyState = vi.hoisted(() => ({
   companies: [{ id: "company-1", issuePrefix: "PAP", name: "Paperclip" }],
   selectedCompany: { id: "company-1", issuePrefix: "PAP", name: "Paperclip" },
@@ -173,11 +173,14 @@ vi.mock("../context/SidebarContext", () => ({
     toggleSidebar: vi.fn(),
     toggleCollapsed: vi.fn(),
     collapsed: mockSidebarState.collapsed,
+    collapseLocked: false,
     peeking: mockSidebarState.peeking,
     setPeeking: mockSetPeeking,
     isMobile: mockSidebarState.isMobile,
+    forceCollapsed: false,
+    setForceCollapsed: mockSetForceCollapsed,
     routeRequestsCollapsed: false,
-    setRouteRequestsCollapsed: mockSetRouteRequestsCollapsed,
+    setRouteRequestsCollapsed: vi.fn(),
   }),
 }));
 
@@ -410,7 +413,7 @@ describe("Layout", () => {
     expect(container.textContent).not.toContain("Instance sidebar");
     expect(container.textContent).not.toContain("Plugin route sidebar");
     // The route asks the host to collapse the app sidebar to its rail.
-    expect(mockSetRouteRequestsCollapsed).toHaveBeenCalledWith(true);
+    expect(mockSetForceCollapsed).toHaveBeenCalledWith(true);
 
     await act(async () => {
       root.unmount();
@@ -474,7 +477,7 @@ describe("Layout", () => {
     expect(container.textContent).toContain("Main company nav");
     expect(container.textContent).not.toContain("Company rail");
     expect(container.textContent).not.toContain("Plugin route sidebar");
-    expect(mockSetRouteRequestsCollapsed).toHaveBeenCalledWith(true);
+    expect(mockSetForceCollapsed).toHaveBeenCalledWith(true);
 
     await act(async () => {
       root.unmount();
@@ -529,7 +532,7 @@ describe("Layout", () => {
     expect(container.textContent).toContain("Main company nav");
     expect(container.textContent).not.toContain("Company settings sidebar");
     expect(container.textContent).not.toContain("Instance sidebar");
-    expect(mockSetRouteRequestsCollapsed).toHaveBeenCalledWith(true);
+    expect(mockSetForceCollapsed).toHaveBeenCalledWith(true);
 
     await act(async () => {
       root.unmount();
@@ -713,8 +716,8 @@ describe("Layout", () => {
     expect(container.textContent).toContain("Main company nav");
     expect(container.textContent).not.toContain("Plugin route sidebar");
     // No secondary pane, so the route must not force the sidebar collapsed.
-    expect(mockSetRouteRequestsCollapsed).not.toHaveBeenCalledWith(true);
-    expect(mockSetRouteRequestsCollapsed).toHaveBeenCalledWith(false);
+    expect(mockSetForceCollapsed).not.toHaveBeenCalledWith(true);
+    expect(mockSetForceCollapsed).toHaveBeenCalledWith(false);
 
     await act(async () => {
       root.unmount();

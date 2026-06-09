@@ -41,7 +41,7 @@ import { SidebarCompanyMenu } from "./SidebarCompanyMenu";
 export function Sidebar() {
   const { openNewIssue } = useDialogActions();
   const { selectedCompanyId, selectedCompany } = useCompany();
-  const { isMobile, collapsed, peeking, toggleCollapsed, setCollapsed } = useSidebar();
+  const { isMobile, collapsed, collapseLocked, peeking, toggleCollapsed, setCollapsed } = useSidebar();
   const rail = collapsed && !peeking;
   const inboxBadge = useInboxBadge(selectedCompanyId);
   const { data: experimentalSettings } = useQuery({
@@ -94,8 +94,10 @@ export function Sidebar() {
             {/* Desktop-only collapse/expand affordance. While peeking (hover flyout
                 over the collapsed rail) it becomes a Pin that promotes the peek to a
                 pinned-expanded sidebar; otherwise it toggles the pinned rail. Mobile
-                uses the off-canvas drawer, so this control is hidden there. */}
-            {!isMobile ? (
+                uses the off-canvas drawer, so this control is hidden there. It is
+                also hidden while a secondary sidebar forces the rail (collapseLocked):
+                the user cannot expand the primary while a secondary sidebar is shown. */}
+            {!isMobile && !collapseLocked ? (
               peeking ? (
                 <Button
                   variant="ghost"

@@ -18,12 +18,23 @@ interface SidebarContextValue {
   collapsed: boolean;
   setCollapsed: (next: boolean) => void;
   toggleCollapsed: () => void;
+  // True while a secondary sidebar forces the rail: the collapse is locked, so
+  // the expand/toggle affordance must be hidden/inert. Desktop-only.
+  collapseLocked: boolean;
   // Ephemeral peek (hover flyout). Only meaningful on desktop, collapsed,
   // hover-capable pointer. Never persisted.
   peeking: boolean;
   setPeeking: (next: boolean) => void;
-  // Route-requested collapse: a route may default the app sidebar to collapsed.
-  // Lower precedence than an explicit user pin. Wired by Layout/routes (Task 5).
+  // Hard, ephemeral collapse forced by an active secondary sidebar (settings,
+  // plugin `routeSidebar`, …). HIGHER precedence than the user pin — the rule
+  // is "a secondary sidebar always collapses the primary" — but it never
+  // mutates the persisted pin, so leaving the route restores the preference.
+  // Wired by Layout (PAP-10694).
+  forceCollapsed: boolean;
+  setForceCollapsed: (next: boolean) => void;
+  // Route-requested collapse: a route may *default* the app sidebar to
+  // collapsed. LOWER precedence than an explicit user pin. Wired by routes via
+  // RequestCollapsedSidebar.
   routeRequestsCollapsed: boolean;
   setRouteRequestsCollapsed: (next: boolean) => void;
 }
@@ -84,6 +95,7 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
   // `null` = unpinned; an explicit user pin takes precedence over route request.
   const [userCollapsed, setUserCollapsed] = useState<boolean | null>(() => readStoredCollapsed());
   const [routeRequestsCollapsed, setRouteRequestsCollapsed] = useState(false);
+  const [forceCollapsed, setForceCollapsed] = useState(false);
   const [rawPeeking, setRawPeeking] = useState(false);
   const [pointerCanPeek, setPointerCanPeek] = useState(() => readPointerCanPeek());
 
@@ -105,11 +117,16 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
     return () => mql.removeEventListener("change", onChange);
   }, []);
 
-  // Precedence (highest wins): explicit user pin > route request > default expanded.
-  const desktopCollapsed = userCollapsed !== null ? userCollapsed : routeRequestsCollapsed;
+  // Precedence (highest wins): forced (active secondary sidebar) > explicit user
+  // pin > route request > default expanded. The force is ephemeral and never
+  // touches the persisted pin, so dropping it restores the user's preference.
+  const pinnedOrRequested = userCollapsed !== null ? userCollapsed : routeRequestsCollapsed;
+  const desktopCollapsed = forceCollapsed || pinnedOrRequested;
   // Collapsed/peek are desktop-only; mobile always uses the drawer. The user
   // pin is preserved across the breakpoint and reapplies on the desktop side.
   const collapsed = isMobile ? false : desktopCollapsed;
+  // While forced, the pin is locked: the expand/toggle affordance is inert.
+  const collapseLocked = !isMobile && forceCollapsed;
   // Peek only applies when collapsed on a hover-capable pointer.
   const peeking = rawPeeking && collapsed && pointerCanPeek;
 
@@ -119,8 +136,11 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleCollapsed = useCallback(() => {
-    setCollapsed(!desktopCollapsed);
-  }, [desktopCollapsed, setCollapsed]);
+    // While a secondary sidebar forces the rail, the toggle is locked: it must
+    // neither expand the rail nor mutate the persisted preference.
+    if (forceCollapsed) return;
+    setCollapsed(!pinnedOrRequested);
+  }, [forceCollapsed, pinnedOrRequested, setCollapsed]);
 
   const setPeeking = useCallback((next: boolean) => {
     setRawPeeking(next);
@@ -137,8 +157,11 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
       collapsed,
       setCollapsed,
       toggleCollapsed,
+      collapseLocked,
       peeking,
       setPeeking,
+      forceCollapsed,
+      setForceCollapsed,
       routeRequestsCollapsed,
       setRouteRequestsCollapsed,
     }),
@@ -149,8 +172,10 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
       collapsed,
       setCollapsed,
       toggleCollapsed,
+      collapseLocked,
       peeking,
       setPeeking,
+      forceCollapsed,
       routeRequestsCollapsed,
     ],
   );
