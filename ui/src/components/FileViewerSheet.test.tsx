@@ -75,6 +75,21 @@ describe("FileContentViewer", () => {
     expect(markup).toContain("break-words");
   });
 
+  it("reserves code gutter space for at least four digit line numbers", () => {
+    const markup = renderToStaticMarkup(
+      <FileContentViewer
+        content={content({
+          content: {
+            encoding: "utf8",
+            data: "one\ntwo\nthree",
+          },
+        })}
+        highlightedLine={null}
+      />,
+    );
+    expect(markup).toContain("calc(4ch + 2rem)");
+  });
+
   it("renders video previews with native controls", () => {
     const markup = renderToStaticMarkup(
       <FileContentViewer

@@ -198,6 +198,12 @@ describe("WorkspaceFileBrowser", () => {
     expect(onOpen).toHaveBeenCalledWith({ path: "ui/src/pages/IssueDetail.tsx", workspace: "auto" });
   });
 
+  it("can render without autofocus when embedded beside a preview", () => {
+    useQueryMock.mockReturnValue(ok(availableResponse([createItem()])));
+    renderBrowser(vi.fn(), { autoFocusSearch: false });
+    expect(container.querySelector("input")?.hasAttribute("autofocus")).toBe(false);
+  });
+
   it("does not render a Recent/All toggle", () => {
     useQueryMock.mockReturnValue(ok(availableResponse([createItem()])));
     renderBrowser();

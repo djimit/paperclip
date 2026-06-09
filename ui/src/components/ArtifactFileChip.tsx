@@ -50,7 +50,7 @@ export function ArtifactFileChip({
   const content = (
     <>
       {showIcon ? <FileCode2 aria-hidden="true" className="h-3 w-3 shrink-0 opacity-70" /> : null}
-      <span className="truncate max-w-[38ch]">{display}</span>
+      <span className="max-w-full whitespace-normal break-all text-left">{display}</span>
     </>
   );
 

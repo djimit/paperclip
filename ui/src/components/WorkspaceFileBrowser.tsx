@@ -219,6 +219,7 @@ export interface WorkspaceFileBrowserProps {
   initialFolderPath?: string | null;
   initialProjectId?: string | null;
   initialWorkspaceId?: string | null;
+  autoFocusSearch?: boolean;
   className?: string;
 }
 
@@ -230,6 +231,7 @@ export function WorkspaceFileBrowser({
   initialFolderPath,
   initialProjectId,
   initialWorkspaceId,
+  autoFocusSearch = true,
   className,
 }: WorkspaceFileBrowserProps) {
   const [source, setSource] = useState<BrowserSource>(
@@ -512,7 +514,7 @@ export function WorkspaceFileBrowser({
           aria-expanded={items.length > 0}
           aria-controls={items.length > 0 ? listboxId : undefined}
           aria-activedescendant={activeOptionId}
-          autoFocus
+          autoFocus={autoFocusSearch}
           autoComplete="off"
           spellCheck={false}
           className="h-8 pl-8 font-mono text-xs"

@@ -94,6 +94,11 @@ function basename(path: string): string {
   return idx < 0 ? path : path.slice(idx + 1);
 }
 
+function dirname(path: string): string | null {
+  const idx = path.lastIndexOf("/");
+  return idx < 0 ? null : path.slice(0, idx);
+}
+
 function middleTruncatePath(path: string, maxLen = 80): string {
   if (path.length <= maxLen) return path;
   const head = path.slice(0, Math.floor(maxLen / 2) - 1);
@@ -267,7 +272,7 @@ export function FileContentViewer({ content, highlightedLine, onLoaded }: FileCo
     );
   }
 
-  const gutterWidth = `${Math.max(2, String(lines.length).length)}ch`;
+  const gutterWidth = `calc(${Math.max(4, String(lines.length).length)}ch + 2rem)`;
 
   return (
     <div
@@ -299,7 +304,7 @@ export function FileContentViewer({ content, highlightedLine, onLoaded }: FileCo
                   isHighlighted &&
                     "opacity-100 bg-[var(--paperclip-code-highlight-bg,rgba(250,204,21,0.12))] border-l-2 border-[var(--paperclip-code-highlight-border,rgb(234,179,8))]",
                 )}
-                style={{ width: gutterWidth }}
+                style={{ width: gutterWidth, minWidth: gutterWidth }}
               >
                 {lineNumber}
               </span>
@@ -626,28 +631,45 @@ export function FileViewerSheet({
             {announcement}
           </div>
           {state ? (
-            <FileViewerBody
-              resolveQuery={resolveQuery}
-              contentQuery={contentQuery}
-              elapsedMs={elapsedMs}
-              canPreview={canPreview}
-              highlightedLine={state.line ?? null}
-              onRetry={handleRetry}
-              onSetAnnouncement={setAnnouncement}
-              onFallbackToProject={
-                state.workspace !== "project" && !state.projectId && !state.workspaceId
-                  ? () =>
-                      viewer.open({
-                        path: state.path,
-                        line: state.line,
-                        column: state.column,
-                        workspace: "project",
-                        projectId: null,
-                        workspaceId: null,
-                      })
-                  : null
-              }
-            />
+            <div className="flex min-h-0 flex-1">
+              <aside className="hidden min-h-0 w-80 shrink-0 border-r border-border bg-muted/20 sm:flex">
+                <WorkspaceFileBrowser
+                  key={`${state.projectId ?? ""}:${state.workspaceId ?? ""}:${dirname(state.path) ?? ""}`}
+                  issueId={issueId}
+                  companyId={companyId}
+                  onOpen={handleBrowseOpen}
+                  initialFolderPath={dirname(state.path)}
+                  initialProjectId={state.projectId}
+                  initialWorkspaceId={state.workspaceId}
+                  autoFocusSearch={false}
+                  className="min-h-0 flex-1 p-3"
+                />
+              </aside>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <FileViewerBody
+                  resolveQuery={resolveQuery}
+                  contentQuery={contentQuery}
+                  elapsedMs={elapsedMs}
+                  canPreview={canPreview}
+                  highlightedLine={state.line ?? null}
+                  onRetry={handleRetry}
+                  onSetAnnouncement={setAnnouncement}
+                  onFallbackToProject={
+                    state.workspace !== "project" && !state.projectId && !state.workspaceId
+                      ? () =>
+                          viewer.open({
+                            path: state.path,
+                            line: state.line,
+                            column: state.column,
+                            workspace: "project",
+                            projectId: null,
+                            workspaceId: null,
+                          })
+                      : null
+                  }
+                />
+              </div>
+            </div>
           ) : browseMode ? (
             <WorkspaceFileBrowser
               issueId={issueId}
