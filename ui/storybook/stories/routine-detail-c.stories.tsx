@@ -270,8 +270,8 @@ function RoutineCShell({ initialSection = "overview", dirty = false }: { initial
 
   return (
     <RoutineDetailContext.Provider value={ctx}>
-      <div className="flex h-[900px] flex-col bg-background text-foreground">
-        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-6">
+      <div className="flex h-[900px] flex-col overflow-y-auto bg-background text-foreground">
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-6">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <span className="truncate text-base font-semibold">{routine.title}</span>
             <Badge variant="outline" className="hidden shrink-0 gap-1.5 text-xs text-muted-foreground sm:inline-flex">
@@ -297,7 +297,7 @@ function RoutineCShell({ initialSection = "overview", dirty = false }: { initial
             hasLiveRun={false}
             onNavigate={setSection}
           />
-          <main className="min-w-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
+          <main className="min-w-0 flex-1 px-4 pb-6 pt-10 md:px-8">
             <section className={isEditable ? "mx-auto w-full max-w-3xl" : "w-full"}>
               <h2 className="mb-4 text-lg font-semibold">{SECTION_TITLES[section]}</h2>
               <SectionBody section={section} />
