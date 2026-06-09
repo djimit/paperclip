@@ -36,7 +36,7 @@ import { useCompany } from "@/context/CompanyContext";
 import { useDialogActions } from "@/context/DialogContext";
 import { useCompanyOrder } from "@/hooks/useCompanyOrder";
 import { queryKeys } from "@/lib/queryKeys";
-import { cn } from "@/lib/utils";
+import { cn, SIDEBAR_RAIL_HIDDEN_LABEL } from "@/lib/utils";
 import { useSidebar } from "../context/SidebarContext";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 
@@ -235,7 +235,7 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
         >
           <span className="flex min-w-0 flex-1 items-center gap-2">
             {selectedCompany ? <WorkspaceIcon company={selectedCompany} /> : null}
-            <span className={cn("truncate text-sm font-bold text-foreground", rail && "sr-only")}>
+            <span className={cn("truncate text-sm font-bold text-foreground", rail && SIDEBAR_RAIL_HIDDEN_LABEL)}>
               {selectedCompany?.name ?? "Select workspace"}
             </span>
           </span>

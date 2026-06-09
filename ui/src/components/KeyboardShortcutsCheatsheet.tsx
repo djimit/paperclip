@@ -11,11 +11,13 @@ interface ShortcutEntry {
 // Platform-appropriate label for the Cmd/Ctrl modifier so the cheatsheet shows
 // the same key the user actually presses (re-pointed in the collapsible sidebar
 // work — Cmd/Ctrl+B toggles the rail).
-const META_KEY =
-  typeof navigator !== "undefined" &&
-  /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "")
-    ? "⌘"
-    : "Ctrl";
+function getPlatformLabel() {
+  if (typeof navigator === "undefined") return "";
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  return nav.userAgentData?.platform || navigator.userAgent || "";
+}
+
+const META_KEY = /Mac|iPhone|iPad|iPod/.test(getPlatformLabel()) ? "⌘" : "Ctrl";
 
 interface ShortcutSection {
   title: string;
