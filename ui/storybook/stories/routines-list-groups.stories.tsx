@@ -54,10 +54,9 @@ function GroupedList() {
               onOpenChange={(open) =>
                 setCollapsed((prev) => (open ? prev.filter((k) => k !== group.key) : [...prev, group.key]))
               }
-              className="overflow-hidden rounded-lg border border-border"
             >
               {group.label ? (
-                <div className={`flex items-center gap-2 px-3 py-2${isOpen ? " border-b border-border" : ""}`}>
+                <div className={`flex items-center gap-2 rounded-lg border border-border px-3 py-2${isOpen ? " mb-1" : ""}`}>
                   <CollapsibleTrigger className="flex items-center gap-1.5">
                     <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform [[data-state=open]>&]:rotate-90" />
                     <span className="text-sm font-semibold uppercase tracking-wide">{group.label}</span>

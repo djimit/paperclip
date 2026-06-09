@@ -899,12 +899,11 @@ export function Routines() {
                           : [...routineViewState.collapsedGroups, group.key],
                       });
                     }}
-                    className="overflow-hidden rounded-lg border border-border"
                   >
                     {group.label ? (
                       <div
-                        className={`flex items-center gap-2 px-3 py-2${
-                          isOpen ? " border-b border-border" : ""
+                        className={`flex items-center gap-2 rounded-lg border border-border px-3 py-2${
+                          isOpen ? " mb-1" : ""
                         }`}
                       >
                         <CollapsibleTrigger className="flex items-center gap-1.5">
