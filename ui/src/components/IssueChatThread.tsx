@@ -1569,16 +1569,172 @@ function IssueChatAssistantMessage({
 
   const followUpRequested = custom.followUpRequested === true;
 
+  const kind = typeof custom.kind === "string" ? custom.kind : null;
+  const hasCommentText = message.content.some(
+    (part) => part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0,
+  );
+  // A genuine posted agent comment (kind "comment" with real text) renders in a
+  // left-aligned neutral bubble — the mirror of the human blue bubble. Run
+  // activity (chain-of-thought, tool calls, waiting shimmer, "worked N min")
+  // keeps the existing flat / metadata treatment (PAP-95 rev 6).
+  const isGenuineComment =
+    kind === "comment" && !!commentId && !isRunning && (hasCommentText || deleted);
+
+  const agentAvatar = (
+    <Avatar size="sm" className="shrink-0">
+      {agentIcon ? (
+        <AvatarFallback><AgentIcon icon={agentIcon} className="h-3.5 w-3.5" /></AvatarFallback>
+      ) : (
+        <AvatarFallback>{initialsForName(authorName)}</AvatarFallback>
+      )}
+    </Avatar>
+  );
+
+  const messageActionBar = (
+    <div className="mt-2 flex items-center gap-1">
+      <button
+        type="button"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title="Copy message"
+        aria-label="Copy message"
+        onClick={() => {
+          void navigator.clipboard.writeText(copyText).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          });
+        }}
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+      {commentId && onVote ? (
+        <IssueChatFeedbackButtons
+          activeVote={activeVote}
+          sharingPreference={feedbackDataSharingPreference}
+          termsUrl={feedbackTermsUrl ?? null}
+          onVote={handleVote}
+        />
+      ) : null}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <a
+            href={anchorId ? `#${anchorId}` : undefined}
+            className="text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+          >
+            {message.createdAt ? commentDateLabel(message.createdAt) : ""}
+          </a>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs">
+          {message.createdAt ? formatDateTime(message.createdAt) : ""}
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="text-muted-foreground hover:text-foreground"
+            title="More actions"
+            aria-label="More actions"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onClick={() => {
+              void navigator.clipboard.writeText(copyText);
+            }}
+          >
+            <Copy className="mr-2 h-3.5 w-3.5" />
+            Copy message
+          </DropdownMenuItem>
+          {canStopRun && onStopRun && runId ? (
+            <DropdownMenuItem
+              disabled={isStoppingRun}
+              className={cn(
+                stopRunVariant === "pause"
+                  ? "text-amber-700 focus:text-amber-800 dark:text-amber-300 dark:focus:text-amber-200"
+                  : "text-red-700 focus:text-red-800 dark:text-red-300 dark:focus:text-red-200",
+              )}
+              onSelect={() => {
+                void onStopRun(runId);
+              }}
+            >
+              {stopRunVariant === "pause" ? (
+                <PauseCircle className="mr-2 h-3.5 w-3.5" />
+              ) : (
+                <Square className="mr-2 h-3.5 w-3.5 fill-current" />
+              )}
+              {isStoppingRun ? stoppingRunLabel : stopRunLabel}
+            </DropdownMenuItem>
+          ) : null}
+          {runHref ? (
+            <DropdownMenuItem asChild>
+              <Link to={runHref} target="_blank" rel="noreferrer noopener">
+                <Search className="mr-2 h-3.5 w-3.5" />
+                View run
+              </Link>
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+
+  // Genuine agent comment → neutral left-aligned bubble (mirror of the human
+  // blue bubble in IssueChatUserMessage). See PAP-95 rev 6.
+  if (isGenuineComment) {
+    return (
+      <div id={anchorId}>
+        <div className="group flex items-end gap-2 py-1.5">
+          {agentAvatar}
+          <div className="flex min-w-0 max-w-[85%] flex-col items-start">
+            <div className="mb-1 flex items-center gap-2 px-1">
+              <span className="text-sm font-medium text-foreground">{authorName}</span>
+              <SourceTrustBadge sourceTrust={sourceTrust} artifactLabel="comment" />
+              {followUpRequested ? (
+                <Badge variant="outline" className="text-[10px] uppercase tracking-[0.14em]">
+                  Follow-up
+                </Badge>
+              ) : null}
+            </div>
+            <div
+              className={cn(
+                "min-w-0 max-w-full overflow-hidden break-words rounded-2xl rounded-bl-[4px] px-4 py-2.5",
+                deleted ? "bg-muted/50 text-muted-foreground" : "bg-muted",
+              )}
+            >
+              {deleted ? (
+                <div className="text-sm italic text-muted-foreground">Comment deleted</div>
+              ) : (
+                <div className="min-w-0 max-w-full space-y-3">
+                  <IssueChatAssistantParts message={message} hasCoT={false} />
+                  {notices.length > 0 ? (
+                    <div className="space-y-2">
+                      {notices.map((notice, index) => (
+                        <div
+                          key={`${message.id}:notice:${index}`}
+                          className="rounded-sm border border-border/60 bg-accent/20 px-3 py-2 text-sm text-muted-foreground"
+                        >
+                          {notice}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+            {!deleted ? messageActionBar : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div id={anchorId}>
       <div className="flex items-start gap-2.5 py-1.5">
-        <Avatar size="sm" className="shrink-0">
-          {agentIcon ? (
-            <AvatarFallback><AgentIcon icon={agentIcon} className="h-3.5 w-3.5" /></AvatarFallback>
-          ) : (
-            <AvatarFallback>{initialsForName(authorName)}</AvatarFallback>
-          )}
-        </Avatar>
+        {agentAvatar}
 
         <div className="min-w-0 flex-1">
           {isFoldable ? (
@@ -1651,94 +1807,7 @@ function IssueChatAssistantMessage({
                 ) : null}
               </div>
 
-              <div className="mt-2 flex items-center gap-1">
-                <button
-                  type="button"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  title="Copy message"
-                  aria-label="Copy message"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(copyText).then(() => {
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 2000);
-                    });
-                  }}
-                >
-                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                </button>
-                {commentId && onVote ? (
-                  <IssueChatFeedbackButtons
-                    activeVote={activeVote}
-                    sharingPreference={feedbackDataSharingPreference}
-                    termsUrl={feedbackTermsUrl ?? null}
-                    onVote={handleVote}
-                  />
-                ) : null}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <a
-                      href={anchorId ? `#${anchorId}` : undefined}
-                      className="text-[11px] text-muted-foreground hover:text-foreground hover:underline"
-                    >
-                      {message.createdAt ? commentDateLabel(message.createdAt) : ""}
-                    </a>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="text-xs">
-                    {message.createdAt ? formatDateTime(message.createdAt) : ""}
-                  </TooltipContent>
-                </Tooltip>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      className="text-muted-foreground hover:text-foreground"
-                      title="More actions"
-                      aria-label="More actions"
-                    >
-                      <MoreHorizontal className="h-3.5 w-3.5" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      onClick={() => {
-                        void navigator.clipboard.writeText(copyText);
-                      }}
-                    >
-                      <Copy className="mr-2 h-3.5 w-3.5" />
-                      Copy message
-                    </DropdownMenuItem>
-                    {canStopRun && onStopRun && runId ? (
-                      <DropdownMenuItem
-                        disabled={isStoppingRun}
-                        className={cn(
-                          stopRunVariant === "pause"
-                            ? "text-amber-700 focus:text-amber-800 dark:text-amber-300 dark:focus:text-amber-200"
-                            : "text-red-700 focus:text-red-800 dark:text-red-300 dark:focus:text-red-200",
-                        )}
-                        onSelect={() => {
-                          void onStopRun(runId);
-                        }}
-                      >
-                        {stopRunVariant === "pause" ? (
-                          <PauseCircle className="mr-2 h-3.5 w-3.5" />
-                        ) : (
-                          <Square className="mr-2 h-3.5 w-3.5 fill-current" />
-                        )}
-                        {isStoppingRun ? stoppingRunLabel : stopRunLabel}
-                      </DropdownMenuItem>
-                    ) : null}
-                    {runHref ? (
-                      <DropdownMenuItem asChild>
-                        <Link to={runHref} target="_blank" rel="noreferrer noopener">
-                          <Search className="mr-2 h-3.5 w-3.5" />
-                          View run
-                        </Link>
-                      </DropdownMenuItem>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
+              {messageActionBar}
             </>
           ) : null}
         </div>

@@ -1331,6 +1331,50 @@ describe("IssueChatThread", () => {
     });
   });
 
+  it("renders a genuine agent comment in a neutral left-aligned bubble (PAP-97 rev 6)", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[{
+              id: "comment-agent-bubble",
+              companyId: "company-1",
+              issueId: "issue-1",
+              authorAgentId: "agent-1",
+              authorUserId: null,
+              body: "Here is my agent reply.",
+              authorType: "agent" as const,
+              presentation: null,
+              metadata: null,
+              createdAt: new Date("2026-04-06T12:00:00.000Z"),
+              updatedAt: new Date("2026-04-06T12:00:00.000Z"),
+            }]}
+            currentUserId="user-board"
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const bubble = Array.from(container.querySelectorAll("div")).find(
+      (el) => el.className.includes("bg-muted") && el.className.includes("rounded-bl-[4px]"),
+    );
+    expect(bubble).toBeDefined();
+    expect(bubble?.textContent).toContain("Here is my agent reply.");
+    // Neutral, not the human liveness-blue bubble.
+    expect(bubble?.className).not.toContain("bg-[#2563EB]");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("confirms and invokes delete only for the current user's normal comments", async () => {
     const root = createRoot(container);
     const onDeleteComment = vi.fn(async () => {});
