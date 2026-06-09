@@ -16,6 +16,20 @@ function act(callback: () => void | Promise<void>) {
   return result;
 }
 
+async function waitForExpectation(assertion: () => void) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+  }
+  throw lastError;
+}
+
 const useQueryMock = vi.fn();
 const LIST_LIMIT = 100;
 
@@ -758,18 +772,19 @@ describe("WorkspaceFileBrowser", () => {
       selectedPath,
     });
 
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-
-    const pageTwoCall = useQueryMock.mock.calls.find(
-      ([options]) => options.queryKey?.[4]?.path === folderPath && options.queryKey[4].offset === LIST_LIMIT * 2,
-    );
-    expect(pageTwoCall?.[0].queryKey[4]).toMatchObject({ path: folderPath, offset: LIST_LIMIT * 2 });
-    const selected = Array.from(container.querySelectorAll('[role="treeitem"]')).find(
-      (el) => el.getAttribute("title") === selectedPath,
-    );
-    expect(selected?.getAttribute("aria-selected")).toBe("true");
-    expect(container.textContent).toContain("WorkspaceFileBrowser.tsx");
+    await waitForExpectation(() => {
+      const pageTwoCall = useQueryMock.mock.calls.find(
+        ([options]) => options.queryKey?.[4]?.path === folderPath && options.queryKey[4].offset === LIST_LIMIT * 2,
+      );
+      expect(pageTwoCall?.[0].queryKey[4]).toMatchObject({ path: folderPath, offset: LIST_LIMIT * 2 });
+    });
+    await waitForExpectation(() => {
+      const selected = Array.from(container.querySelectorAll('[role="treeitem"]')).find(
+        (el) => el.getAttribute("title") === selectedPath,
+      );
+      expect(selected?.getAttribute("aria-selected")).toBe("true");
+      expect(container.textContent).toContain("WorkspaceFileBrowser.tsx");
+    });
   });
 
   it("lets breadcrumb folders navigate to parent directories", () => {
