@@ -319,9 +319,49 @@ describeEmbeddedPostgres("pipeline routes", () => {
     );
   });
 
-  it("returns 404 for cross-company pipeline access", async () => {
+  it("returns 404 for cross-company pipeline route classes", async () => {
     const company = await seedCompany();
-    const [pipeline] = await db.insert(pipelines).values({ companyId: company.id, key: "x", name: "X" }).returning();
+    const ownerHttp = request(app(boardActor));
+    const pipeline = await ownerHttp
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({
+        key: "cross-company",
+        name: "Cross-company",
+        stages: [
+          { key: "intake", name: "Intake", kind: "open", position: 100 },
+          { key: "review", name: "Review", kind: "review", position: 200, config: { approveToStageKey: "done", rejectToStageKey: "cancelled" } },
+          { key: "done", name: "Done", kind: "done", position: 900 },
+          { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
+        ],
+      })
+      .expect(201);
+    await ownerHttp.put(`/api/pipelines/${pipeline.body.id}/documents/guidance`).send({ body: "Use the rubric." }).expect(200);
+    const createdCase = await ownerHttp
+      .post(`/api/pipelines/${pipeline.body.id}/cases`)
+      .send({ caseKey: "cross-company", title: "Cross-company case" })
+      .expect(201);
+    const caseId = createdCase.body.case.id as string;
+    await ownerHttp.post(`/api/cases/${caseId}/transition`).send({ toStageKey: "review", expectedVersion: 1 }).expect(200);
+    const [manualIssue] = await db.insert(issues).values({
+      companyId: company.id,
+      title: "Manual work issue",
+      status: "todo",
+      priority: "medium",
+    }).returning();
+    const issueLink = await ownerHttp
+      .post(`/api/cases/${caseId}/issue-links`)
+      .send({ issueId: manualIssue!.id, role: "work" })
+      .expect(201);
+    const [routine] = await db.insert(routines).values({ companyId: company.id, title: "Routine" }).returning();
+    await db.insert(pipelineAutomationExecutions).values({
+      companyId: company.id,
+      caseId,
+      automationId: "retry-me",
+      triggeringEventId: randomUUID(),
+      routineId: routine!.id,
+      status: "failed",
+      error: "boom",
+    });
     const otherAgent: Express.Request["actor"] = {
       type: "agent",
       agentId: randomUUID(),
@@ -329,9 +369,57 @@ describeEmbeddedPostgres("pipeline routes", () => {
       runId: randomUUID(),
       source: "agent_key",
     };
+    const wrongCompanyHttp = request(app(otherAgent));
+    const routes = [
+      { name: "pipeline detail", method: "get", path: `/api/pipelines/${pipeline.body.id}` },
+      { name: "case detail", method: "get", path: `/api/cases/${caseId}` },
+      { name: "review inbox", method: "get", path: `/api/companies/${company.id}/review-cases` },
+      {
+        name: "review bulk mutation",
+        method: "post",
+        path: `/api/companies/${company.id}/review-cases/bulk`,
+        body: { items: [{ caseId, decision: "approve", expectedVersion: 2 }] },
+      },
+      {
+        name: "review detail mutation",
+        method: "post",
+        path: `/api/cases/${caseId}/review`,
+        body: { decision: "approve", expectedVersion: 2 },
+      },
+      { name: "document read", method: "get", path: `/api/pipelines/${pipeline.body.id}/documents/guidance` },
+      {
+        name: "document write",
+        method: "put",
+        path: `/api/pipelines/${pipeline.body.id}/documents/guidance`,
+        body: { body: "wrong-company update" },
+      },
+      {
+        name: "issue-link create mutation",
+        method: "post",
+        path: `/api/cases/${caseId}/issue-links`,
+        body: { issueId: manualIssue!.id, role: "work" },
+      },
+      {
+        name: "issue-link delete mutation",
+        method: "delete",
+        path: `/api/cases/${caseId}/issue-links/${issueLink.body.id}`,
+      },
+      {
+        name: "automation retry mutation",
+        method: "post",
+        path: `/api/cases/${caseId}/automations/retry-me/retry`,
+      },
+      { name: "case events", method: "get", path: `/api/cases/${caseId}/events` },
+      { name: "case rollup", method: "get", path: `/api/cases/${caseId}/rollup` },
+      { name: "case context-pack", method: "get", path: `/api/cases/${caseId}/context-pack` },
+    ] as const;
 
-    const res = await request(app(otherAgent)).get(`/api/pipelines/${pipeline!.id}`);
-    expect(res.status).toBe(404);
+    for (const route of routes) {
+      let requestBuilder = wrongCompanyHttp[route.method](route.path);
+      if ("body" in route) requestBuilder = requestBuilder.send(route.body);
+      const res = await requestBuilder;
+      expect(res.status, route.name).toBe(404);
+    }
   });
 
   it("rejects agent mutations without a run id", async () => {
