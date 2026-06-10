@@ -537,10 +537,37 @@
   animation: agent-cap-online-pulse 1.8s ease-in-out infinite;
 }
 
+/* Blue online-glow variant (PAP-125) — the Option 4 wizard's review step.
+   Same breathing ring as the green pulse, recoloured to brand blue (#2563eb). */
+@keyframes agent-cap-online-pulse-blue {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, #2563eb 0%, transparent);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in oklab, #2563eb 22%, transparent);
+    transform: scale(1.03);
+  }
+}
+
+.agent-cap-online-blue {
+  animation: agent-cap-online-pulse-blue 1.8s ease-in-out infinite;
+}
+
+/* Cross-fade the stacked dashed/solid border layers as the capsule evolves
+   in place (border-style itself is not animatable). */
+.agent-cap-layer {
+  transition: opacity 0.5s ease;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-cap-slot,
-  .agent-cap-online {
+  .agent-cap-online,
+  .agent-cap-online-blue {
     animation: none;
+  }
+  .agent-cap-layer {
+    transition: none;
   }
   .agent-cap-liquid {
     animation: none;

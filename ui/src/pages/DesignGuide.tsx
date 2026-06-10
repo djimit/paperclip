@@ -631,6 +631,10 @@ export function DesignGuide() {
               <AgentCapsule state="online" gradient={5} />
               <span className="text-xs text-muted-foreground">online</span>
             </div>
+            <div className="flex flex-col items-center gap-2">
+              <AgentCapsule state="online" gradient={5} glow="blue" />
+              <span className="text-xs text-muted-foreground">online · blue glow</span>
+            </div>
           </div>
         </SubSection>
         <SubSection title="Sizes">

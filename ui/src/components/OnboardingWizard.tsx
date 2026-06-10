@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
 import { useLocation, useNavigate, useParams } from "@/lib/router";
@@ -8,7 +8,6 @@ import { companiesApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
-import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
 import { Dialog, DialogPortal } from "@/components/ui/dialog";
 import {
@@ -40,7 +39,6 @@ import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
 import { DEFAULT_OPENCODE_LOCAL_MODEL, isValidOpenCodeModelId } from "@paperclipai/adapter-opencode-local";
 import { resolveRouteOnboardingOptions } from "../lib/onboarding-route";
-import { OnboardingChat } from "./OnboardingChat";
 import { AsciiArtAnimation } from "./AsciiArtAnimation";
 import { FrontDoor } from "./FrontDoor";
 import { AgentCapsule } from "./AgentCapsule";
@@ -54,15 +52,10 @@ import {
   Check,
   Loader2,
   ChevronDown,
-  X,
-  Plus,
-  Pencil,
-  Trash2,
-  MessageSquare,
-  BarChart3
+  X
 } from "lucide-react";
 
-type Step = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+type Step = 0 | 1 | 2 | 3 | 4 | 5;
 // Plugin/external adapters use arbitrary type ids, so this mirrors the master
 // wizard's registry-driven approach rather than a fixed union.
 type AdapterType = string;
@@ -81,250 +74,6 @@ function buildMissionFromQuestionnaire(q1: string, q2: string, q3: string, q4: s
   if (q4.trim()) parts.push(`Success looks like ${q4.trim().toLowerCase()}.`);
   return parts.join(" ");
 }
-
-interface HiringRole {
-  id: string;
-  name: string;
-  summary: string;
-  expertise: string;
-  priorities: string;
-  boundaries: string;
-  tools: string;
-  communication: string;
-  collaboration: string;
-  enabled: boolean;
-  editing: boolean;
-}
-
-function nextRoleId(): string {
-  return crypto.randomUUID();
-}
-
-const EMPTY_ROLE: Omit<HiringRole, "id"> = {
-  name: "", summary: "", expertise: "", priorities: "",
-  boundaries: "", tools: "", communication: "", collaboration: "",
-  enabled: true, editing: true,
-};
-
-function cleanMd(s: string): string {
-  return s
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^\s*[-*]\s+/, "")
-    .trim();
-}
-
-/**
- * Map a bullet label (e.g. "Why:", "Responsibilities:") to a structured field.
- */
-function classifyBullet(label: string): keyof HiringRole | null {
-  const l = label.toLowerCase();
-  if (/^why|^purpose|^overview/.test(l)) return "summary";
-  if (/^responsibilit|^expertise|^duties|^scope|^what they do/.test(l)) return "expertise";
-  if (/^priorit|^focus|^goals|^kpi|^metric/.test(l)) return "priorities";
-  if (/^boundar|^limit|^should not|^don.?t|^avoid|^out of scope/.test(l)) return "boundaries";
-  if (/^tool|^permission|^access|^tech|^stack/.test(l)) return "tools";
-  if (/^communic|^tone|^style|^voice/.test(l)) return "communication";
-  if (/^collaborat|^escalat|^report|^works with|^interact|^coordinat/.test(l)) return "collaboration";
-  if (/^recommend|^profile|^ideal|^skills|^qualif/.test(l)) return "expertise";
-  return null;
-}
-
-/**
- * Parse a markdown hiring plan into structured roles.
- * Handles two document formats:
- *   Format A: "## Role N: Name" with ### sub-sections (Priorities, Boundaries, etc.)
- *   Format B: "### N. Name" with **Label:** bullets
- * Fallback: comment-style bullet/table patterns.
- */
-function parseHiringPlan(markdown: string): HiringRole[] {
-  const roles: HiringRole[] = [];
-  const seen = new Set<string>();
-
-  // Find role headings: any ## or ### heading with a numbered prefix
-  // like "### 1. Content Marketing Officer" or "## Role 2: CTO"
-  const rolePattern = /^(?:role\s*\d+[:.]\s*|\d+[.)]\s*)/i;
-  const roleHeadingRegex = /^#{2,3}\s+(.+)$/gm;
-  let match: RegExpExecArray | null;
-
-  // First pass: find all role heading positions (start of line, end of heading)
-  const rolePositions: Array<{ title: string; lineStart: number; contentStart: number }> = [];
-  while ((match = roleHeadingRegex.exec(markdown)) !== null) {
-    if (rolePattern.test(match[1].trim())) {
-      rolePositions.push({
-        title: match[1].trim(),
-        lineStart: match.index,
-        contentStart: match.index + match[0].length,
-      });
-    }
-  }
-
-  // Extract body for each role (from heading end to the next role heading start)
-  const sections: Array<{ title: string; body: string }> = [];
-  for (let i = 0; i < rolePositions.length; i++) {
-    const end = i + 1 < rolePositions.length
-      ? rolePositions[i + 1].lineStart
-      : markdown.length;
-    sections.push({
-      title: rolePositions[i].title,
-      body: markdown.slice(rolePositions[i].contentStart, end),
-    });
-  }
-
-  for (const section of sections) {
-    if (!rolePattern.test(section.title)) continue;
-
-    let name = section.title
-      .replace(/^role\s*\d*[:.]\s*/i, "")
-      .replace(/^\d+[.)]\s*/, "")
-      .replace(/\*\*/g, "")
-      .trim();
-
-    if (name.length < 3) continue;
-    if (seen.has(name.toLowerCase())) continue;
-
-    // Parse content: **Label:** bullets and ### sub-sections
-    const fields: Record<string, string[]> = {};
-    let currentField: string | null = null;
-    const bodyLines = section.body.split("\n");
-
-    for (let i = 0; i < bodyLines.length; i++) {
-      const raw = bodyLines[i];
-      const trimmed = raw.trim();
-      if (!trimmed) continue;
-
-      // ### sub-section heading (e.g. "### Priorities")
-      const subHeadingMatch = trimmed.match(/^###\s+(.+)/);
-      if (subHeadingMatch) {
-        const label = subHeadingMatch[1].trim();
-        const field = classifyBullet(label);
-        currentField = (field && field !== "id" && field !== "name" && field !== "enabled" && field !== "editing")
-          ? field : "expertise";
-        continue;
-      }
-
-      // **Label:** inline (e.g. "**Why:** text")
-      const boldLabelMatch = trimmed.match(/^\*\*([^*:]+)[*:]*\*\*[:\s]*(.*)/);
-      const bulletLabelMatch = !boldLabelMatch && trimmed.match(/^\s*[-*]\s+\*\*([^*:]+)[*:]*\*\*[:\s]*(.*)/);
-      const labelMatch = boldLabelMatch ?? bulletLabelMatch;
-
-      if (labelMatch) {
-        const label = labelMatch[1]!.trim();
-        const value = cleanMd(labelMatch[2] ?? "");
-        const field = classifyBullet(label);
-        currentField = (field && field !== "id" && field !== "name" && field !== "enabled" && field !== "editing")
-          ? field : "expertise";
-        if (!fields[currentField]) fields[currentField] = [];
-        if (value) fields[currentField].push(value);
-        continue;
-      }
-
-      // Regular content line under current field
-      if (currentField) {
-        const cleaned = cleanMd(trimmed);
-        if (cleaned) {
-          if (!fields[currentField]) fields[currentField] = [];
-          fields[currentField].push(cleaned);
-        }
-      }
-    }
-
-    const join = (arr?: string[]) => (arr ?? []).join("\n");
-
-    // If no summary, use first line of expertise
-    let summary = join(fields.summary);
-    let expertise = join(fields.expertise);
-    if (!summary && expertise) {
-      const lines = expertise.split("\n");
-      summary = lines[0];
-      expertise = lines.slice(1).join("\n");
-    }
-
-    seen.add(name.toLowerCase());
-    roles.push({
-      id: nextRoleId(),
-      name,
-      summary,
-      expertise,
-      priorities: join(fields.priorities),
-      boundaries: join(fields.boundaries),
-      tools: join(fields.tools),
-      communication: join(fields.communication),
-      collaboration: join(fields.collaboration),
-      enabled: true,
-      editing: false,
-    });
-  }
-
-  // Fallback: parse "N. **Role Name**" with indented bullets
-  if (roles.length === 0) {
-    const lines = markdown.split("\n");
-    let currentRole: HiringRole | null = null;
-
-    for (const line of lines) {
-      // Match numbered bold role: "1. **Content Strategist / CMO**"
-      const roleMatch = line.match(/^\s*(\d+)[.)]\s+\*\*([^*]+)\*\*/);
-      if (roleMatch) {
-        const name = roleMatch[2].trim();
-        const skip = /^(phase|month|step|update|note|question|summary|timeline|priority|plan|total|budget|immediate|hire)/i;
-        if (skip.test(name) || name.length < 3) continue;
-        if (seen.has(name.toLowerCase())) continue;
-
-        if (currentRole) roles.push(currentRole);
-        seen.add(name.toLowerCase());
-        currentRole = {
-          id: nextRoleId(), name, summary: "", expertise: "",
-          priorities: "", boundaries: "", tools: "",
-          communication: "", collaboration: "",
-          enabled: true, editing: false,
-        };
-        continue;
-      }
-
-      // Indented bullets under the current role
-      if (currentRole && /^\s{2,}[-*]/.test(line)) {
-        const cleaned = cleanMd(line);
-        if (!cleaned) continue;
-
-        // Check for labeled bullet: "*Why first:*", "**Tools:**", etc.
-        const labelMatch = cleaned.match(/^\*?([^:*]+)\*?:\s*(.*)/);
-        if (labelMatch) {
-          const field = classifyBullet(labelMatch[1].trim());
-          if (field && typeof currentRole[field] === "string") {
-            const val = labelMatch[2].trim();
-            const prev = currentRole[field] as string;
-            (currentRole as unknown as Record<string, unknown>)[field] = prev
-              ? `${prev}\n${val}` : val;
-            continue;
-          }
-        }
-        // Default: add to expertise
-        currentRole.expertise = currentRole.expertise
-          ? `${currentRole.expertise}\n${cleaned}` : cleaned;
-      }
-    }
-    if (currentRole) roles.push(currentRole);
-
-    // If summary is empty, use the first line of expertise as the summary
-    for (const role of roles) {
-      if (!role.summary && role.expertise) {
-        const firstLine = role.expertise.split("\n")[0];
-        if (firstLine) {
-          role.summary = firstLine;
-          role.expertise = role.expertise.split("\n").slice(1).join("\n");
-        }
-      }
-    }
-  }
-
-  return roles;
-}
-
-const DEFAULT_TASK_DESCRIPTION = `Setup yourself as the CEO. Use the ceo persona found here:
-
-- hire a founding engineer
-- write a hiring plan
-- break the roadmap into concrete tasks and start delegating work`;
 
 const ONBOARDING_STORAGE_KEY = "paperclip-onboarding-state";
 
@@ -416,29 +165,6 @@ export function OnboardingWizard() {
   const [unsetAnthropicLoading, setUnsetAnthropicLoading] = useState(false);
   const [showMoreAdapters, setShowMoreAdapters] = useState(false);
 
-  // Step 3
-  const [taskTitle, setTaskTitle] = useState(
-    "Hire your first engineer and create a hiring plan"
-  );
-  const [taskDescription, setTaskDescription] = useState(
-    DEFAULT_TASK_DESCRIPTION
-  );
-
-  // Auto-grow textarea for task description
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const autoResizeTextarea = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = el.scrollHeight + "px";
-  }, []);
-
-  // Planning task + hiring plan
-  const [planningTaskId, setPlanningTaskId] = useState<string | null>((saved?.planningTaskId as string) ?? null);
-  const [planContent, setPlanContent] = useState<string | null>((saved?.planContent as string) ?? null);
-  const [hiringRoles, setHiringRoles] = useState<HiringRole[]>((saved?.hiringRoles as HiringRole[]) ?? []);
-  const [showRawPlan, setShowRawPlan] = useState(false);
-
   // Created entity IDs — pre-populate from existing company when skipping step 1
   const [createdCompanyId, setCreatedCompanyId] = useState<string | null>(
     existingCompanyId ?? (saved?.createdCompanyId as string) ?? null
@@ -447,7 +173,6 @@ export function OnboardingWizard() {
     string | null
   >((saved?.createdCompanyPrefix as string) ?? null);
   const [createdAgentId, setCreatedAgentId] = useState<string | null>((saved?.createdAgentId as string) ?? null);
-  const [createdIssueRef, setCreatedIssueRef] = useState<string | null>(null);
 
   // Reset the route-dismissed flag when navigating to a different path.
   useEffect(() => {
@@ -486,7 +211,6 @@ export function OnboardingWizard() {
       step, companyName, companyGoal, missionPath, missionConfirmed,
       q1, q2, q3, q4, agentName, adapterType, cwd, model, command, args, url,
       createdCompanyId, createdCompanyPrefix, createdAgentId,
-      planningTaskId, planContent, hiringRoles,
       onboardingPath, growWorkflows, growPainPoints, growAutomate,
     };
     localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(state));
@@ -494,14 +218,8 @@ export function OnboardingWizard() {
     effectiveOnboardingOpen, step, companyName, companyGoal, missionPath, missionConfirmed,
     q1, q2, q3, q4, agentName, adapterType, cwd, model, command, args, url,
     createdCompanyId, createdCompanyPrefix, createdAgentId,
-    planningTaskId, planContent, hiringRoles,
     onboardingPath, growWorkflows, growPainPoints, growAutomate,
   ]);
-
-  // Resize textarea when step 3 is shown or description changes
-  useEffect(() => {
-    // Auto-resize removed — task description textarea no longer used in onboarding
-  }, [step, autoResizeTextarea]);
 
   const {
     data: adapterModels,
@@ -515,7 +233,8 @@ export function OnboardingWizard() {
       ? queryKeys.agents.adapterModels(createdCompanyId, adapterType, null)
       : ["agents", "none", "adapter-models", adapterType, null],
     queryFn: () => agentsApi.adapterModels(createdCompanyId!, adapterType, { environmentId: null }),
-    enabled: Boolean(createdCompanyId) && effectiveOnboardingOpen && step === 2
+    // Models are picked on step 4 (Connect a model).
+    enabled: Boolean(createdCompanyId) && effectiveOnboardingOpen && step === 4
   });
   const getCapabilities = useAdapterCapabilities();
   const adapterCaps = getCapabilities(adapterType);
@@ -565,16 +284,12 @@ export function OnboardingWizard() {
     (COMMAND_PLACEHOLDERS[adapterType] ?? adapterType.replace(/_local$/, ""));
 
   useEffect(() => {
-    if (step !== 2) return;
+    if (step !== 4) return;
     setAdapterEnvResult(null);
     setAdapterEnvError(null);
   }, [step, adapterType, model, command, args, url]);
 
   const selectedModel = (adapterModels ?? []).find((m) => m.id === model);
-  // Capsule lifecycle (PAP-121 / Option 4 motif): an empty `slot` until the
-  // lead is named, then `configured` once it has a name + a model connected.
-  // Step 3 always renders `online` because the agent has been created by then.
-  const leadCapsuleState = agentName.trim() ? "configured" : "slot";
   const hasAnthropicApiKeyOverrideCheck =
     adapterEnvResult?.checks.some(
       (check) =>
@@ -637,10 +352,6 @@ export function OnboardingWizard() {
     setQ2("");
     setQ3("");
     setQ4("");
-    setPlanningTaskId(null);
-    setPlanContent(null);
-    setHiringRoles([]);
-    setShowRawPlan(false);
     setAgentName("Chief of staff");
     setAdapterType("claude_local");
     setModel("");
@@ -652,12 +363,9 @@ export function OnboardingWizard() {
     setAdapterEnvLoading(false);
     setForceUnsetAnthropicApiKey(false);
     setUnsetAnthropicLoading(false);
-    setTaskTitle("Hire your first engineer and create a hiring plan");
-    setTaskDescription(DEFAULT_TASK_DESCRIPTION);
     setCreatedCompanyId(null);
     setCreatedCompanyPrefix(null);
     setCreatedAgentId(null);
-    setCreatedIssueRef(null);
   }
 
   function handleClose() {
@@ -746,7 +454,14 @@ export function OnboardingWizard() {
     }
   }
 
-  async function handleStep1Next() {
+  // Step 2 → 3 ("Confirm mission"): create the company + its company-level
+  // goal, then advance to naming the team lead. Guarded so revisiting the
+  // mission step (e.g. via Back) doesn't create a duplicate company.
+  async function handleConfirmMission() {
+    if (createdCompanyId) {
+      setStep(3);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -769,7 +484,7 @@ export function OnboardingWizard() {
         queryKey: queryKeys.goals.list(company.id)
       });
 
-      setStep(2); // → CEO config (was celebration, now swapped)
+      setStep(3); // → Create your team lead
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create company");
     } finally {
@@ -777,8 +492,15 @@ export function OnboardingWizard() {
     }
   }
 
-  async function handleStep2Next() {
+  // Step 4 → 5 ("Give it a heartbeat"): hire the lead agent + seed its
+  // instructions, then advance to Review. Guarded so revisiting step 4
+  // doesn't hire a second agent.
+  async function handleGiveHeartbeat() {
     if (!createdCompanyId) return;
+    if (createdAgentId) {
+      setStep(5);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -867,10 +589,9 @@ export function OnboardingWizard() {
         console.warn("Failed to seed CEO instructions:", err);
       }
 
-      // Go to launch celebration step (step 3). No planning task is
-      // pre-created — the user spawns hiring plans, briefs, etc. from the
-      // Conference Room when they're ready.
-      setStep(3);
+      // Advance to the Review step — the lead is now online. The user drives
+      // strategy + hiring from the planning chat after "Get started".
+      setStep(5);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create agent");
     } finally {
@@ -927,78 +648,15 @@ export function OnboardingWizard() {
     }
   }
 
-  async function handleStep3Next() {
-    if (!createdCompanyId || !createdAgentId) return;
-    setError(null);
-    setStep(4);
-  }
-
-  async function handleLaunch() {
-    if (!createdCompanyId || !createdAgentId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      // Create a hire task for each approved role
-      const approvedRoles = hiringRoles.filter(
-        (r) => r.enabled && r.name.trim()
-      );
-      for (const role of approvedRoles) {
-        const roleSpec = [
-          role.summary && `**Summary:** ${role.summary}`,
-          role.expertise && `**Expertise & Responsibilities:**\n${role.expertise}`,
-          role.priorities && `**Priorities:**\n${role.priorities}`,
-          role.boundaries && `**Boundaries:**\n${role.boundaries}`,
-          role.tools && `**Tools & Permissions:**\n${role.tools}`,
-          role.communication && `**Communication:**\n${role.communication}`,
-          role.collaboration && `**Collaboration:**\n${role.collaboration}`,
-        ].filter(Boolean).join("\n\n");
-        await issuesApi.create(createdCompanyId, {
-          title: `Hire: ${role.name}`,
-          description: `Hire a ${role.name} for the team.\n\n${roleSpec}`,
-          assigneeAgentId: createdAgentId,
-          status: "todo"
-        });
-      }
-
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.issues.list(createdCompanyId)
-      });
-
-      setSelectedCompanyId(createdCompanyId);
-      setStep(6); // → orientation screen
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create hire tasks");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function handleFinishOnboarding() {
-    const prefix = createdCompanyPrefix;
-    reset(); // clears localStorage
-    closeOnboarding();
-    navigate(prefix ? `/${prefix}/dashboard` : `/dashboard`);
-  }
-
-  // Finish onboarding and jump straight to a specific page (used by the
-  // orientation cards on the final step). Paths are company-prefixed routes.
-  function handleFinishTo(page: string) {
-    const prefix = createdCompanyPrefix;
-    reset(); // clears localStorage
-    closeOnboarding();
-    navigate(prefix ? `/${prefix}/${page}` : `/${page}`);
-  }
-
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       if (step === 0) return; // front door requires click
-      if (step === 1 && companyName.trim() && companyGoal.trim()) handleStep1Next();
-      else if (step === 2 && agentName.trim()) handleStep2Next();
-      else if (step === 3) handleLaunchToChat();
-      else if (step === 4) setStep(5);
-      else if (step === 5) setStep(6);
-      else if (step === 6) handleLaunch();
+      if (step === 1 && companyName.trim()) setStep(2);
+      else if (step === 2 && companyName.trim() && companyGoal.trim()) handleConfirmMission();
+      else if (step === 3 && agentName.trim()) setStep(4);
+      else if (step === 4 && agentName.trim()) handleGiveHeartbeat();
+      else if (step === 5) handleLaunchToChat();
     }
   }
 
@@ -1043,38 +701,99 @@ export function OnboardingWizard() {
           <div
             className={cn(
               "w-full flex flex-col overflow-y-auto transition-[width] duration-500 ease-in-out",
-              step === 1 ? "md:w-1/2" : "md:w-full"
+              step === 1 || step === 2 ? "md:w-1/2" : "md:w-full"
             )}
           >
             <div className="w-full max-w-md mx-auto my-auto px-8 py-12 shrink-0">
-              {/* Progress tabs */}
-              <div className="flex items-center gap-0 mb-8 border-b border-border">
-                {(
-                  [
-                    { step: 1 as Step, label: "Mission", icon: Building2 },
-                    { step: 2 as Step, label: "Team lead", icon: Bot },
-                    { step: 3 as Step, label: "Review", icon: Check },
-                  ] as const
-                ).map(({ step: s, label, icon: Icon }) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setStep(s)}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2 py-2 text-xs font-medium border-b-2 -mb-px transition-colors cursor-pointer",
-                      s === step
-                        ? "border-foreground text-foreground"
-                        : "border-transparent text-muted-foreground hover:text-foreground/70 hover:border-border"
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    {label}
-                  </button>
-                ))}
+              {/* 5-segment progress bar (brand .wsteps/.wstep) — segment N
+                  filled once step ≥ N. Completed segments jump back. */}
+              <div className="flex items-center gap-1.5 mb-8">
+                {([1, 2, 3, 4, 5] as const).map((s) => {
+                  const filled = step >= s;
+                  const canJump = s < step;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      aria-label={`Step ${s}`}
+                      aria-current={s === step ? "step" : undefined}
+                      disabled={!canJump}
+                      onClick={() => canJump && setStep(s as Step)}
+                      className={cn(
+                        "h-1 flex-1 rounded-full transition-colors",
+                        filled ? "bg-foreground" : "bg-muted",
+                        canJump ? "cursor-pointer" : "cursor-default"
+                      )}
+                    />
+                  );
+                })}
               </div>
 
+              {/* Persistent evolving capsule (steps 3–5): a single AgentCapsule
+                  held in the same tree slot so React reuses the DOM node and the
+                  morph reads as one capsule coming to life — dashed slot →
+                  solid (configured) → liquid fill + blue glow (online). */}
+              {step >= 3 && step <= 5 && (
+                <div className="space-y-4 mb-6">
+                  <div className="flex items-center gap-3 mb-1">
+                    <div className="bg-muted/50 p-2">
+                      {step === 5 ? (
+                        <Check className="h-5 w-5 text-muted-foreground" />
+                      ) : (
+                        <Bot className="h-5 w-5 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="font-medium">
+                        {step === 3
+                          ? "Create your team lead"
+                          : step === 4
+                            ? "Connect a model"
+                            : "Review"}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        {step === 3 ? (
+                          <>
+                            Name your lead. They'll help drive{" "}
+                            <span className="font-medium text-foreground">{companyName}</span>{" "}
+                            toward its mission. We default to{" "}
+                            <span className="font-medium text-foreground">Chief of staff</span> —
+                            rename it to anything you like.
+                          </>
+                        ) : step === 4 ? (
+                          <>Pick the adapter and model your lead will run on, then check the environment.</>
+                        ) : (
+                          <>Everything's set up — your team lead is online and ready to work.</>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-1.5 py-1 text-center">
+                    <AgentCapsule
+                      state={step === 3 ? "slot" : step === 4 ? "configured" : "online"}
+                      gradient={5}
+                      glow="blue"
+                      size="md"
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      {step === 3 ? (
+                        "an empty slot for an agent"
+                      ) : step === 4 ? (
+                        "your team lead, taking shape"
+                      ) : (
+                        <>
+                          <span className="font-medium text-foreground">{agentName}</span>{" "}
+                          is online and ready to work!
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Step content */}
-              {step === 1 && onboardingPath === "grow" && (
+              {step === 2 && onboardingPath === "grow" && (
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
@@ -1086,18 +805,6 @@ export function OnboardingWizard() {
                         We'll use this to set up your lead agent and plan which agents to add.
                       </p>
                     </div>
-                  </div>
-                  <div className="group">
-                    <label className={cn("text-xs mb-1 block transition-colors", companyName.trim() ? "text-foreground" : "text-muted-foreground group-focus-within:text-foreground")}>
-                      Team name
-                    </label>
-                    <input
-                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                      placeholder="Acme Corp"
-                      value={companyName}
-                      onChange={(e) => setCompanyName(e.target.value)}
-                      autoFocus
-                    />
                   </div>
                   <div className="group">
                     <label className="text-xs text-muted-foreground mb-1 block">What does your team work on?</label>
@@ -1172,8 +879,8 @@ export function OnboardingWizard() {
                 </div>
               )}
 
-              {/* Step 1a: Name your company */}
-              {step === 1 && onboardingPath !== "grow" && !missionPath && (
+              {/* Step 1: Name your team (both paths) */}
+              {step === 1 && (
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
@@ -1205,35 +912,24 @@ export function OnboardingWizard() {
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && companyName.trim()) {
                           e.preventDefault();
-                          setMissionPath("direct");
+                          if (onboardingPath !== "grow" && !missionPath) setMissionPath("direct");
+                          setStep(2);
                         }
                       }}
                       autoFocus
                     />
                   </div>
-                  <div className="flex items-center justify-between">
-                    <button
-                      className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => { setOnboardingPath(null); setStep(0); }}
-                    >
-                      ← Back to start
-                    </button>
-                    {companyName.trim() && (
-                      <Button
-                        size="sm"
-                        onClick={() => setMissionPath("direct")}
-                        className="gap-1.5"
-                      >
-                        Next
-                        <ArrowRight className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
-                  </div>
+                  <button
+                    className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => { setOnboardingPath(null); setStep(0); }}
+                  >
+                    ← Back to start
+                  </button>
                 </div>
               )}
 
-              {/* Step 1b: Define your mission */}
-              {step === 1 && onboardingPath !== "grow" && missionPath && (
+              {/* Step 2: Define your mission */}
+              {step === 2 && onboardingPath !== "grow" && (
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
@@ -1423,44 +1119,16 @@ export function OnboardingWizard() {
 
                   <button
                     className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => setMissionPath(null)}
+                    onClick={() => setStep(1)}
                   >
                     ← Change team name
                   </button>
                 </div>
               )}
 
-              {/* Step 2: Create your team lead + connect a model */}
-              {step === 2 && (
+              {/* Step 3: Create your team lead — name only (capsule above) */}
+              {step === 3 && (
                 <div className="space-y-5">
-                  <div className="flex items-center gap-3 mb-1">
-                    <div className="bg-muted/50 p-2">
-                      <Bot className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Create your team lead</h3>
-                      <p className="text-xs text-muted-foreground">
-                        Name your lead and connect a model. They'll help drive{" "}
-                        <span className="font-medium text-foreground">{companyName}</span>{" "}
-                        toward its mission. We default to{" "}
-                        <span className="font-medium text-foreground">Chief of staff</span> —
-                        rename it to anything you like.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Capsule motif (Option 4): an empty slot fills in as the
-                      lead takes shape — dashed when unnamed, solid once named
-                      and a model is connected below. */}
-                  <div className="flex flex-col items-center gap-1.5 py-1">
-                    <AgentCapsule state={leadCapsuleState} gradient={4} size="md" />
-                    <p className="text-[10px] text-muted-foreground">
-                      {leadCapsuleState === "slot"
-                        ? "an empty slot for an agent"
-                        : "your team lead, taking shape"}
-                    </p>
-                  </div>
-
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">
                       Name
@@ -1470,10 +1138,21 @@ export function OnboardingWizard() {
                       placeholder="Chief of staff"
                       value={agentName}
                       onChange={(e) => setAgentName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && agentName.trim()) {
+                          e.preventDefault();
+                          setStep(4);
+                        }
+                      }}
                       autoFocus
                     />
                   </div>
+                </div>
+              )}
 
+              {/* Step 4: Connect a model — adapter + model + env check (capsule above) */}
+              {step === 4 && (
+                <div className="space-y-5">
                   {/* Adapter type radio cards */}
                   <div>
                     <label className="text-xs text-muted-foreground mb-2 block">
@@ -1822,9 +1501,9 @@ export function OnboardingWizard() {
                 </div>
               )}
 
-              {/* Step 3: Review — lead comes online (capsule fills + pulses) */}
-              {step === 3 && (
-                <div className="space-y-6 py-2">
+              {/* Step 5: Review — lead is online (shared capsule above) */}
+              {step === 5 && (
+                <div className="space-y-5 py-1">
                   {/* Review checklist — everything that's now set up */}
                   <div className="space-y-1.5">
                     {[
@@ -1851,255 +1530,14 @@ export function OnboardingWizard() {
                     ))}
                   </div>
 
-                  {/* The capsule fills with the brand gradient + pulses online */}
-                  <div className="flex flex-col items-center gap-2 py-2 text-center">
-                    <AgentCapsule state="online" gradient={4} size="lg" />
-                    <div>
-                      <h3 className="text-lg font-semibold">
-                        {agentName} is online and ready to work!
-                      </h3>
-                      <p className="text-sm text-muted-foreground mt-1 italic">
-                        "{companyGoal}"
-                      </p>
-                    </div>
-                  </div>
+                  {companyGoal.trim() && (
+                    <p className="text-sm text-muted-foreground italic text-center">
+                      "{companyGoal}"
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground text-center">
                     Start a conversation with {agentName} to discuss strategy and plan who to bring on.
                   </p>
-                </div>
-              )}
-
-              {/* Step 4: Chat with CEO */}
-              {step === 4 && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 mb-1">
-                    <div className="bg-muted/50 p-2">
-                      <Sparkles className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Chat with your lead agent</h3>
-                      <p className="text-xs text-muted-foreground">
-                        Work with {agentName} to plan who to bring onto{" "}
-                        <span className="font-medium text-foreground">{companyName}</span>.
-                      </p>
-                    </div>
-                  </div>
-                  {planningTaskId ? (
-                    <OnboardingChat
-                      taskId={planningTaskId}
-                      agentId={createdAgentId!}
-                      agentName={agentName}
-                      companyName={companyName}
-                      companyGoal={companyGoal}
-                      onPlanDetected={(md) => setPlanContent(md)}
-                      onReviewPlan={async () => {
-                        // Always fetch the latest plan document for the richest content
-                        try {
-                          const doc = await issuesApi.getDocument(planningTaskId!, "plan");
-                          if (doc.body) {
-                            setPlanContent(doc.body);
-                            setHiringRoles(parseHiringPlan(doc.body));
-                          } else if (planContent) {
-                            setHiringRoles(parseHiringPlan(planContent));
-                          }
-                        } catch {
-                          if (planContent) {
-                            setHiringRoles(parseHiringPlan(planContent));
-                          }
-                        }
-                        setStep(5);
-                      }}
-                    />
-                  ) : (
-                    <div className="rounded-md border border-border p-4 min-h-[200px] flex items-center justify-center">
-                      <p className="text-sm text-muted-foreground">
-                        No planning task found. Go back and create your team lead first.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Step 5: Review hiring plan */}
-              {step === 5 && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 mb-1">
-                    <div className="bg-muted/50 p-2">
-                      <ListTodo className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Review your hiring plan</h3>
-                      <p className="text-xs text-muted-foreground">
-                        Select which roles to hire. Edit, add, or remove roles
-                        before approving.
-                      </p>
-                    </div>
-                  </div>
-
-                  {hiringRoles.length === 0 ? (
-                    <div className="rounded-md border border-dashed border-border p-4 text-center">
-                      <p className="text-sm text-muted-foreground mb-2">
-                        No roles parsed from the hiring plan yet.
-                      </p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          setHiringRoles([{ ...EMPTY_ROLE, id: nextRoleId() }])
-                        }
-                      >
-                        <Plus className="h-3.5 w-3.5 mr-1" />
-                        Add a role manually
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {hiringRoles.map((role) => (
-                        <RoleCard
-                          key={role.id}
-                          role={role}
-                          onChange={(updated) =>
-                            setHiringRoles((prev) =>
-                              prev.map((r) => (r.id === role.id ? updated : r))
-                            )
-                          }
-                          onDelete={() =>
-                            setHiringRoles((prev) =>
-                              prev.filter((r) => r.id !== role.id)
-                            )
-                          }
-                        />
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Add role button */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      setHiringRoles((prev) => [
-                        ...prev,
-                        { ...EMPTY_ROLE, id: nextRoleId() },
-                      ])
-                    }
-                  >
-                    <Plus className="h-3.5 w-3.5 mr-1" />
-                    Add role
-                  </Button>
-
-                  {/* Revise with CEO */}
-                  {planningTaskId && (
-                    <button
-                      className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => setStep(4)}
-                    >
-                      <MessageSquare className="h-3 w-3" />
-                      Revise with your lead
-                    </button>
-                  )}
-
-                  {/* Collapsible raw plan */}
-                  {planContent && (
-                    <div>
-                      <button
-                        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                        onClick={() => setShowRawPlan((v) => !v)}
-                      >
-                        <ChevronDown
-                          className={cn(
-                            "h-3 w-3 transition-transform",
-                            showRawPlan ? "rotate-0" : "-rotate-90"
-                          )}
-                        />
-                        View raw plan
-                      </button>
-                      {showRawPlan && (
-                        <div className="mt-2 rounded-md border border-border p-3 text-xs bg-muted/30 max-h-[200px] overflow-y-auto">
-                          <pre className="whitespace-pre-wrap">{planContent}</pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Step 6: Welcome & orientation */}
-              {step === 6 && (
-                <div className="space-y-6 py-2">
-                  <div className="text-center">
-                    <div className="text-4xl mb-3">🎉</div>
-                    <h3 className="text-lg font-semibold">
-                      {companyName} is ready to go!
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {agentName} is now hiring{" "}
-                      {hiringRoles.filter((r) => r.enabled && r.name.trim()).length} roles.
-                      Here's what to expect on your dashboard:
-                    </p>
-                  </div>
-
-                  {/* Orientation cards — mirror the current Dashboard's four
-                      metric cards (Agents, Tasks, Spend, Approvals) plus its
-                      activity charts. Each card jumps to the matching page. */}
-                  <div className="space-y-3">
-                    <button
-                      type="button"
-                      onClick={() => handleFinishTo("agents")}
-                      className="w-full flex items-start gap-3 rounded-md border border-border px-3 py-2.5 text-left transition-colors hover:bg-accent/50"
-                    >
-                      <Bot className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">Agents</p>
-                        <p className="text-xs text-muted-foreground">
-                          Your roster of agents — running, paused, or in error. New hires show up here as they're created.
-                        </p>
-                      </div>
-                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleFinishTo("issues")}
-                      className="w-full flex items-start gap-3 rounded-md border border-border px-3 py-2.5 text-left transition-colors hover:bg-accent/50"
-                    >
-                      <ListTodo className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">Tasks</p>
-                        <p className="text-xs text-muted-foreground">
-                          The work your team is doing. Track tasks moving from todo → in progress → done, including the hires {agentName} just queued.
-                        </p>
-                      </div>
-                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleFinishTo("approvals")}
-                      className="w-full flex items-start gap-3 rounded-md border border-border px-3 py-2.5 text-left transition-colors hover:bg-accent/50"
-                    >
-                      <Check className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">Approvals</p>
-                        <p className="text-xs text-muted-foreground">
-                          Pending approvals land here. Your agents may need your sign-off before taking sensitive actions or spending over budget.
-                        </p>
-                      </div>
-                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleFinishTo("dashboard")}
-                      className="w-full flex items-start gap-3 rounded-md border border-border px-3 py-2.5 text-left transition-colors hover:bg-accent/50"
-                    >
-                      <BarChart3 className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">Dashboard</p>
-                        <p className="text-xs text-muted-foreground">
-                          Your command center — month spend, run activity, success rate, and recent activity charts at a glance, with quick links to costs and more.
-                        </p>
-                      </div>
-                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
-                    </button>
-                  </div>
                 </div>
               )}
 
@@ -2126,11 +1564,24 @@ export function OnboardingWizard() {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {step === 1 && (onboardingPath === "grow" || (missionPath && (missionPath !== "questionnaire" || missionConfirmed))) && (
+                  {step === 1 && (
+                    <Button
+                      size="sm"
+                      disabled={!companyName.trim()}
+                      onClick={() => {
+                        if (onboardingPath !== "grow" && !missionPath) setMissionPath("direct");
+                        setStep(2);
+                      }}
+                    >
+                      Next
+                      <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                    </Button>
+                  )}
+                  {step === 2 && (
                     <Button
                       size="sm"
                       disabled={!companyName.trim() || !companyGoal.trim() || loading}
-                      onClick={handleStep1Next}
+                      onClick={handleConfirmMission}
                     >
                       {loading ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
@@ -2140,13 +1591,21 @@ export function OnboardingWizard() {
                       {loading ? "Creating..." : "Confirm mission"}
                     </Button>
                   )}
-                  {step === 2 && (
+                  {step === 3 && (
                     <Button
                       size="sm"
-                      disabled={
-                        !agentName.trim() || loading || adapterEnvLoading
-                      }
-                      onClick={handleStep2Next}
+                      disabled={!agentName.trim()}
+                      onClick={() => setStep(4)}
+                    >
+                      Next
+                      <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                    </Button>
+                  )}
+                  {step === 4 && (
+                    <Button
+                      size="sm"
+                      disabled={!agentName.trim() || loading || adapterEnvLoading}
+                      onClick={handleGiveHeartbeat}
                     >
                       {loading ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
@@ -2156,42 +1615,10 @@ export function OnboardingWizard() {
                       {loading ? "Bringing to life..." : "Give it a heartbeat"}
                     </Button>
                   )}
-                  {step === 3 && (
-                    <Button
-                      size="sm"
-                      onClick={handleLaunchToChat}
-                    >
+                  {step === 5 && (
+                    <Button size="sm" onClick={handleLaunchToChat}>
                       <ArrowRight className="h-3.5 w-3.5 mr-1" />
                       Get started
-                    </Button>
-                  )}
-                  {step === 4 && !planContent && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setStep(5)}
-                    >
-                      Skip chat
-                    </Button>
-                  )}
-                  {step === 5 && (
-                    <Button
-                      size="sm"
-                      disabled={!hiringRoles.some((r) => r.enabled && r.name.trim()) || loading}
-                      onClick={handleLaunch}
-                    >
-                      {loading ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <Check className="h-3.5 w-3.5 mr-1" />
-                      )}
-                      {loading ? "Creating hires..." : "Approve & hire"}
-                    </Button>
-                  )}
-                  {step === 6 && (
-                    <Button size="sm" onClick={handleFinishOnboarding}>
-                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                      Go to dashboard
                     </Button>
                   )}
                 </div>
@@ -2200,11 +1627,12 @@ export function OnboardingWizard() {
           </div>
           )}
 
-          {/* Right half — ASCII art (hidden on mobile, only for step 1) */}
+          {/* Right half — ASCII art (hidden on mobile, only for the team
+              name + mission steps) */}
           <div
             className={cn(
               "hidden md:block overflow-hidden bg-[#1d1d1d] transition-[width,opacity] duration-500 ease-in-out",
-              step === 1 ? "w-1/2 opacity-100" : "w-0 opacity-0"
+              step === 1 || step === 2 ? "w-1/2 opacity-100" : "w-0 opacity-0"
             )}
           >
             <AsciiArtAnimation />
@@ -2212,124 +1640,6 @@ export function OnboardingWizard() {
         </div>
       </DialogPortal>
     </Dialog>
-  );
-}
-
-const ROLE_FIELDS: Array<{ key: keyof HiringRole; label: string; placeholder: string }> = [
-  { key: "summary", label: "Summary", placeholder: "One-line description of this role" },
-  { key: "expertise", label: "Expertise & Responsibilities", placeholder: "What this agent does, its skills, and detailed responsibilities" },
-  { key: "priorities", label: "Priorities", placeholder: "What this role focuses on first, in order of importance" },
-  { key: "boundaries", label: "Boundaries", placeholder: "What this role should NOT do, out-of-scope areas" },
-  { key: "tools", label: "Tools & Permissions", placeholder: "What tools, systems, or access this role needs" },
-  { key: "communication", label: "Communication", placeholder: "Tone, style, and interaction guidelines" },
-  { key: "collaboration", label: "Collaboration & Escalation", placeholder: "Who this role works with, escalation paths" },
-];
-
-function RoleCard({
-  role,
-  onChange,
-  onDelete,
-}: {
-  role: HiringRole;
-  onChange: (updated: HiringRole) => void;
-  onDelete: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const update = (field: keyof HiringRole, value: string) =>
-    onChange({ ...role, [field]: value });
-
-  if (role.editing) {
-    return (
-      <div
-        className={cn(
-          "rounded-md border px-3 py-3 transition-colors space-y-3",
-          role.enabled ? "border-border bg-background" : "border-border/50 bg-muted/30 opacity-60"
-        )}
-      >
-        <input
-          className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-sm font-medium outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Role name"
-          value={role.name}
-          onChange={(e) => update("name", e.target.value)}
-          autoFocus
-        />
-        {ROLE_FIELDS.map(({ key, label, placeholder }) => (
-          <div key={key}>
-            <label className="text-[11px] text-muted-foreground mb-0.5 block font-medium">
-              {label}
-            </label>
-            <textarea
-              className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring resize-y min-h-[60px] max-h-[200px]"
-              placeholder={placeholder}
-              value={(role[key] as string) || ""}
-              onChange={(e) => update(key, e.target.value)}
-            />
-          </div>
-        ))}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => onChange({ ...role, editing: false })}
-        >
-          <Check className="h-3 w-3 mr-1" />
-          Done
-        </Button>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        "rounded-md border px-3 py-2.5 transition-colors",
-        role.enabled ? "border-border bg-background" : "border-border/50 bg-muted/30 opacity-60"
-      )}
-    >
-      <div className="flex items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={role.enabled}
-          onChange={(e) => onChange({ ...role, enabled: e.target.checked })}
-          className="mt-1 shrink-0"
-        />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium">{role.name || "Untitled role"}</p>
-          {role.summary && (
-            <p className="text-xs text-muted-foreground mt-0.5">{role.summary}</p>
-          )}
-          {expanded && (
-            <div className="mt-2 space-y-1.5">
-              {ROLE_FIELDS.filter(({ key }) => key !== "summary" && (role[key] as string)?.trim()).map(({ key, label }) => (
-                <div key={key}>
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
-                  <p className="text-xs text-muted-foreground whitespace-pre-line">{role[key] as string}</p>
-                </div>
-              ))}
-            </div>
-          )}
-          <button
-            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
-            onClick={() => setExpanded(!expanded)}
-          >
-            {expanded ? "Show less" : "Show more"}
-          </button>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            className="p-1 text-muted-foreground hover:text-foreground transition-colors"
-            onClick={() => onChange({ ...role, editing: true })}
-          >
-            <Pencil className="h-3 w-3" />
-          </button>
-          <button
-            className="p-1 text-muted-foreground hover:text-destructive transition-colors"
-            onClick={onDelete}
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 
