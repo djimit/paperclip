@@ -7,6 +7,7 @@ import { ToolGatewayHttpError, type ToolGatewayService } from "../services/tool-
 
 const TOOL_GATEWAY_ACTIONS = [
   "tool_gateway.session_created",
+  "tool_gateway.session_rejected",
   "tool_gateway.discovery",
   "tool_gateway.call_allowed",
   "tool_gateway.call_denied",
@@ -16,11 +17,8 @@ const TOOL_GATEWAY_ACTIONS = [
   "tool_gateway.approval_requested",
 ];
 
-function gatewayToken(req: { header(name: string): string | undefined; query: Record<string, unknown> }) {
-  const headerToken = req.header("x-paperclip-tool-gateway-token")?.trim();
-  if (headerToken) return headerToken;
-  const queryToken = req.query.sessionToken;
-  return typeof queryToken === "string" && queryToken.trim().length > 0 ? queryToken.trim() : null;
+function gatewayToken(req: { header(name: string): string | undefined }) {
+  return req.header("x-paperclip-tool-gateway-token")?.trim() || null;
 }
 
 function sendGatewayError(res: import("express").Response, err: unknown) {
@@ -170,7 +168,67 @@ export function toolGatewayRoutes(db: Db, toolGateway: ToolGatewayService) {
         return;
       }
       assertCompanyAccess(req, companyId);
-      res.json(toolGateway.listRuntimeSlots(companyId));
+      res.json(await toolGateway.listRuntimeSlots(companyId));
+    } catch (err) {
+      sendGatewayError(res, err);
+    }
+  });
+
+  router.post("/tool-gateway/runtime-slots/:slotId/stop", async (req, res) => {
+    try {
+      assertBoardOrAgent(req);
+      const companyId =
+        req.actor.type === "agent"
+          ? req.actor.companyId
+          : typeof req.body?.companyId === "string"
+            ? req.body.companyId
+            : typeof req.query.companyId === "string"
+              ? req.query.companyId
+              : null;
+      if (!companyId) {
+        res.status(400).json({ error: "companyId is required" });
+        return;
+      }
+      assertCompanyAccess(req, companyId);
+      const actor = getActorInfo(req);
+      res.json(await toolGateway.stopRuntimeSlot({
+        companyId,
+        slotId: req.params.slotId,
+        actor: {
+          agentId: actor.agentId,
+          runId: req.actor.type === "agent" ? req.actor.runId : null,
+        },
+      }));
+    } catch (err) {
+      sendGatewayError(res, err);
+    }
+  });
+
+  router.post("/tool-gateway/runtime-slots/:slotId/restart", async (req, res) => {
+    try {
+      assertBoardOrAgent(req);
+      const companyId =
+        req.actor.type === "agent"
+          ? req.actor.companyId
+          : typeof req.body?.companyId === "string"
+            ? req.body.companyId
+            : typeof req.query.companyId === "string"
+              ? req.query.companyId
+              : null;
+      if (!companyId) {
+        res.status(400).json({ error: "companyId is required" });
+        return;
+      }
+      assertCompanyAccess(req, companyId);
+      const actor = getActorInfo(req);
+      res.json(await toolGateway.restartRuntimeSlot({
+        companyId,
+        slotId: req.params.slotId,
+        actor: {
+          agentId: actor.agentId,
+          runId: req.actor.type === "agent" ? req.actor.runId : null,
+        },
+      }));
     } catch (err) {
       sendGatewayError(res, err);
     }

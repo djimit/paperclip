@@ -197,6 +197,32 @@ export const createToolProfileEntrySchema = z.object({
 
 export type CreateToolProfileEntry = z.infer<typeof createToolProfileEntrySchema>;
 
+export const createToolProfileEntryForProfileSchema = createToolProfileEntrySchema.omit({ profileId: true });
+
+export type CreateToolProfileEntryForProfile = z.infer<typeof createToolProfileEntryForProfileSchema>;
+
+export const updateToolProfileEntrySchema = createToolProfileEntryForProfileSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  { message: "At least one tool profile entry field is required" },
+);
+
+export type UpdateToolProfileEntry = z.infer<typeof updateToolProfileEntrySchema>;
+
+export const createToolProfileWithEntriesSchema = createToolProfileSchema.extend({
+  entries: z.array(createToolProfileEntryForProfileSchema).max(250).optional(),
+});
+
+export type CreateToolProfileWithEntries = z.infer<typeof createToolProfileWithEntriesSchema>;
+
+export const updateToolProfileWithEntriesSchema = createToolProfileSchema.partial().extend({
+  entries: z.array(createToolProfileEntryForProfileSchema).max(250).optional(),
+}).refine(
+  (value) => Object.keys(value).length > 0,
+  { message: "At least one tool profile field is required" },
+);
+
+export type UpdateToolProfileWithEntries = z.infer<typeof updateToolProfileWithEntriesSchema>;
+
 export const createToolProfileBindingSchema = z.object({
   profileId: z.string().uuid(),
   targetType: toolProfileBindingTargetTypeSchema,
@@ -206,6 +232,17 @@ export const createToolProfileBindingSchema = z.object({
 });
 
 export type CreateToolProfileBinding = z.infer<typeof createToolProfileBindingSchema>;
+
+export const createToolProfileBindingForProfileSchema = createToolProfileBindingSchema.omit({ profileId: true });
+
+export type CreateToolProfileBindingForProfile = z.infer<typeof createToolProfileBindingForProfileSchema>;
+
+export const unbindToolProfileBindingSchema = createToolProfileBindingForProfileSchema.pick({
+  targetType: true,
+  targetId: true,
+});
+
+export type UnbindToolProfileBinding = z.infer<typeof unbindToolProfileBindingSchema>;
 
 export const createToolPolicySchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -286,6 +323,55 @@ export const toolRateLimitRuleSchema = z.object({
   windowSeconds: z.number().int().positive().max(31_536_000),
   keyBy: z.array(z.enum(["company", "agent", "application", "connection", "tool"])).optional(),
 });
+
+export const toolTrustRuleArgumentFiltersSchema = z.object({
+  allowAny: z.boolean().optional(),
+  exactHash: z.string().trim().regex(/^[a-f0-9]{64}$/i).optional().nullable(),
+  allowedHashes: z.array(z.string().trim().regex(/^[a-f0-9]{64}$/i)).max(100).optional(),
+  fieldEquals: z.record(z.string().trim().min(1).max(120), z.unknown()).optional(),
+}).refine(
+  (value) => value.allowAny === true
+    || Boolean(value.exactHash)
+    || Boolean(value.allowedHashes?.length)
+    || Boolean(value.fieldEquals && Object.keys(value.fieldEquals).length > 0),
+  { message: "Trust-rule argument filters must specify allowAny, exactHash, allowedHashes, or fieldEquals" },
+);
+
+export const toolTrustRuleScopeSchema = z.object({
+  includeAgent: z.boolean().optional(),
+  includeProject: z.boolean().optional(),
+  includeIssue: z.boolean().optional(),
+  includeApplication: z.boolean().optional(),
+  includeConnection: z.boolean().optional(),
+  includeCatalogEntry: z.boolean().optional(),
+  includeTool: z.boolean().optional(),
+});
+
+export const toolTrustRuleBatchApprovalSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxBatchSize: z.number().int().positive().max(100).optional(),
+  windowSeconds: z.number().int().positive().max(31_536_000).optional(),
+});
+
+export const createToolTrustRuleFromActionRequestSchema = z.object({
+  name: z.string().trim().min(1).max(160).optional(),
+  description: z.string().max(4000).optional().nullable(),
+  priority: z.number().int().min(0).max(10000).default(40),
+  approvalThreshold: z.number().int().min(1).max(50).default(2),
+  selectors: toolAccessSelectorSchema.optional(),
+  scope: toolTrustRuleScopeSchema.optional(),
+  argumentFilters: toolTrustRuleArgumentFiltersSchema.optional(),
+  expiresAt: z.coerce.date().optional().nullable(),
+  batchApproval: toolTrustRuleBatchApprovalSchema.optional().nullable(),
+});
+
+export type CreateToolTrustRuleFromActionRequest = z.infer<typeof createToolTrustRuleFromActionRequestSchema>;
+
+export const revokeToolTrustRuleSchema = z.object({
+  reason: z.string().trim().max(1000).optional().nullable(),
+});
+
+export type RevokeToolTrustRule = z.infer<typeof revokeToolTrustRuleSchema>;
 
 export const toolPolicyTestRequestSchema = z.object({
   companyId: z.string().uuid(),

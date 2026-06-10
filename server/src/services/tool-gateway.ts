@@ -1,5 +1,5 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { and, desc, eq, lte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -14,14 +14,21 @@ import {
   toolActionRequests,
   toolAccessAuditEvents,
   toolCallEvents,
+  toolGatewaySessions,
   toolInvocations,
 } from "@paperclipai/db";
 import type { ToolRunContext } from "@paperclipai/plugin-sdk";
-import type { ToolAccessDecision, ToolAccessDecisionInput } from "@paperclipai/shared";
+import type { DeploymentExposure, DeploymentMode, ToolAccessDecision, ToolAccessDecisionInput } from "@paperclipai/shared";
 import type { AgentToolDescriptor, PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import { logActivity, type LogActivityInput } from "./activity-log.js";
 import { toolAccessPolicyService } from "./tool-access-policy.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
+import {
+  createToolRuntimeSupervisor,
+  ToolRuntimeSupervisorError,
+  type ToolRuntimeSupervisorOptions,
+  type ToolRuntimeSlotView,
+} from "./tool-runtime-supervisor.js";
 import {
   canonicalToolArguments,
   readSignedToolArguments,
@@ -35,7 +42,7 @@ import {
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
-const STDIO_FIXTURE_IDLE_TTL_MS = 1_000;
+const ACTIVE_GATEWAY_RUN_STATUSES = new Set(["running"]);
 
 export type ToolGatewayProviderType =
   | "mcp_http_fixture"
@@ -60,18 +67,7 @@ export interface ToolGatewaySession {
   expiresAt: Date;
 }
 
-export interface ToolGatewayRuntimeSlot {
-  id: string;
-  companyId: string;
-  connectionKey: string;
-  providerType: "mcp_stdio_fixture";
-  status: "running" | "stopped";
-  startedAt: Date;
-  lastUsedAt: Date;
-  stoppedAt: Date | null;
-  useCount: number;
-  metadata: Record<string, unknown>;
-}
+export type ToolGatewayRuntimeSlot = ToolRuntimeSlotView;
 
 export class ToolGatewayHttpError extends Error {
   constructor(
@@ -82,13 +78,6 @@ export class ToolGatewayHttpError extends Error {
   ) {
     super(message);
   }
-}
-
-interface ToolGatewayProfile {
-  hasProfile: boolean;
-  allowAll: boolean;
-  allowedTools: Set<string>;
-  allowedProviders: Set<string>;
 }
 
 interface ExecuteGatewayToolInput {
@@ -107,11 +96,6 @@ interface ExecutePluginToolInput {
   runContext: ToolRunContext;
 }
 
-interface RuntimeSlotRecord extends ToolGatewayRuntimeSlot {
-  idleTimer: ReturnType<typeof setTimeout> | null;
-  counter: number;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -121,42 +105,31 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function stringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+function generateGatewayToken(sessionId: string) {
+  return `pcgt_${sessionId}.${randomBytes(32).toString("base64url")}`;
 }
 
-export function normalizeToolGatewayProfile(permissions: unknown): ToolGatewayProfile {
-  const root = asRecord(permissions);
-  const rawProfile = asRecord(root?.toolGateway) ?? asRecord(root?.toolAccess);
-  if (!rawProfile) {
-    return {
-      hasProfile: false,
-      allowAll: false,
-      allowedTools: new Set(),
-      allowedProviders: new Set(),
-    };
-  }
+function hashGatewayToken(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
 
-  const allowedTools = new Set(stringArray(rawProfile.allowedTools));
-  const allowedProviders = new Set(stringArray(rawProfile.allowedProviders));
+function sessionIdFromGatewayToken(token: string) {
+  const match = token.match(/^pcgt_([0-9a-fA-F-]{36})\.[A-Za-z0-9_-]+$/);
+  return match?.[1] ?? null;
+}
+
+function gatewaySessionFromRow(row: typeof toolGatewaySessions.$inferSelect): ToolGatewaySession {
   return {
-    hasProfile: true,
-    allowAll: rawProfile.allowAll === true,
-    allowedTools,
-    allowedProviders,
+    id: row.id,
+    token: "",
+    companyId: row.companyId,
+    agentId: row.agentId,
+    runId: row.runId,
+    issueId: row.issueId,
+    projectId: row.projectId,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
   };
-}
-
-function isToolAllowed(profile: ToolGatewayProfile, tool: ToolGatewayDescriptor): boolean {
-  if (!profile.hasProfile) return false;
-  if (profile.allowAll) return true;
-  if (profile.allowedTools.has(tool.name)) return true;
-  return profile.allowedProviders.has(tool.providerType);
-}
-
-function generateGatewayToken() {
-  return randomBytes(32).toString("base64url");
 }
 
 function timeoutMs(value: number | undefined) {
@@ -194,77 +167,6 @@ function inferToolRisk(toolName: string): ToolGatewayDescriptor["risk"] {
 
 function toolRequiresFormalApproval(tool: ToolGatewayDescriptor): boolean {
   return tool.risk === "destructive";
-}
-
-function createRuntimeSupervisor() {
-  const slots = new Map<string, RuntimeSlotRecord>();
-
-  function stopSlot(slot: RuntimeSlotRecord) {
-    if (slot.idleTimer) {
-      clearTimeout(slot.idleTimer);
-      slot.idleTimer = null;
-    }
-    slot.status = "stopped";
-    slot.stoppedAt = new Date();
-    slots.delete(slot.connectionKey);
-  }
-
-  function scheduleIdleStop(slot: RuntimeSlotRecord) {
-    if (slot.idleTimer) clearTimeout(slot.idleTimer);
-    slot.idleTimer = setTimeout(() => stopSlot(slot), STDIO_FIXTURE_IDLE_TTL_MS);
-    slot.idleTimer.unref?.();
-  }
-
-  return {
-    async useFixtureSlot<T>(
-      input: { companyId: string; connectionKey: string },
-      fn: (slot: RuntimeSlotRecord) => Promise<T>,
-    ): Promise<T> {
-      const now = new Date();
-      let slot = slots.get(input.connectionKey);
-      if (!slot) {
-        slot = {
-          id: randomUUID(),
-          companyId: input.companyId,
-          connectionKey: input.connectionKey,
-          providerType: "mcp_stdio_fixture",
-          status: "running",
-          startedAt: now,
-          lastUsedAt: now,
-          stoppedAt: null,
-          useCount: 0,
-          metadata: { fixture: "slow-stateful-stdio" },
-          idleTimer: null,
-          counter: 0,
-        };
-        slots.set(input.connectionKey, slot);
-      }
-
-      if (slot.idleTimer) {
-        clearTimeout(slot.idleTimer);
-        slot.idleTimer = null;
-      }
-      slot.status = "running";
-      slot.lastUsedAt = now;
-      slot.stoppedAt = null;
-      slot.useCount += 1;
-
-      try {
-        return await fn(slot);
-      } finally {
-        scheduleIdleStop(slot);
-      }
-    },
-
-    listSlots(companyId?: string): ToolGatewayRuntimeSlot[] {
-      return Array.from(slots.values())
-        .filter((slot) => !companyId || slot.companyId === companyId)
-        .map(({ idleTimer: _idleTimer, counter, ...slot }) => ({
-          ...slot,
-          metadata: { ...slot.metadata, counter },
-        }));
-    },
-  };
 }
 
 const BUILTIN_TOOLS: ToolGatewayDescriptor[] = [
@@ -366,10 +268,20 @@ const BUILTIN_TOOLS: ToolGatewayDescriptor[] = [
 
 export function createToolGatewayService(
   db: Db,
-  options: { pluginToolDispatcher?: PluginToolDispatcher } = {},
+  options: {
+    pluginToolDispatcher?: PluginToolDispatcher;
+    deploymentMode?: DeploymentMode;
+    deploymentExposure?: DeploymentExposure;
+    trustedLocalStdioRuntimeHost?: string | null;
+    runtimeSupervisor?: ToolRuntimeSupervisorOptions;
+  } = {},
 ) {
-  const sessions = new Map<string, ToolGatewaySession>();
-  const runtimeSupervisor = createRuntimeSupervisor();
+  const runtimeSupervisor = createToolRuntimeSupervisor(db, {
+    deploymentMode: options.deploymentMode,
+    deploymentExposure: options.deploymentExposure,
+    trustedLocalStdioRuntimeHost: options.trustedLocalStdioRuntimeHost,
+    ...options.runtimeSupervisor,
+  });
   const pluginToolDispatcher = options.pluginToolDispatcher;
   const interactions = issueThreadInteractionService(db);
   const policyService = toolAccessPolicyService(db);
@@ -386,20 +298,10 @@ export function createToolGatewayService(
     return [...BUILTIN_TOOLS, ...pluginTools()];
   }
 
-  function getActiveSession(sessionToken: string): ToolGatewaySession {
-    const session = sessions.get(sessionToken);
-    if (!session || session.expiresAt.getTime() <= Date.now()) {
-      if (session) sessions.delete(sessionToken);
-      throw new ToolGatewayHttpError(401, "Tool gateway session is expired or invalid", "session_expired");
-    }
-    return session;
-  }
-
-  async function getAgentProfile(companyId: string, agentId: string): Promise<ToolGatewayProfile> {
+  async function assertAgentInCompany(companyId: string, agentId: string): Promise<void> {
     const [agent] = await db
       .select({
         companyId: agents.companyId,
-        permissions: agents.permissions,
       })
       .from(agents)
       .where(eq(agents.id, agentId))
@@ -408,8 +310,6 @@ export function createToolGatewayService(
     if (!agent || agent.companyId !== companyId) {
       throw new ToolGatewayHttpError(404, "Agent not found for company", "agent_not_found");
     }
-
-    return normalizeToolGatewayProfile(agent.permissions);
   }
 
   async function resolveRunContext(input: {
@@ -423,6 +323,7 @@ export function createToolGatewayService(
       .select({
         companyId: heartbeatRuns.companyId,
         agentId: heartbeatRuns.agentId,
+        status: heartbeatRuns.status,
         contextSnapshot: heartbeatRuns.contextSnapshot,
       })
       .from(heartbeatRuns)
@@ -434,6 +335,9 @@ export function createToolGatewayService(
     }
     if (run.agentId !== input.agentId) {
       throw new ToolGatewayHttpError(403, "Run does not belong to agent", "run_agent_mismatch");
+    }
+    if (!ACTIVE_GATEWAY_RUN_STATUSES.has(run.status)) {
+      throw new ToolGatewayHttpError(403, "Run is not active", "run_inactive");
     }
 
     const snapshot = asRecord(run.contextSnapshot);
@@ -493,13 +397,13 @@ export function createToolGatewayService(
           ? "policy_decision"
           : input.action === "tool_gateway.call_completed"
             ? "call_completed"
-            : input.action === "tool_gateway.call_denied"
+            : input.action === "tool_gateway.call_denied" || input.action === "tool_gateway.session_rejected"
               ? "call_denied"
               : input.action === "tool_gateway.call_deferred"
                 ? "call_failed"
                 : "call_failed";
     const dedicatedOutcome =
-      input.action === "tool_gateway.call_denied"
+      input.action === "tool_gateway.call_denied" || input.action === "tool_gateway.session_rejected"
         ? "denied"
         : input.action === "tool_gateway.call_deferred"
           ? "timeout"
@@ -543,8 +447,103 @@ export function createToolGatewayService(
     });
   }
 
+  async function writeSessionAuthFailure(
+    row: typeof toolGatewaySessions.$inferSelect,
+    reasonCode: string,
+    details: Record<string, unknown> = {},
+  ) {
+    const session = gatewaySessionFromRow(row);
+    await writeAudit({
+      session,
+      companyId: session.companyId,
+      agentId: session.agentId,
+      runId: session.runId,
+      issueId: session.issueId,
+      action: "tool_gateway.session_rejected",
+      details: {
+        decision: "deny",
+        reasonCode,
+        expiresAt: session.expiresAt.toISOString(),
+        revokedAt: row.revokedAt?.toISOString() ?? null,
+        ...details,
+      },
+    });
+  }
+
+  async function assertSessionRunIsActive(row: typeof toolGatewaySessions.$inferSelect) {
+    const [run] = await db
+      .select({
+        companyId: heartbeatRuns.companyId,
+        agentId: heartbeatRuns.agentId,
+        status: heartbeatRuns.status,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, row.runId))
+      .limit(1);
+
+    if (!run
+      || run.companyId !== row.companyId
+      || run.agentId !== row.agentId
+      || !ACTIVE_GATEWAY_RUN_STATUSES.has(run.status)) {
+      await writeSessionAuthFailure(row, "session_run_inactive", {
+        runStatus: run?.status ?? null,
+      });
+      throw new ToolGatewayHttpError(401, "Tool gateway session is expired or invalid", "session_run_inactive");
+    }
+  }
+
+  async function getActiveSession(sessionToken: string): Promise<ToolGatewaySession> {
+    const token = sessionToken.trim();
+    if (!token) {
+      throw new ToolGatewayHttpError(401, "Tool gateway session is expired or invalid", "session_invalid");
+    }
+
+    const tokenHash = hashGatewayToken(token);
+    const [row] = await db
+      .select()
+      .from(toolGatewaySessions)
+      .where(eq(toolGatewaySessions.tokenHash, tokenHash))
+      .limit(1);
+
+    if (!row) {
+      const sessionId = sessionIdFromGatewayToken(token);
+      if (sessionId) {
+        const [candidate] = await db
+          .select()
+          .from(toolGatewaySessions)
+          .where(eq(toolGatewaySessions.id, sessionId))
+          .limit(1);
+        if (candidate) {
+          await writeSessionAuthFailure(candidate, "session_invalid");
+        }
+      }
+      throw new ToolGatewayHttpError(401, "Tool gateway session is expired or invalid", "session_invalid");
+    }
+
+    if (row.revokedAt) {
+      await writeSessionAuthFailure(row, "session_revoked");
+      throw new ToolGatewayHttpError(401, "Tool gateway session is expired or invalid", "session_revoked");
+    }
+
+    if (row.expiresAt.getTime() <= Date.now()) {
+      await writeSessionAuthFailure(row, "session_expired");
+      throw new ToolGatewayHttpError(401, "Tool gateway session is expired or invalid", "session_expired");
+    }
+
+    await assertSessionRunIsActive(row);
+
+    const now = new Date();
+    await db
+      .update(toolGatewaySessions)
+      .set({ lastUsedAt: now, updatedAt: now })
+      .where(eq(toolGatewaySessions.id, row.id));
+
+    return gatewaySessionFromRow({ ...row, lastUsedAt: now, updatedAt: now });
+  }
+
   async function writeToolCallEvent(input: {
     invocationId?: string | null;
+    actionRequestId?: string | null;
     session: ToolGatewaySession;
     eventType: "policy_decision" | "invocation_created" | "approval_requested" | "approval_resolved" | "call_started" | "call_completed" | "call_failed" | "call_denied";
     outcome: "pending" | "success" | "failure" | "denied" | "timeout" | "cancelled";
@@ -558,6 +557,7 @@ export function createToolGatewayService(
     await db.insert(toolCallEvents).values({
       companyId: input.session.companyId,
       invocationId: input.invocationId ?? null,
+      actionRequestId: input.actionRequestId ?? null,
       eventType: input.eventType,
       outcome: input.outcome,
       actorType: "agent",
@@ -604,6 +604,7 @@ export function createToolGatewayService(
         .where(eq(toolInvocations.id, input.invocation.id));
       await writeToolCallEvent({
         invocationId: input.invocation.id,
+        actionRequestId: input.actionRequest?.id ?? null,
         session: input.session,
         eventType: "call_denied",
         outcome: "denied",
@@ -636,6 +637,7 @@ export function createToolGatewayService(
         tool: input.tool.name,
       });
     }
+    const actionRequest = input.actionRequest;
 
     const signedArguments = signToolArguments({
       invocationId: input.invocation.id,
@@ -671,7 +673,7 @@ export function createToolGatewayService(
             ],
             source: "tool_gateway",
             invocationId: input.invocation.id,
-            actionRequestId: input.actionRequest.id,
+            actionRequestId: actionRequest.id,
             tool: input.tool.name,
             risk: input.tool.risk,
             argumentsHash: canonicalArgumentsHash,
@@ -694,7 +696,7 @@ export function createToolGatewayService(
       { id: input.session.issueId, companyId: input.session.companyId },
       {
         kind: "request_confirmation",
-        idempotencyKey: `tool-action:${input.actionRequest.id}`,
+        idempotencyKey: `tool-action:${actionRequest.id}`,
         title: "Approve tool action",
         summary: `${input.tool.name} requires approval before Paperclip will execute it.`,
         continuationPolicy: "wake_assignee_on_accept",
@@ -708,7 +710,7 @@ export function createToolGatewayService(
           detailsMarkdown: previewMarkdown,
           target: {
             type: "custom",
-            key: `tool-action:${input.actionRequest.id}`,
+            key: `tool-action:${actionRequest.id}`,
             revisionId: canonicalArgumentsHash,
             label: input.tool.name,
           },
@@ -729,10 +731,11 @@ export function createToolGatewayService(
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
         updatedAt: new Date(),
       })
-      .where(eq(toolActionRequests.id, input.actionRequest.id));
+      .where(eq(toolActionRequests.id, actionRequest.id));
 
     await writeToolCallEvent({
       invocationId: input.invocation.id,
+      actionRequestId: actionRequest.id,
       session: input.session,
       eventType: "approval_requested",
       outcome: "pending",
@@ -740,7 +743,7 @@ export function createToolGatewayService(
       policyDecision: "require_approval",
       reasonCode: "requires_approval_policy",
       argumentsSummary: input.argumentsSummary,
-      metadata: { actionRequestId: input.actionRequest.id, interactionId: interaction.id, approvalId: formalApprovalId },
+      metadata: { actionRequestId: actionRequest.id, interactionId: interaction.id, approvalId: formalApprovalId },
     });
 
     await writeAudit({
@@ -752,7 +755,7 @@ export function createToolGatewayService(
       action: "tool_gateway.approval_requested",
       details: {
         invocationId: input.invocation.id,
-        actionRequestId: input.actionRequest.id,
+        actionRequestId: actionRequest.id,
         interactionId: interaction.id,
         approvalId: formalApprovalId,
         decision: "require_approval",
@@ -766,7 +769,7 @@ export function createToolGatewayService(
 
     throw new ToolGatewayHttpError(409, "Tool action requires approval", "approval_required", {
       invocationId: input.invocation.id,
-      actionRequestId: input.actionRequest.id,
+      actionRequestId: actionRequest.id,
       interactionId: interaction.id,
       approvalId: formalApprovalId,
       tool: input.tool.name,
@@ -841,7 +844,7 @@ export function createToolGatewayService(
   }
 
   async function listToolsForContext(session: ToolGatewaySession): Promise<ToolGatewayDescriptor[]> {
-    await getAgentProfile(session.companyId, session.agentId);
+    await assertAgentInCompany(session.companyId, session.agentId);
     const visible: ToolGatewayDescriptor[] = [];
     for (const tool of allTools()) {
       const decision = await policyService.decide(policyInputForTool({ session, tool }));
@@ -961,25 +964,35 @@ export function createToolGatewayService(
         {
           companyId: session.companyId,
           connectionKey: `${session.companyId}:mcp-stdio-fixture:default`,
+          runId: session.runId,
+          issueId: session.issueId,
+          agentId: session.agentId,
         },
-        async (slot) => {
+        async (handle) => {
+          const priorUseCount = Number(handle.metadata.useCount ?? 0) || 0;
+          let counter = Number(handle.metadata.counter ?? 0) || 0;
           if (tool.name === "mcp-stdio-fixture:increment_counter") {
-            slot.counter += 1;
+            counter += 1;
+            handle.metadata.counter = counter;
+            handle.appendLog("stdout", `increment_counter counter=${counter}`);
+          } else {
+            handle.appendLog("stdout", `runtime_status counter=${counter}`);
           }
+          const nextUseCount = priorUseCount + 1;
           return {
             content: JSON.stringify({
-              slotId: slot.id,
-              status: slot.status,
-              counter: slot.counter,
-              useCount: slot.useCount,
+              slotId: handle.slot.id,
+              status: handle.slot.status,
+              counter,
+              useCount: nextUseCount,
             }),
             data: {
-              slotId: slot.id,
-              status: slot.status,
-              counter: slot.counter,
-              useCount: slot.useCount,
-              lazyStarted: slot.useCount === 1,
-              reusedRuntimeSlot: slot.useCount > 1,
+              slotId: handle.slot.id,
+              status: handle.slot.status,
+              counter,
+              useCount: nextUseCount,
+              lazyStarted: priorUseCount === 0,
+              reusedRuntimeSlot: priorUseCount > 0,
             },
           };
         },
@@ -1017,12 +1030,14 @@ export function createToolGatewayService(
       actorType?: LogActivityInput["actorType"];
       actorId?: string;
     }): Promise<ToolGatewaySession> {
-      await getAgentProfile(input.companyId, input.agentId);
+      await assertAgentInCompany(input.companyId, input.agentId);
       const { issueId, projectId } = await resolveRunContext(input);
       const now = new Date();
+      const sessionId = randomUUID();
+      const token = generateGatewayToken(sessionId);
       const session: ToolGatewaySession = {
-        id: randomUUID(),
-        token: generateGatewayToken(),
+        id: sessionId,
+        token,
         companyId: input.companyId,
         agentId: input.agentId,
         runId: input.runId,
@@ -1031,7 +1046,19 @@ export function createToolGatewayService(
         createdAt: now,
         expiresAt: new Date(now.getTime() + sessionTtlMs(input.ttlMs)),
       };
-      sessions.set(session.token, session);
+
+      await db.insert(toolGatewaySessions).values({
+        id: session.id,
+        companyId: session.companyId,
+        agentId: session.agentId,
+        runId: session.runId,
+        issueId: session.issueId,
+        projectId: session.projectId,
+        tokenHash: hashGatewayToken(token),
+        expiresAt: session.expiresAt,
+        createdAt: session.createdAt,
+        updatedAt: session.createdAt,
+      });
 
       await writeAudit({
         session,
@@ -1053,7 +1080,7 @@ export function createToolGatewayService(
     },
 
     async listToolsForSession(sessionToken: string): Promise<ToolGatewayDescriptor[]> {
-      const session = getActiveSession(sessionToken);
+      const session = await getActiveSession(sessionToken);
       const tools = await listToolsForContext(session);
       await writeAudit({
         session,
@@ -1073,7 +1100,7 @@ export function createToolGatewayService(
     },
 
     async listPluginToolsForAgent(input: { companyId: string; agentId: string }): Promise<AgentToolDescriptor[]> {
-      await getAgentProfile(input.companyId, input.agentId);
+      await assertAgentInCompany(input.companyId, input.agentId);
       const visible: AgentToolDescriptor[] = [];
       for (const tool of pluginTools()) {
         const decision = await policyService.decide(policyInputForAgentTool({
@@ -1171,7 +1198,7 @@ export function createToolGatewayService(
     },
 
     async executeTool(input: ExecuteGatewayToolInput) {
-      const session = getActiveSession(input.sessionToken);
+      const session = await getActiveSession(input.sessionToken);
       let invocationId = String(randomUUID());
       const startedAt = Date.now();
 
@@ -1261,6 +1288,7 @@ export function createToolGatewayService(
             actionRequest = approved;
             await writeToolCallEvent({
               invocationId: storedInvocation.id,
+              actionRequestId: actionRequest.id,
               session,
               eventType: "approval_resolved",
               outcome: "success",
@@ -1479,6 +1507,7 @@ export function createToolGatewayService(
           .where(eq(toolInvocations.id, invocationId));
         await writeToolCallEvent({
           invocationId,
+          actionRequestId: input.approvedActionRequestId ?? null,
           session,
           eventType: "call_completed",
           outcome: "success",
@@ -1514,18 +1543,29 @@ export function createToolGatewayService(
           result: resultValidation.value,
         };
       } catch (err) {
-        const status = err instanceof ToolGatewayHttpError ? err.status : 502;
+        const normalizedError = err instanceof ToolRuntimeSupervisorError
+          ? new ToolGatewayHttpError(err.status, err.message, err.reasonCode, err.details)
+          : err;
+        const status = normalizedError instanceof ToolGatewayHttpError ? normalizedError.status : 502;
         const reasonCode =
-          err instanceof ToolContentValidationError
-            ? err.reasonCode
-            : err instanceof ToolGatewayHttpError
-              ? err.reasonCode
+          normalizedError instanceof ToolContentValidationError
+            ? normalizedError.reasonCode
+            : normalizedError instanceof ToolGatewayHttpError
+              ? normalizedError.reasonCode
               : "tool_execution_failed";
-        const message = err instanceof Error ? err.message : String(err);
+        const isRuntimeDeferred =
+          status === 429
+          && (
+            reasonCode === "runtime_capacity_unavailable"
+            || reasonCode === "runtime_restart_backoff"
+            || reasonCode === "runtime_restart_suppressed"
+          );
+        const isDeferred = status === 504 || isRuntimeDeferred;
+        const message = normalizedError instanceof Error ? normalizedError.message : String(normalizedError);
         await db
           .update(toolInvocations)
           .set({
-            status: status === 504 ? "timed_out" : "failed",
+            status: status === 504 ? "timed_out" : status === 429 ? "rate_limited" : "failed",
             errorCode: reasonCode,
             errorMessage: message,
             completedAt: new Date(),
@@ -1534,14 +1574,15 @@ export function createToolGatewayService(
           .where(eq(toolInvocations.id, invocationId));
         await writeToolCallEvent({
           invocationId,
+          actionRequestId: input.approvedActionRequestId ?? null,
           session,
           eventType: status === 504 ? "call_failed" : "call_failed",
           outcome: status === 504 ? "timeout" : "failure",
           toolName: tool.name,
-          policyDecision: status === 504 ? "defer_runtime" : "deny",
+          policyDecision: isDeferred ? "defer_runtime" : "deny",
           reasonCode,
           argumentsSummary: effectiveArgumentsSummary,
-          metadata: err instanceof ToolContentValidationError ? { findings: err.findings } : null,
+          metadata: normalizedError instanceof ToolContentValidationError ? { findings: normalizedError.findings } : null,
         });
         await writeAudit({
           session,
@@ -1549,10 +1590,10 @@ export function createToolGatewayService(
           agentId: session.agentId,
           runId: session.runId,
           issueId: session.issueId,
-          action: status === 504 ? "tool_gateway.call_deferred" : "tool_gateway.call_failed",
+          action: isDeferred ? "tool_gateway.call_deferred" : "tool_gateway.call_failed",
           details: {
             invocationId,
-            decision: status === 504 ? "defer_runtime" : "deny",
+            decision: isDeferred ? "defer_runtime" : "deny",
             reasonCode,
             tool: tool.name,
             providerType: tool.providerType,
@@ -1560,10 +1601,10 @@ export function createToolGatewayService(
             error: message,
           },
         });
-        if (err instanceof ToolContentValidationError) {
-          throw new ToolGatewayHttpError(422, message, reasonCode, { findings: err.findings });
+        if (normalizedError instanceof ToolContentValidationError) {
+          throw new ToolGatewayHttpError(422, message, reasonCode, { findings: normalizedError.findings });
         }
-        throw err;
+        throw normalizedError;
       }
     },
 
@@ -1801,8 +1842,70 @@ export function createToolGatewayService(
       }
     },
 
-    listRuntimeSlots(companyId?: string) {
+    async revokeSession(input: { companyId: string; sessionId: string; revokedAt?: Date }) {
+      const now = input.revokedAt ?? new Date();
+      const [session] = await db
+        .update(toolGatewaySessions)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(eq(toolGatewaySessions.companyId, input.companyId), eq(toolGatewaySessions.id, input.sessionId)))
+        .returning();
+      if (!session) {
+        throw new ToolGatewayHttpError(404, "Tool gateway session not found", "session_not_found");
+      }
+      return gatewaySessionFromRow(session);
+    },
+
+    async cleanupExpiredSessions(input: { now?: Date } = {}) {
+      const now = input.now ?? new Date();
+      const rows = await db
+        .delete(toolGatewaySessions)
+        .where(lte(toolGatewaySessions.expiresAt, now))
+        .returning({ id: toolGatewaySessions.id });
+      return { deletedCount: rows.length };
+    },
+
+    async listRuntimeSlots(companyId?: string) {
       return runtimeSupervisor.listSlots(companyId);
+    },
+
+    async stopRuntimeSlot(input: {
+      companyId: string;
+      slotId: string;
+      actor?: { agentId?: string | null; runId?: string | null };
+    }) {
+      try {
+        return await runtimeSupervisor.stopSlot({
+          companyId: input.companyId,
+          slotId: input.slotId,
+          agentId: input.actor?.agentId ?? null,
+          runId: input.actor?.runId ?? null,
+        });
+      } catch (err) {
+        if (err instanceof ToolRuntimeSupervisorError) {
+          throw new ToolGatewayHttpError(err.status, err.message, err.reasonCode, err.details);
+        }
+        throw err;
+      }
+    },
+
+    async restartRuntimeSlot(input: {
+      companyId: string;
+      slotId: string;
+      actor?: { agentId?: string | null; runId?: string | null };
+    }) {
+      try {
+        return await runtimeSupervisor.restartSlot({
+          companyId: input.companyId,
+          slotId: input.slotId,
+          agentId: input.actor?.agentId ?? null,
+          runId: input.actor?.runId ?? null,
+        });
+      } catch (err) {
+        if (err instanceof ToolRuntimeSupervisorError) {
+          throw new ToolGatewayHttpError(err.status, err.message, err.reasonCode, err.details);
+        }
+        throw err;
+      }
     },
   };
 }

@@ -46,6 +46,7 @@ import { heartbeatRuns } from "./heartbeat_runs.js";
 import { issueThreadInteractions } from "./issue_thread_interactions.js";
 import { issues } from "./issues.js";
 import { plugins } from "./plugins.js";
+import { projects } from "./projects.js";
 import { projectWorkspaces } from "./project_workspaces.js";
 
 export const toolApplications = pgTable(
@@ -291,6 +292,31 @@ export const toolRuntimeSlots = pgTable(
   ],
 );
 
+export const toolGatewaySessions = pgTable(
+  "tool_gateway_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    runId: uuid("run_id").notNull().references(() => heartbeatRuns.id, { onDelete: "cascade" }),
+    issueId: uuid("issue_id").references(() => issues.id, { onDelete: "set null" }),
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("tool_gateway_sessions_token_hash_uq").on(table.tokenHash),
+    index("tool_gateway_sessions_company_agent_idx").on(table.companyId, table.agentId),
+    index("tool_gateway_sessions_company_expires_idx").on(table.companyId, table.expiresAt),
+    index("tool_gateway_sessions_run_idx").on(table.companyId, table.runId),
+    index("tool_gateway_sessions_issue_idx").on(table.companyId, table.issueId),
+  ],
+);
+
 export const toolInvocations = pgTable(
   "tool_invocations",
   {
@@ -305,6 +331,8 @@ export const toolInvocations = pgTable(
     applicationId: uuid("application_id").references(() => toolApplications.id, { onDelete: "set null" }),
     connectionId: uuid("connection_id").references(() => toolConnections.id, { onDelete: "set null" }),
     catalogEntryId: uuid("catalog_entry_id").references(() => toolCatalogEntries.id, { onDelete: "set null" }),
+    catalogVersionHash: text("catalog_version_hash"),
+    catalogSchemaHash: text("catalog_schema_hash"),
     toolName: text("tool_name").notNull(),
     argumentsHash: text("arguments_hash"),
     argumentsSummary: jsonb("arguments_summary").$type<ToolRedactedValueSummary>(),

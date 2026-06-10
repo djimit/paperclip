@@ -708,6 +708,20 @@
       "when": 1780704000000,
       "tag": "0100_agent_access_phase2_contracts",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1780790400000,
+      "tag": "0101_tool_invocation_catalog_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1780876800000,
+      "tag": "0102_tool_gateway_sessions",
+      "breakpoints": true
     }
   ]
 }

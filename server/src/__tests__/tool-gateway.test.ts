@@ -1,5 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import express from "express";
 import { eq } from "drizzle-orm";
+import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
@@ -13,13 +15,16 @@ import {
   toolAccessAuditEvents,
   toolActionRequests,
   toolCallEvents,
+  toolGatewaySessions,
   toolInvocations,
   toolPolicies,
   toolProfileBindings,
   toolProfileEntries,
   toolProfiles,
+  toolRuntimeSlots,
 } from "@paperclipai/db";
 import type { PluginToolDispatcher } from "../services/plugin-tool-dispatcher.js";
+import { toolGatewayRoutes } from "../routes/tool-gateway.js";
 import { createToolGatewayService, ToolGatewayHttpError } from "../services/tool-gateway.js";
 import {
   getEmbeddedPostgresTestSupport,
@@ -125,7 +130,19 @@ function expectGatewayError(error: unknown, status: number, reasonCode: string) 
   expect(gatewayError.reasonCode).toBe(reasonCode);
 }
 
-describeEmbeddedPostgres("tool gateway service", () => {
+function tamperToken(token: string) {
+  const replacement = token.endsWith("A") ? "B" : "A";
+  return `${token.slice(0, -1)}${replacement}`;
+}
+
+function createGatewayRouteApp(db: Db, gateway = createToolGatewayService(db)) {
+  const app = express();
+  app.use(express.json());
+  app.use("/api", toolGatewayRoutes(db, gateway));
+  return app;
+}
+
+describeEmbeddedPostgres("tool gateway acceptance", () => {
   let db!: Db;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
@@ -137,6 +154,8 @@ describeEmbeddedPostgres("tool gateway service", () => {
   afterEach(async () => {
     await db.delete(activityLog);
     await db.delete(toolCallEvents);
+    await db.delete(toolRuntimeSlots);
+    await db.delete(toolGatewaySessions);
     await db.delete(toolActionRequests);
     await db.delete(toolInvocations);
     await db.delete(toolAccessAuditEvents);
@@ -160,7 +179,7 @@ describeEmbeddedPostgres("tool gateway service", () => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
     const { issue, run } = await createIssueAndRun(db, company.id, agent.id);
-    const gateway = createToolGatewayService(db);
+    const gateway = createToolGatewayService(db, { runtimeSupervisor: { idleTtlMs: 25 } });
     const session = await gateway.createSession({
       companyId: company.id,
       agentId: agent.id,
@@ -201,7 +220,7 @@ describeEmbeddedPostgres("tool gateway service", () => {
       "mcp-stdio-fixture:increment_counter",
       "mcp-stdio-fixture:runtime_status",
     ]);
-    const gateway = createToolGatewayService(db);
+    const gateway = createToolGatewayService(db, { runtimeSupervisor: { idleTtlMs: 25 } });
     const session = await gateway.createSession({
       companyId: company.id,
       agentId: agent.id,
@@ -260,6 +279,220 @@ describeEmbeddedPostgres("tool gateway service", () => {
     });
   });
 
+  it("persists hashed sessions and accepts them across gateway service instances", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { issue, run } = await createIssueAndRun(db, company.id, agent.id);
+    await allowToolsForAgent(db, company.id, agent.id, ["mcp-remote-fixture:add"]);
+
+    const gatewayA = createToolGatewayService(db);
+    const session = await gatewayA.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+
+    const [storedSession] = await db
+      .select()
+      .from(toolGatewaySessions)
+      .where(eq(toolGatewaySessions.id, session.id));
+    expect(storedSession).toMatchObject({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+      issueId: issue.id,
+      tokenHash: createHash("sha256").update(session.token).digest("hex"),
+    });
+    expect(JSON.stringify(storedSession)).not.toContain(session.token);
+
+    const gatewayB = createToolGatewayService(db);
+    await expect(gatewayB.listToolsForSession(session.token)).resolves.toEqual([
+      expect.objectContaining({ name: "mcp-remote-fixture:add" }),
+    ]);
+    await expect(gatewayB.executeTool({
+      sessionToken: session.token,
+      tool: "mcp-remote-fixture:add",
+      parameters: { a: 2, b: 5 },
+    })).resolves.toMatchObject({
+      status: "completed",
+      result: { content: "7" },
+    });
+
+    const [usedSession] = await db
+      .select()
+      .from(toolGatewaySessions)
+      .where(eq(toolGatewaySessions.id, session.id));
+    expect(usedSession.lastUsedAt).toBeInstanceOf(Date);
+  });
+
+  it("rejects gateway session tokens passed through query strings", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const gateway = createToolGatewayService(db);
+    const session = await gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+    const app = createGatewayRouteApp(db, gateway);
+
+    const listWithQueryToken = await request(app)
+      .get("/api/tool-gateway/tools")
+      .query({ sessionToken: session.token });
+    expect(listWithQueryToken.status).toBe(401);
+    expect(listWithQueryToken.body).toEqual({ error: "Tool gateway session token is required" });
+
+    const callWithQueryToken = await request(app)
+      .post("/api/tool-gateway/tools/call")
+      .query({ sessionToken: session.token })
+      .send({ tool: "mcp-remote-fixture:add", parameters: { a: 1, b: 2 } });
+    expect(callWithQueryToken.status).toBe(401);
+    expect(callWithQueryToken.body).toEqual({ error: "Tool gateway session token is required" });
+
+    const listWithHeaderToken = await request(app)
+      .get("/api/tool-gateway/tools")
+      .set("x-paperclip-tool-gateway-token", session.token);
+    expect(listWithHeaderToken.status).toBe(200);
+  });
+
+  it("rejects durable sessions after the heartbeat run is no longer active", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const gateway = createToolGatewayService(db);
+    const session = await gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+
+    await db
+      .update(heartbeatRuns)
+      .set({ status: "succeeded", completedAt: new Date() })
+      .where(eq(heartbeatRuns.id, run.id));
+
+    await expect(gateway.listToolsForSession(session.token)).rejects.toMatchObject({
+      status: 401,
+      reasonCode: "session_run_inactive",
+    });
+    await expect(gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    })).rejects.toMatchObject({
+      status: 403,
+      reasonCode: "run_inactive",
+    });
+
+    const [audit] = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "tool_gateway.session_rejected"));
+    expect(audit).toMatchObject({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+    expect(audit.details).toMatchObject({
+      decision: "deny",
+      reasonCode: "session_run_inactive",
+      runStatus: "succeeded",
+    });
+    expect(JSON.stringify(audit)).not.toContain(session.token);
+  });
+
+  it("rejects expired, revoked, and tampered durable sessions without auditing token values", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const gateway = createToolGatewayService(db);
+
+    const expired = await gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+    await db
+      .update(toolGatewaySessions)
+      .set({ expiresAt: new Date(Date.now() - 1_000), updatedAt: new Date() })
+      .where(eq(toolGatewaySessions.id, expired.id));
+    await expect(gateway.listToolsForSession(expired.token)).rejects.toMatchObject({
+      status: 401,
+      reasonCode: "session_expired",
+    });
+
+    const revoked = await gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+    await gateway.revokeSession({ companyId: company.id, sessionId: revoked.id });
+    await expect(gateway.listToolsForSession(revoked.token)).rejects.toMatchObject({
+      status: 401,
+      reasonCode: "session_revoked",
+    });
+
+    const tampered = await gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+    const badToken = tamperToken(tampered.token);
+    await expect(gateway.listToolsForSession(badToken)).rejects.toMatchObject({
+      status: 401,
+      reasonCode: "session_invalid",
+    });
+
+    const audits = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "tool_gateway.session_rejected"));
+    expect(audits).toHaveLength(3);
+    const serializedAudits = JSON.stringify(audits);
+    expect(serializedAudits).toContain("session_expired");
+    expect(serializedAudits).toContain("session_revoked");
+    expect(serializedAudits).toContain("session_invalid");
+    expect(serializedAudits).not.toContain(expired.token);
+    expect(serializedAudits).not.toContain(revoked.token);
+    expect(serializedAudits).not.toContain(tampered.token);
+    expect(serializedAudits).not.toContain(badToken);
+
+    const dedicatedAudits = await db
+      .select()
+      .from(toolAccessAuditEvents)
+      .where(eq(toolAccessAuditEvents.action, "call_denied"));
+    expect(dedicatedAudits).toHaveLength(3);
+    expect(dedicatedAudits.every((event) => event.outcome === "denied")).toBe(true);
+  });
+
+  it("cleans up expired durable sessions explicitly", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const gateway = createToolGatewayService(db);
+    const oldSession = await gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+    await gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+    await db
+      .update(toolGatewaySessions)
+      .set({ expiresAt: new Date(Date.now() - 1_000), updatedAt: new Date() })
+      .where(eq(toolGatewaySessions.id, oldSession.id));
+
+    await expect(gateway.cleanupExpiredSessions()).resolves.toEqual({ deletedCount: 1 });
+
+    const remaining = await db.select().from(toolGatewaySessions);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.id).not.toBe(oldSession.id);
+  });
+
   it("lazy-starts, reuses, and idles down the local stdio fixture slot", async () => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
@@ -268,7 +501,7 @@ describeEmbeddedPostgres("tool gateway service", () => {
       "mcp-stdio-fixture:increment_counter",
       "mcp-stdio-fixture:runtime_status",
     ]);
-    const gateway = createToolGatewayService(db);
+    const gateway = createToolGatewayService(db, { runtimeSupervisor: { idleTtlMs: 25 } });
     const session = await gateway.createSession({
       companyId: company.id,
       agentId: agent.id,
@@ -291,10 +524,230 @@ describeEmbeddedPostgres("tool gateway service", () => {
     expect(firstData).toMatchObject({ lazyStarted: true, reusedRuntimeSlot: false, counter: 1 });
     expect(secondData).toMatchObject({ lazyStarted: false, reusedRuntimeSlot: true, counter: 1 });
     expect(secondData.slotId).toBe(firstData.slotId);
-    expect(gateway.listRuntimeSlots(company.id)).toHaveLength(1);
+    await expect(gateway.listRuntimeSlots(company.id)).resolves.toHaveLength(1);
+    const [idleSlot] = await db.select().from(toolRuntimeSlots).where(eq(toolRuntimeSlots.companyId, company.id));
+    expect(idleSlot).toMatchObject({
+      status: "idle",
+      commandTemplateKey: "paperclip.slow-stateful-stdio",
+      healthStatus: "ok",
+    });
+    expect(idleSlot.metadata).toMatchObject({
+      counter: 1,
+      useCount: 2,
+      process: expect.objectContaining({ simulated: true }),
+      resourceLimits: expect.objectContaining({ memoryCeilingSupported: expect.any(Boolean) }),
+    });
 
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
-    expect(gateway.listRuntimeSlots(company.id)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    await expect(gateway.listRuntimeSlots(company.id)).resolves.toEqual([]);
+    const [stoppedSlot] = await db.select().from(toolRuntimeSlots).where(eq(toolRuntimeSlots.id, idleSlot.id));
+    expect(stoppedSlot).toMatchObject({
+      status: "stopped",
+      healthMessage: "Stopped after idle TTL.",
+    });
+  });
+
+  it("supports explicit stop and restart actions for local stdio slots", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    await allowToolsForAgent(db, company.id, agent.id, ["mcp-stdio-fixture:increment_counter"]);
+    const gateway = createToolGatewayService(db, { runtimeSupervisor: { restartBackoffMs: 0 } });
+    const session = await gateway.createSession({
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    });
+
+    const first = await gateway.executeTool({
+      sessionToken: session.token,
+      tool: "mcp-stdio-fixture:increment_counter",
+      parameters: {},
+    });
+    const slotId = (first.result as { data: { slotId: string } }).data.slotId;
+
+    await expect(gateway.stopRuntimeSlot({ companyId: company.id, slotId, actor: { agentId: agent.id, runId: run.id } }))
+      .resolves.toMatchObject({ id: slotId, status: "stopped" });
+    await expect(gateway.listRuntimeSlots(company.id)).resolves.toEqual([]);
+
+    await expect(gateway.restartRuntimeSlot({ companyId: company.id, slotId, actor: { agentId: agent.id, runId: run.id } }))
+      .resolves.toMatchObject({ id: slotId, status: "running" });
+  });
+
+  it("returns structured runtime defer when local stdio host capacity is exhausted", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    await allowToolsForAgent(db, company.id, agent.id, ["mcp-stdio-fixture:increment_counter"]);
+    const otherCompany = await createCompany(db);
+    const otherAgent = await createAgent(db, otherCompany.id);
+    const { run: otherRun } = await createIssueAndRun(db, otherCompany.id, otherAgent.id);
+    await allowToolsForAgent(db, otherCompany.id, otherAgent.id, ["mcp-stdio-fixture:increment_counter"]);
+    const gateway = createToolGatewayService(db, {
+      runtimeSupervisor: { idleTtlMs: 10_000, maxHostSlots: 1, hostId: "shared-host" },
+    });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const otherSession = await gateway.createSession({ companyId: otherCompany.id, agentId: otherAgent.id, runId: otherRun.id });
+
+    await gateway.executeTool({
+      sessionToken: session.token,
+      tool: "mcp-stdio-fixture:increment_counter",
+      parameters: {},
+    });
+
+    await gateway.executeTool({
+      sessionToken: otherSession.token,
+      tool: "mcp-stdio-fixture:increment_counter",
+      parameters: {},
+    }).then(
+      () => {
+        throw new Error("Expected host capacity to defer the second stdio slot");
+      },
+      (error) => expectGatewayError(error, 429, "runtime_capacity_unavailable"),
+    );
+
+    const [invocation] = await db
+      .select()
+      .from(toolInvocations)
+      .where(eq(toolInvocations.companyId, otherCompany.id));
+    const [deferAudit] = await db
+      .select()
+      .from(toolAccessAuditEvents)
+      .where(eq(toolAccessAuditEvents.action, "runtime_deferred"));
+    expect(invocation).toMatchObject({
+      status: "rate_limited",
+      errorCode: "runtime_capacity_unavailable",
+    });
+    expect(deferAudit).toMatchObject({
+      outcome: "failure",
+      reasonCode: "runtime_host_capacity_exhausted",
+    });
+  });
+
+  it("fails closed for hosted public local stdio unless a trusted runtime host is configured", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    await allowToolsForAgent(db, company.id, agent.id, ["mcp-stdio-fixture:increment_counter"]);
+    const hostedGateway = createToolGatewayService(db, {
+      deploymentMode: "authenticated",
+      deploymentExposure: "public",
+      trustedLocalStdioRuntimeHost: null,
+    });
+    const session = await hostedGateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+
+    await hostedGateway.executeTool({
+      sessionToken: session.token,
+      tool: "mcp-stdio-fixture:increment_counter",
+      parameters: {},
+    }).then(
+      () => {
+        throw new Error("Expected public hosted local stdio to fail closed");
+      },
+      (error) => expectGatewayError(error, 403, "local_stdio_unavailable_in_public_mode"),
+    );
+
+    const trustedGateway = createToolGatewayService(db, {
+      deploymentMode: "authenticated",
+      deploymentExposure: "public",
+      trustedLocalStdioRuntimeHost: "trusted-worker-1",
+      runtimeSupervisor: { idleTtlMs: 10_000 },
+    });
+    const trustedSession = await trustedGateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    await expect(trustedGateway.executeTool({
+      sessionToken: trustedSession.token,
+      tool: "mcp-stdio-fixture:increment_counter",
+      parameters: {},
+    })).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("suppresses restart storms with backoff-visible slot health", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    await allowToolsForAgent(db, company.id, agent.id, ["mcp-stdio-fixture:increment_counter"]);
+    const gateway = createToolGatewayService(db, {
+      runtimeSupervisor: {
+        restartBackoffMs: 0,
+        restartStormLimit: 1,
+        restartStormWindowMs: 10_000,
+      },
+    });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const first = await gateway.executeTool({
+      sessionToken: session.token,
+      tool: "mcp-stdio-fixture:increment_counter",
+      parameters: {},
+    });
+    const slotId = (first.result as { data: { slotId: string } }).data.slotId;
+
+    await gateway.restartRuntimeSlot({ companyId: company.id, slotId, actor: { agentId: agent.id, runId: run.id } });
+    await gateway.restartRuntimeSlot({ companyId: company.id, slotId, actor: { agentId: agent.id, runId: run.id } }).then(
+      () => {
+        throw new Error("Expected restart storm suppression");
+      },
+      (error) => expectGatewayError(error, 429, "runtime_restart_suppressed"),
+    );
+
+    const [slot] = await db.select().from(toolRuntimeSlots).where(eq(toolRuntimeSlots.id, slotId));
+    expect(slot).toMatchObject({
+      status: "failed",
+      healthStatus: "error",
+      lastError: "restart_storm_suppressed",
+    });
+    expect(slot.metadata).toMatchObject({
+      restartSuppressedUntil: expect.any(String),
+    });
+  });
+
+  it("recovers stuck local stdio slots before reuse", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    await allowToolsForAgent(db, company.id, agent.id, [
+      "mcp-stdio-fixture:increment_counter",
+      "mcp-stdio-fixture:runtime_status",
+    ]);
+    const gateway = createToolGatewayService(db, { runtimeSupervisor: { stuckSlotMs: 1, idleTtlMs: 10_000 } });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const first = await gateway.executeTool({
+      sessionToken: session.token,
+      tool: "mcp-stdio-fixture:increment_counter",
+      parameters: {},
+    });
+    const slotId = (first.result as { data: { slotId: string } }).data.slotId;
+    const staleAt = new Date(Date.now() - 60_000);
+    await db
+      .update(toolRuntimeSlots)
+      .set({
+        status: "running",
+        lastUsedAt: staleAt,
+        startedAt: staleAt,
+        idleDeadlineAt: null,
+        idleExpiresAt: null,
+        updatedAt: staleAt,
+      })
+      .where(eq(toolRuntimeSlots.id, slotId));
+
+    const recovered = await gateway.executeTool({
+      sessionToken: session.token,
+      tool: "mcp-stdio-fixture:runtime_status",
+      parameters: {},
+    });
+
+    expect((recovered.result as { data: { slotId: string; reusedRuntimeSlot: boolean } }).data).toMatchObject({
+      slotId,
+      reusedRuntimeSlot: true,
+    });
+    const [slot] = await db.select().from(toolRuntimeSlots).where(eq(toolRuntimeSlots.id, slotId));
+    expect(slot).toMatchObject({
+      status: "idle",
+      healthStatus: "ok",
+    });
+    expect(slot.metadata).toMatchObject({
+      stuckRecoveries: 1,
+      lastRestartReason: "stuck_slot_recovered",
+    });
   });
 
   it("defers write-risk tool calls into issue-thread approval requests", async () => {

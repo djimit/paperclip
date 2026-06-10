@@ -48,7 +48,7 @@ Upgrade steps for existing deployments:
 
 1. Apply DB migrations as usual (`pnpm paperclipai migrate`).
 2. Confirm the Tools & Access tab appears in the UI for board users.
-3. From **Examples**, install `safe-read-only-todo-kv` and run the bundled smoke. Expect `overall: "pass"`.
+3. From **Examples**, install `safe-read-only-todo-kv` and run the bundled smoke. Expect `ok: true` across all three checks (`allow_read_tool`, `deny_write_tool`, `audit_written`).
 4. For each existing agent runtime that previously called MCP servers directly: replace direct MCP wiring with a managed connection. Until you do, those agents have no governed tool access on this release.
 5. If you run `authenticated/public`, decide whether you want a trusted runtime worker for local stdio. If yes, set `PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST` on that worker and only that worker. If no, leave it unset — `remote_http` connections continue to work.
 
@@ -83,10 +83,10 @@ curl -fsS -X POST -H "Authorization: Bearer $BOARD_API_KEY" -H "Content-Type: ap
 
 curl -fsS -X POST -H "Authorization: Bearer $BOARD_API_KEY" -H "Content-Type: application/json" \
   "$PAPERCLIP_URL/api/companies/$COMPANY_ID/tools/examples/safe-read-only-todo-kv/smoke" \
-  -d '{}' | jq '{overall, checks}'
+  -d '{}' | jq '{ok, checks: [.checks[] | {name, ok, decision, reasonCode}]}'
 ```
 
-Expected: `runtime-health.status` is `"ok"` (no firing alerts on a clean install); `smoke.overall` is `"pass"` with three green checks.
+Expected: `runtime-health.status` is `"ok"` (no firing alerts on a clean install); `smoke.ok` is `true` with three green checks (`allow_read_tool`, `deny_write_tool`, `audit_written`).
 
 ## Documentation
 

@@ -1,21 +1,99 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import {
+  type DeploymentExposure,
+  type DeploymentMode,
   createToolApplicationSchema,
   createToolConnectionSchema,
+  createToolPolicySchema,
+  createToolProfileBindingForProfileSchema,
+  createToolProfileEntryForProfileSchema,
+  createToolProfileWithEntriesSchema,
+  createToolTrustRuleFromActionRequestSchema,
   importMcpJsonSchema,
+  revokeToolTrustRuleSchema,
   toolPolicyTestRequestSchema,
+  unbindToolProfileBindingSchema,
   updateToolApplicationSchema,
   updateToolConnectionSchema,
+  updateToolPolicySchema,
+  updateToolProfileEntrySchema,
+  updateToolProfileWithEntriesSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { getActorInfo, assertBoard, assertCompanyAccess } from "./authz.js";
 import { logActivity, toolAccessPolicyService, toolAccessService } from "../services/index.js";
 
-export function toolAccessRoutes(db: Db) {
+export function toolAccessRoutes(
+  db: Db,
+  options: {
+    deploymentMode?: DeploymentMode;
+    deploymentExposure?: DeploymentExposure;
+    trustedLocalStdioRuntimeHost?: string | null;
+  } = {},
+) {
   const router = Router();
-  const svc = toolAccessService(db);
+  const svc = toolAccessService(db, options);
   const policySvc = toolAccessPolicyService(db);
+
+  router.get("/companies/:companyId/tools/examples", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ examples: await svc.listExamples(companyId) });
+  });
+
+  router.post("/companies/:companyId/tools/examples/:id/install", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const result = await svc.installExample(companyId, req.params.id as string, getActorInfo(req));
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "tool_example.installed",
+      entityType: "tool_example",
+      entityId: result.example.id,
+      details: {
+        created: result.created,
+        applicationId: result.application.id,
+        connectionId: result.connection.id,
+        profileId: result.profile.id,
+        profileEntryCount: result.profileEntries.length,
+      },
+    });
+    res.status(result.created ? 201 : 200).json(result);
+  });
+
+  router.post("/companies/:companyId/tools/examples/:id/smoke", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const result = await svc.smokeExample(companyId, req.params.id as string, getActorInfo(req));
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "tool_example.smoke_run",
+      entityType: "tool_example",
+      entityId: result.exampleId,
+      details: {
+        ok: result.ok,
+        actor: result.actor,
+        connectionId: result.connection.id,
+        profileId: result.profile.id,
+        checks: result.checks.map((check) => ({
+          name: check.name,
+          ok: check.ok,
+          toolName: check.toolName ?? null,
+          decision: check.decision ?? null,
+          reasonCode: check.reasonCode ?? null,
+        })),
+      },
+    });
+    res.json(result);
+  });
 
   router.get("/companies/:companyId/tools/applications", async (req, res) => {
     assertBoard(req);
@@ -161,11 +239,326 @@ export function toolAccessRoutes(db: Db) {
     res.json({ catalog: await svc.listCatalog(existing.id, existing.companyId) });
   });
 
+  router.get("/companies/:companyId/tools/profiles", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ profiles: await svc.listProfiles(companyId) });
+  });
+
+  router.post("/companies/:companyId/tools/profiles", validate(createToolProfileWithEntriesSchema), async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    try {
+      const profile = await svc.createProfile(companyId, req.body);
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId ?? "board",
+        action: "tool_profile.created",
+        entityType: "tool_profile",
+        entityId: profile.id,
+        details: { name: profile.name, entryCount: profile.entries.length },
+      });
+      res.status(201).json(profile);
+    } catch (error) {
+      svc.ensureNoDuplicateNameError(error);
+    }
+  });
+
+  router.get("/companies/:companyId/tools/profiles/effective/agents/:agentId", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json(await svc.getEffectiveProfilesForAgent(companyId, req.params.agentId as string));
+  });
+
+  router.patch("/tool-profiles/:profileId", validate(updateToolProfileWithEntriesSchema), async (req, res) => {
+    assertBoard(req);
+    const existing = await svc.getProfile(req.params.profileId as string);
+    assertCompanyAccess(req, existing.companyId);
+    try {
+      const profile = await svc.updateProfile(existing.id, req.body);
+      await logActivity(db, {
+        companyId: profile.companyId,
+        actorType: "user",
+        actorId: req.actor.userId ?? "board",
+        action: "tool_profile.updated",
+        entityType: "tool_profile",
+        entityId: profile.id,
+        details: { status: profile.status, entryCount: profile.entries.length },
+      });
+      res.json(profile);
+    } catch (error) {
+      svc.ensureNoDuplicateNameError(error);
+    }
+  });
+
+  router.post("/tool-profiles/:profileId/entries", validate(createToolProfileEntryForProfileSchema), async (req, res) => {
+    assertBoard(req);
+    const existing = await svc.getProfile(req.params.profileId as string);
+    assertCompanyAccess(req, existing.companyId);
+    const entry = await svc.addProfileEntry(existing.id, req.body);
+    await logActivity(db, {
+      companyId: entry.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "tool_profile_entry.created",
+      entityType: "tool_profile_entry",
+      entityId: entry.id,
+      details: { profileId: entry.profileId, selectorType: entry.selectorType, effect: entry.effect },
+    });
+    res.status(201).json(entry);
+  });
+
+  router.patch("/tool-profile-entries/:entryId", validate(updateToolProfileEntrySchema), async (req, res) => {
+    assertBoard(req);
+    const existing = await svc.getProfileEntry(req.params.entryId as string);
+    assertCompanyAccess(req, existing.companyId);
+    const entry = await svc.updateProfileEntry(existing.id, req.body);
+    await logActivity(db, {
+      companyId: entry.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "tool_profile_entry.updated",
+      entityType: "tool_profile_entry",
+      entityId: entry.id,
+      details: { profileId: entry.profileId, selectorType: entry.selectorType, effect: entry.effect },
+    });
+    res.json(entry);
+  });
+
+  router.delete("/tool-profile-entries/:entryId", async (req, res) => {
+    assertBoard(req);
+    const existing = await svc.getProfileEntry(req.params.entryId as string);
+    assertCompanyAccess(req, existing.companyId);
+    const entry = await svc.deleteProfileEntry(existing.id);
+    await logActivity(db, {
+      companyId: entry.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "tool_profile_entry.deleted",
+      entityType: "tool_profile_entry",
+      entityId: entry.id,
+      details: { profileId: entry.profileId },
+    });
+    res.json(entry);
+  });
+
+  router.post(
+    "/companies/:companyId/tools/profiles/:profileId/bind",
+    validate(createToolProfileBindingForProfileSchema),
+    async (req, res) => {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const existing = await svc.getProfile(req.params.profileId as string, companyId);
+      try {
+        const binding = await svc.bindProfile(existing.id, req.body, getActorInfo(req));
+        await logActivity(db, {
+          companyId,
+          actorType: "user",
+          actorId: req.actor.userId ?? "board",
+          action: "tool_profile_binding.created",
+          entityType: "tool_profile_binding",
+          entityId: binding.id,
+          details: { profileId: binding.profileId, targetType: binding.targetType, targetId: binding.targetId },
+        });
+        res.status(201).json(binding);
+      } catch (error) {
+        svc.ensureNoDuplicateNameError(error);
+      }
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/tools/profiles/:profileId/unbind",
+    validate(unbindToolProfileBindingSchema),
+    async (req, res) => {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const existing = await svc.getProfile(req.params.profileId as string, companyId);
+      const result = await svc.unbindProfile(existing.id, req.body);
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId ?? "board",
+        action: "tool_profile_binding.deleted",
+        entityType: "tool_profile",
+        entityId: existing.id,
+        details: { targetType: req.body.targetType, targetId: req.body.targetId, unbound: result.unbound },
+      });
+      res.json(result);
+    },
+  );
+
   router.get("/companies/:companyId/tools/runtime-slots", async (req, res) => {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     res.json({ runtimeSlots: await svc.listRuntimeSlots(companyId) });
+  });
+
+  router.post("/companies/:companyId/tools/runtime-slots/:id/stop", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json(await svc.stopRuntimeSlot(companyId, req.params.id as string, getActorInfo(req)));
+  });
+
+  router.post("/companies/:companyId/tools/runtime-slots/:id/restart", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json(await svc.restartRuntimeSlot(companyId, req.params.id as string, getActorInfo(req)));
+  });
+
+  router.get("/companies/:companyId/tools/runtime-health", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json(await svc.getRuntimeHealth(companyId));
+  });
+
+  router.get("/companies/:companyId/tools/runs/:runId/decisions", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json(await svc.getRunDecisionLookup(companyId, req.params.runId as string));
+  });
+
+  router.get("/companies/:companyId/tools/trust-rules", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ trustRules: await policySvc.listTrustRules(companyId) });
+  });
+
+  router.get("/companies/:companyId/tools/policies", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ policies: await policySvc.listPolicies(companyId) });
+  });
+
+  router.post("/companies/:companyId/tools/policies", validate(createToolPolicySchema), async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    try {
+      const policy = await policySvc.createPolicy(companyId, req.body, { userId: req.actor.userId ?? null });
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId ?? "board",
+        action: "tool_policy.created",
+        entityType: "tool_policy",
+        entityId: policy.id,
+        details: { name: policy.name, policyType: policy.policyType, priority: policy.priority },
+      });
+      res.status(201).json(policy);
+    } catch (error) {
+      policySvc.ensureNoDuplicatePolicyNameError(error);
+    }
+  });
+
+  router.patch("/companies/:companyId/tools/policies/:policyId", validate(updateToolPolicySchema), async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    try {
+      const policy = await policySvc.updatePolicy({
+        companyId,
+        policyId: req.params.policyId as string,
+        body: req.body,
+      });
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId ?? "board",
+        action: "tool_policy.updated",
+        entityType: "tool_policy",
+        entityId: policy.id,
+        details: { name: policy.name, policyType: policy.policyType, enabled: policy.enabled, priority: policy.priority },
+      });
+      res.json(policy);
+    } catch (error) {
+      policySvc.ensureNoDuplicatePolicyNameError(error);
+    }
+  });
+
+  router.delete("/companies/:companyId/tools/policies/:policyId", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const policy = await policySvc.deletePolicy({
+      companyId,
+      policyId: req.params.policyId as string,
+    });
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "tool_policy.deleted",
+      entityType: "tool_policy",
+      entityId: policy.id,
+      details: { name: policy.name, policyType: policy.policyType },
+    });
+    res.json(policy);
+  });
+
+  router.post(
+    "/companies/:companyId/tools/action-requests/:actionRequestId/trust-rule",
+    validate(createToolTrustRuleFromActionRequestSchema),
+    async (req, res) => {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const policy = await policySvc.createTrustRuleFromActionRequest({
+        companyId,
+        actionRequestId: req.params.actionRequestId as string,
+        body: req.body,
+        actor: { userId: req.actor.userId ?? null },
+      });
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId ?? "board",
+        action: "tool_trust_rule.created",
+        entityType: "tool_policy",
+        entityId: policy.id,
+        details: {
+          name: policy.name,
+          selectors: policy.selectors,
+          sourceActionRequestId: req.params.actionRequestId,
+        },
+      });
+      res.status(201).json(policy);
+    },
+  );
+
+  router.post("/companies/:companyId/tools/trust-rules/:policyId/revoke", validate(revokeToolTrustRuleSchema), async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const policy = await policySvc.revokeTrustRule({
+      companyId,
+      policyId: req.params.policyId as string,
+      body: req.body,
+      actor: { userId: req.actor.userId ?? null },
+    });
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "tool_trust_rule.revoked",
+      entityType: "tool_policy",
+      entityId: policy.id,
+      details: { reason: req.body.reason ?? null },
+    });
+    res.json(policy);
   });
 
   router.get("/companies/:companyId/tools/stdio-templates", async (req, res) => {

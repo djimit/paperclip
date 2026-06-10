@@ -194,6 +194,20 @@ export interface ToolProfileBinding {
   updatedAt: Date;
 }
 
+export interface ToolProfileWithDetails extends ToolProfile {
+  entries: ToolProfileEntry[];
+  bindings: ToolProfileBinding[];
+}
+
+export interface ToolProfileEffectiveSummary {
+  agentId: string;
+  profiles: ToolProfileWithDetails[];
+  entries: ToolProfileEntry[];
+  bindings: ToolProfileBinding[];
+  allowedTools: ToolCatalogEntry[];
+  allowedToolNames: string[];
+}
+
 export interface ToolPolicy {
   id: string;
   companyId: string;
@@ -246,6 +260,72 @@ export interface ToolRuntimeSlot {
   updatedAt: Date;
 }
 
+export type ToolRuntimeAlertSeverity = "info" | "warning" | "critical";
+export type ToolRuntimeAlertStatus = "ok" | "firing" | "not_instrumented";
+
+export interface ToolRuntimeAlertRecommendation {
+  name: string;
+  severity: ToolRuntimeAlertSeverity;
+  status: ToolRuntimeAlertStatus;
+  threshold: string;
+  observed: string;
+  description: string;
+  firstResponderAction: string;
+  runbookSection: string;
+}
+
+export interface ToolRuntimeMetricSnapshot {
+  windowStartedAt: Date | string;
+  windowEndedAt: Date | string;
+  activeSlots: number;
+  startingSlots: number;
+  runningSlots: number;
+  idleSlots: number;
+  failedSlots: number;
+  stoppedSlots: number;
+  stuckStartingSlots: number;
+  stuckRunningSlots: number;
+  capacityDeferralsLastHour: number;
+  restartAttemptsLastHour: number;
+  restartSuppressionsLastHour: number;
+  idleEvictionsLastHour: number;
+  toolCallsLastHour: number;
+  toolTimeoutsLastHour: number;
+  toolFailuresLastHour: number;
+  timeoutRateLastHour: number;
+  failureRateLastHour: number;
+  averageToolLatencyMsLastHour: number | null;
+  p95ToolLatencyMsLastHour: number | null;
+  missingSecretFailuresLastHour: number;
+  auditWriteFailuresLastHour: number | null;
+  activeConnections: number;
+  disabledConnections: number;
+  degradedConnections: number;
+  remoteHttpConnections: number;
+  localStdioConnections: number;
+}
+
+export interface ToolRuntimeSupportMatrix {
+  remoteHttp: {
+    supported: boolean;
+    note: string;
+  };
+  localStdio: {
+    supported: boolean;
+    note: string;
+  };
+}
+
+export interface ToolRuntimeHealthSummary {
+  status: "ok" | "degraded" | "critical";
+  generatedAt: Date | string;
+  runbookPath: string;
+  metrics: ToolRuntimeMetricSnapshot;
+  supportMatrix: ToolRuntimeSupportMatrix;
+  alerts: ToolRuntimeAlertRecommendation[];
+  recommendations: ToolRuntimeAlertRecommendation[];
+}
+
 export interface ToolConnectionHealthCheckResult {
   connection: ToolConnection;
   runtimeSlot: ToolRuntimeSlot | null;
@@ -256,6 +336,75 @@ export interface ToolCatalogRefreshResult {
   catalog: ToolCatalogEntry[];
   discoveredCount: number;
   quarantinedCount: number;
+}
+
+export interface ToolExampleSummary {
+  id: string;
+  title: string;
+  description: string;
+  fixture: {
+    transport: ToolConnectionTransport;
+    templateId: string;
+    available: boolean;
+    tools: Array<{
+      name: string;
+      description?: string | null;
+      riskLevel: ToolRiskLevel;
+      readOnly: boolean;
+    }>;
+  };
+  safeDefaultProfile: {
+    profileKey: string;
+    name: string;
+    defaultAction: ToolProfileDefaultAction;
+    allowedToolNames: string[];
+  };
+  install: {
+    installed: boolean;
+    canInstall: boolean;
+    reason?: string | null;
+    applicationId?: string | null;
+    connectionId?: string | null;
+    profileId?: string | null;
+    profileBindingId?: string | null;
+  };
+}
+
+export interface ToolExampleInstallResult {
+  example: ToolExampleSummary;
+  created: boolean;
+  application: ToolApplication;
+  connection: ToolConnection;
+  profile: ToolProfile;
+  profileEntries: ToolProfileEntry[];
+  profileBinding: ToolProfileBinding;
+  catalog: ToolCatalogEntry[];
+}
+
+export interface ToolExampleSmokeCheck {
+  name: string;
+  ok: boolean;
+  toolName?: string | null;
+  expectedDecision?: ToolPolicyDecision | null;
+  decision?: ToolPolicyDecision | null;
+  reasonCode?: ToolAccessReasonCode | string | null;
+  explanation?: string | null;
+  auditEventId?: string | null;
+  toolCallEventId?: string | null;
+  details?: Record<string, unknown> | null;
+}
+
+export interface ToolExampleSmokeResult {
+  exampleId: string;
+  ok: boolean;
+  actor: {
+    actorType: ToolActorType;
+    actorId: string;
+    agentId?: string | null;
+  };
+  connection: ToolConnection;
+  profile: ToolProfile;
+  checks: ToolExampleSmokeCheck[];
 }
 
 export interface McpJsonImportDraft {
@@ -363,6 +512,30 @@ export interface ToolCallEvent {
   createdAt: Date;
 }
 
+export interface ToolRunDecision {
+  invocation: ToolInvocation;
+  actionRequest: ToolActionRequest | null;
+  auditEvents: ToolCallEvent[];
+  latestAuditEvent: ToolCallEvent | null;
+  decision: ToolPolicyDecision | null;
+  outcome: ToolAuditOutcome | null;
+  reasonCode: string | null;
+  denialReason: string | null;
+  pendingAction: {
+    actionRequestId: string;
+    issueId: string | null;
+    interactionId: string | null;
+    approvalId: string | null;
+    status: ToolActionRequestStatus;
+    previewMarkdown: string | null;
+  } | null;
+}
+
+export interface ToolRunDecisionLookup {
+  runId: string;
+  decisions: ToolRunDecision[];
+}
+
 export interface ToolRateLimitCounter {
   id: string;
   companyId: string;
@@ -380,9 +553,11 @@ export interface ToolRateLimitCounter {
 }
 
 export type ToolAccessReasonCode =
+  | "allow_trust_rule"
   | "allow_profile"
   | "allow_explicit_grant"
   | "allow_policy"
+  | "requires_review_changed_tool"
   | "requires_approval_policy"
   | "deny_default"
   | "deny_company_boundary"
@@ -421,6 +596,45 @@ export interface ToolRateLimitRule {
   limit: number;
   windowSeconds: number;
   keyBy?: Array<"company" | "agent" | "application" | "connection" | "tool">;
+}
+
+export interface ToolTrustRuleArgumentFilters {
+  allowAny?: boolean;
+  exactHash?: string | null;
+  allowedHashes?: string[];
+  fieldEquals?: Record<string, unknown>;
+}
+
+export interface ToolTrustRuleScopeInput {
+  includeAgent?: boolean;
+  includeProject?: boolean;
+  includeIssue?: boolean;
+  includeApplication?: boolean;
+  includeConnection?: boolean;
+  includeCatalogEntry?: boolean;
+  includeTool?: boolean;
+}
+
+export interface ToolTrustRuleBatchApprovalConfig {
+  enabled?: boolean;
+  maxBatchSize?: number;
+  windowSeconds?: number;
+}
+
+export interface CreateToolTrustRuleFromActionRequest {
+  name?: string;
+  description?: string | null;
+  priority?: number;
+  approvalThreshold?: number;
+  selectors?: ToolAccessSelector;
+  scope?: ToolTrustRuleScopeInput;
+  argumentFilters?: ToolTrustRuleArgumentFilters;
+  expiresAt?: Date | string | null;
+  batchApproval?: ToolTrustRuleBatchApprovalConfig | null;
+}
+
+export interface RevokeToolTrustRule {
+  reason?: string | null;
 }
 
 export interface ToolAccessDecisionInput {

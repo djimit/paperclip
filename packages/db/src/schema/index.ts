@@ -81,6 +81,7 @@ export {
   toolProfileBindings,
   toolPolicies,
   toolRuntimeSlots,
+  toolGatewaySessions,
   toolInvocations,
   toolActionRequests,
   toolCallEvents,
