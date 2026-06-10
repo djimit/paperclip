@@ -101,13 +101,15 @@ export function extractPipelineIntakeFormFields(stages: PipelineStageRow[]): Pip
   const first = stages[0];
   if (!first) return [];
   const stageConfig = normalizeStageConfig(first.config);
-  return stageConfig.variables.map((variable) => ({
-    key: variable.key,
-    label: variable.label,
-    type: variable.type,
-    required: variable.required,
-    options: variable.options,
-  }));
+  return stageConfig.variables
+    .filter((variable) => variable.showInAddForm)
+    .map((variable) => ({
+      key: variable.key,
+      label: variable.label,
+      type: variable.type,
+      required: variable.required,
+      options: variable.options,
+    }));
 }
 
 export function validateStageRequiredFields(
@@ -115,6 +117,7 @@ export function validateStageRequiredFields(
   stageVariables: PipelineStageVariable[],
 ) {
   const missing = stageVariables
+    .filter((variable) => variable.showInAddForm)
     .filter((variable) => variable.required)
     .filter((variable) => {
       const value = fields[variable.key];
@@ -246,7 +249,9 @@ async function resolvePipelineIntakeStage(db: PipelineDb, pipelineId: string, st
 
 function validateStageRequiredFieldsForIngest(stage: PipelineStageRow, fields: Record<string, unknown>) {
   const config = normalizeStageConfig(stage.config);
-  const requiredVariables = Array.isArray(config.variables) ? config.variables : [];
+  const requiredVariables = Array.isArray(config.variables)
+    ? config.variables.filter((variable) => variable.showInAddForm)
+    : [];
   validateStageRequiredFields(fields, requiredVariables);
 }
 

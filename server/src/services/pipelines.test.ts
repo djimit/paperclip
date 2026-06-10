@@ -8,8 +8,9 @@ describe("pipeline service helpers", () => {
         pipelineId: "pipeline-1",
         config: {
           variables: [
-            { key: "customer", label: "Customer", type: "text", required: true, options: [], showInAddForm: false },
-            { key: "urgency", label: "Urgency", type: "select", options: ["low", "high"], required: false, showInAddForm: false },
+            { key: "customer", label: "Customer", type: "text", required: true, options: [], showInAddForm: true },
+            { key: "urgency", label: "Urgency", type: "select", options: ["low", "high"], required: false, showInAddForm: true },
+            { key: "internal_notes", label: "Internal notes", type: "multiline", required: true, options: [], showInAddForm: false },
           ],
         },
       },
@@ -49,8 +50,9 @@ describe("pipeline service helpers", () => {
 
   it("validates required intake fields for pipeline stage variables", () => {
     const variables = [
-      { key: "customer", label: "Customer", type: "text" as const, required: true, options: [], showInAddForm: false },
-      { key: "notes", label: "Notes", type: "multiline" as const, required: false, options: [], showInAddForm: false },
+      { key: "customer", label: "Customer", type: "text" as const, required: true, options: [], showInAddForm: true },
+      { key: "notes", label: "Notes", type: "multiline" as const, required: false, options: [], showInAddForm: true },
+      { key: "internal_code", label: "Internal code", type: "text" as const, required: true, options: [], showInAddForm: false },
     ];
     expect(() =>
       validateStageRequiredFields({ customer: "Acme" }, variables),
