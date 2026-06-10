@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActionCard, ActionCardMobile, BindingsTable, shortSha } from "./ActionCard";
@@ -24,7 +24,7 @@ let root: ReturnType<typeof createRoot> | null = null;
 let container: HTMLDivElement | null = null;
 
 afterEach(() => {
-  if (root) act(() => root?.unmount());
+  if (root) flushSync(() => root?.unmount());
   root = null;
   container?.remove();
   container = null;
@@ -34,7 +34,7 @@ function render(element: ReactElement) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root?.render(element));
+  flushSync(() => root?.render(element));
   return container;
 }
 
@@ -81,7 +81,7 @@ describe("ActionCard", () => {
     const c = render(<ActionCard {...baseProps} onApprove={onApprove} />);
     const btn = approveButton(c);
     expect(btn.disabled).toBe(false);
-    act(() => btn.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    flushSync(() => btn.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(onApprove).toHaveBeenCalledOnce();
   });
 
