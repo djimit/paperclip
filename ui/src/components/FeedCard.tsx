@@ -437,8 +437,8 @@ export function FeedCard({
       data-fc="card"
       className={cn(
         "group ml-3 mr-3 md:ml-0 my-2 flex items-center gap-2 rounded-lg border bg-card p-[18px] text-xs",
-        "transition-[background-color,border-color,transform] duration-150",
-        content.link && "cursor-pointer hover:bg-accent hover:border-muted-foreground/30 hover:-translate-y-px",
+        "transition-[background-color,border-color] duration-150",
+        content.link && "cursor-pointer hover:bg-accent hover:border-muted-foreground/30",
         className,
       )}
     >
@@ -477,7 +477,11 @@ export function FeedCard({
 
   if (content.link) {
     return (
-      <Link to={content.link} className="block no-underline text-inherit">
+      <Link
+        to={content.link}
+        className="block no-underline text-inherit"
+        issueQuicklookSide="left"
+      >
         {card}
       </Link>
     );
