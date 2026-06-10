@@ -9,6 +9,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useDialogState } from "../context/DialogContext";
 import { agentsApi } from "../api/agents";
 import { issuesApi } from "../api/issues";
 import { goalsApi } from "../api/goals";
@@ -369,12 +370,34 @@ export function BoardChat() {
     [boardIssueId, queryClient],
   );
 
-  // Reset the staged reveal whenever the active company changes so a
-  // freshly-created company replays the typing intro from scratch.
+  // Reset the staged reveal on mount AND whenever the active company
+  // changes, so every arrival at the Conference Room replays the typing
+  // intro from scratch (a freshly-created company included). The effect's
+  // mount run is intentional — it keeps the intro fresh even if a future
+  // refactor preserves this component instance across navigations (PAP-134).
   useEffect(() => {
     setWelcomeRevealed(false);
     setChipsRevealed(false);
   }, [selectedCompanyId]);
+
+  // The onboarding wizard renders as an overlay above an already-mounted
+  // Conference Room (sidebar "Create new team..." path). Holding the reveal
+  // timer while it's open guarantees the dots window can't burn off behind
+  // the wizard before the user ever sees the chat (PAP-134).
+  const { onboardingOpen } = useDialogState();
+
+  // Likewise, don't let the dots window burn while the tab is hidden —
+  // e.g. the user completes the wizard, switches tabs, and comes back.
+  const [pageVisible, setPageVisible] = useState(
+    () => document.visibilityState !== "hidden",
+  );
+  useEffect(() => {
+    const onVisibilityChange = () =>
+      setPageVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
 
   // Start the typing → welcome timer only once we have the ingredients
   // needed to render the welcome bubble. This guarantees the animation is
@@ -384,9 +407,10 @@ export function BoardChat() {
   useEffect(() => {
     if (!canRenderWelcome) return;
     if (welcomeRevealed) return;
+    if (onboardingOpen || !pageVisible) return;
     const timeout = setTimeout(() => setWelcomeRevealed(true), 2000);
     return () => clearTimeout(timeout);
-  }, [canRenderWelcome, welcomeRevealed]);
+  }, [canRenderWelcome, welcomeRevealed, onboardingOpen, pageVisible]);
 
   // Stage the suggestion chips in shortly after the welcome bubble lands
   // so the eye reads the message first, then the actions.
