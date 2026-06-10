@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleSlash, PackagePlus, PlayCircle, Sparkles, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleSlash, PackagePlus, PlayCircle, Sparkles, XCircle } from "lucide-react";
 import type { ToolExampleSmokeResult } from "@paperclipai/shared";
 import { queryKeys } from "@/lib/queryKeys";
 import { toolsApi } from "@/api/tools";
@@ -15,12 +15,19 @@ import {
   DecisionBadge,
   ErrorState,
   LoadingState,
+  RelativeTime,
   RiskBadge,
   ToolsPageHeader,
 } from "./shared";
 
 function errorMessage(error: unknown) {
   return error instanceof ApiError ? error.message : error instanceof Error ? error.message : String(error);
+}
+
+/** A smoke check that exercised (and tripped) the runtime-error / fails-closed path. */
+function isRuntimeErrorCheck(check: ToolExampleSmokeResult["checks"][number]): boolean {
+  const haystacks = [check.name, check.decision ?? "", check.reasonCode ?? ""];
+  return haystacks.some((h) => /runtime[_-]?error/i.test(String(h)));
 }
 
 function SmokeResult({ result }: { result: ToolExampleSmokeResult }) {
@@ -60,6 +67,7 @@ export function ExamplesTab({ companyId }: { companyId: string }) {
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const [smokeResults, setSmokeResults] = useState<Record<string, ToolExampleSmokeResult>>({});
+  const [smokeRanAt, setSmokeRanAt] = useState<Record<string, number>>({});
 
   const examples = useQuery({
     queryKey: queryKeys.tools.examples(companyId),
@@ -97,6 +105,7 @@ export function ExamplesTab({ companyId }: { companyId: string }) {
     mutationFn: (exampleId: string) => toolsApi.smokeExample(companyId, exampleId),
     onSuccess: (result) => {
       setSmokeResults((current) => ({ ...current, [result.exampleId]: result }));
+      setSmokeRanAt((current) => ({ ...current, [result.exampleId]: Date.now() }));
       invalidateToolState();
       pushToast({
         title: result.ok ? "Smoke passed" : "Smoke failed",
@@ -131,12 +140,14 @@ export function ExamplesTab({ companyId }: { companyId: string }) {
           description="Example fixtures are bundled with Paperclip and should appear here when the server exposes them."
         />
       ) : (
-        <div className="grid gap-3">
+        <div className="grid gap-3 lg:grid-cols-2">
           {list.map((example) => {
             const installed = example.install.installed;
             const result = smokeResults[example.id];
+            const ranAt = smokeRanAt[example.id];
+            const hasRuntimeError = result ? result.checks.some(isRuntimeErrorCheck) : false;
             return (
-              <Card key={example.id}>
+              <Card key={example.id} className={hasRuntimeError ? "border-destructive/40" : undefined}>
                 <CardContent className="space-y-4 py-4">
                   <div className="flex flex-wrap items-start gap-3">
                     <Sparkles className="mt-0.5 h-5 w-5 text-muted-foreground" />
@@ -147,18 +158,23 @@ export function ExamplesTab({ companyId }: { companyId: string }) {
                           {installed ? "installed" : "available"}
                         </Badge>
                         <Badge variant="outline">{example.fixture.transport}</Badge>
+                        {result ? (
+                          <Badge variant={result.ok ? "default" : "destructive"}>
+                            {result.ok ? "smoke pass" : "smoke fail"}
+                          </Badge>
+                        ) : null}
                       </div>
                       <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{example.description}</p>
                     </div>
                     <div className="flex shrink-0 gap-1.5">
                       <Button
                         size="sm"
-                        variant={installed ? "outline" : "default"}
+                        variant={hasRuntimeError ? "outline" : installed ? "outline" : "default"}
                         disabled={!example.install.canInstall || install.isPending}
                         onClick={() => install.mutate(example.id)}
                       >
                         <PackagePlus className="mr-1 h-3.5 w-3.5" />
-                        {installed ? "Repair" : "Install"}
+                        {hasRuntimeError ? "Install anyway" : installed ? "Repair" : "Install"}
                       </Button>
                       <Button
                         size="sm"
@@ -172,7 +188,16 @@ export function ExamplesTab({ companyId }: { companyId: string }) {
                     </div>
                   </div>
 
-                  {example.install.reason ? (
+                  {hasRuntimeError ? (
+                    <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>
+                        A smoke check hit a <span className="font-medium">runtime-error</span> path — the stdio
+                        slot died and the gateway failed closed (the agent saw no partial output). The supervisor
+                        restarts automatically; installing is intentionally friction-y until the slot is healthy.
+                      </span>
+                    </div>
+                  ) : example.install.reason ? (
                     <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
                       <CircleSlash className="mt-0.5 h-4 w-4 shrink-0" />
                       <span>{example.install.reason}</span>
@@ -207,6 +232,27 @@ export function ExamplesTab({ companyId }: { companyId: string }) {
                   </div>
 
                   {result ? <SmokeResult result={result} /> : null}
+
+                  <div className="flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
+                    <span>
+                      {ranAt ? (
+                        <>
+                          Last smoke <RelativeTime value={new Date(ranAt)} />
+                        </>
+                      ) : (
+                        "Not smoked this session"
+                      )}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant={hasRuntimeError ? "outline" : installed ? "outline" : "default"}
+                      disabled={!example.install.canInstall || install.isPending}
+                      onClick={() => install.mutate(example.id)}
+                    >
+                      <PackagePlus className="mr-1 h-3.5 w-3.5" />
+                      {hasRuntimeError ? "Install anyway" : installed ? "Repair" : "Install"}
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             );

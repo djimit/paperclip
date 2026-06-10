@@ -146,8 +146,9 @@ function parseJsonObject(value: string, label: string): Record<string, unknown> 
   return parsed;
 }
 
-function policyTypeLabel(type: ToolPolicyType | string) {
-  return POLICY_TYPES.find((item) => item.value === type)?.label ?? type.replaceAll("_", " ");
+/** Map a policy's effect type onto the canonical DecisionBadge palette. */
+function effectDecision(type: ToolPolicyType | string): string {
+  return type === "rate_limit" ? "rate_limited" : String(type);
 }
 
 function policyIcon(type: ToolPolicyType) {
@@ -362,6 +363,30 @@ export function PoliciesTab({ companyId }: { companyId: string }) {
     queryKey: queryKeys.tools.trustRules(companyId),
     queryFn: () => toolsApi.listTrustRules(companyId),
   });
+  const audit = useQuery({
+    queryKey: queryKeys.tools.audit(companyId, 250),
+    queryFn: () => toolsApi.listAudit(companyId, 250),
+  });
+
+  // 24h hit count per policy, derived from the recent audit sample's
+  // `matchedPolicyIds`. This is a best-effort signal until the gateway exposes
+  // a server-side per-policy counter; it under-counts if traffic exceeds the
+  // 250-event sample window.
+  const hitsByPolicy = useMemo(() => {
+    const counts = new Map<string, number>();
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const row of audit.data ?? []) {
+      const ts = new Date(row.createdAt).getTime();
+      if (Number.isFinite(ts) && ts < cutoff) continue;
+      const matched = row.details?.matchedPolicyIds;
+      if (Array.isArray(matched)) {
+        for (const id of matched) {
+          if (typeof id === "string") counts.set(id, (counts.get(id) ?? 0) + 1);
+        }
+      }
+    }
+    return counts;
+  }, [audit.data]);
 
   const nameMaps = useMemo(() => ({
     agent: new Map((agents.data ?? []).map((item) => [item.id, item.name])),
@@ -431,23 +456,22 @@ export function PoliciesTab({ companyId }: { companyId: string }) {
       }),
   });
 
-  function selectorSummary(policy: ToolPolicy) {
+  /** Match predicates as discrete `label:value` chips (vs the comma-soup summary). */
+  function selectorChips(policy: ToolPolicy): string[] {
     const selectors = policy.selectors ?? {};
-    const parts: string[] = [];
+    const chips: string[] = [];
     const add = (label: string, key: string, names?: Map<string, string>) => {
       const values = [...stringList(selectors[key]), ...stringList(selectors[`${key}s`])];
-      if (values.length > 0) {
-        parts.push(`${label}: ${values.map((value) => names?.get(value) ?? value).join(", ")}`);
-      }
+      for (const value of values) chips.push(`${label}:${names?.get(value) ?? value}`);
     };
     add("actor", "actorType");
     add("agent", "agentId", nameMaps.agent);
     add("project", "projectId", nameMaps.project);
-    add("application", "applicationId", nameMaps.application);
-    add("connection", "connectionId", nameMaps.connection);
+    add("app", "applicationId", nameMaps.application);
+    add("conn", "connectionId", nameMaps.connection);
     add("risk", "riskLevel");
     add("tool", "toolName");
-    return parts.length > 0 ? parts.join(" · ") : "company-wide";
+    return chips;
   }
 
   function submitPolicy() {
@@ -503,46 +527,91 @@ export function PoliciesTab({ companyId }: { companyId: string }) {
             onAction={() => setForm(emptyPolicyForm())}
           />
         ) : (
-          <div className="grid gap-2">
-            {policyList.map((policy) => (
-              <Card key={policy.id}>
-                <CardContent className="flex flex-wrap items-center gap-3 py-3">
-                  {policyIcon(policy.policyType)}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-foreground">{policy.name}</span>
-                      <Badge variant="outline">{policyTypeLabel(policy.policyType)}</Badge>
-                      <Badge variant="outline">priority {policy.priority}</Badge>
-                      {!policy.enabled ? <Badge variant="outline">disabled</Badge> : null}
-                    </div>
-                    <p className="truncate text-xs text-muted-foreground">{selectorSummary(policy)}</p>
-                    {policy.description ? (
-                      <p className="truncate text-xs text-muted-foreground">{policy.description}</p>
-                    ) : null}
-                  </div>
-                  <span className="text-xs">
-                    <RelativeTime value={policy.updatedAt} />
-                  </span>
-                  <div className="flex shrink-0 gap-1.5">
-                    <Button size="sm" variant="outline" onClick={() => setForm(policyToForm(policy))}>
-                      <Pencil className="mr-1 h-3.5 w-3.5" />
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={deletePolicy.isPending}
-                      onClick={() => deletePolicy.mutate(policy.id)}
-                    >
-                      <Trash2 className="mr-1 h-3.5 w-3.5" />
-                      Delete
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <Card>
+            <CardContent className="px-0 py-0">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                    <th className="px-3 py-2.5 text-right font-medium">#</th>
+                    <th className="px-3 py-2.5 font-medium">Policy</th>
+                    <th className="px-3 py-2.5 font-medium">Effect</th>
+                    <th className="px-3 py-2.5 font-medium">Match</th>
+                    <th className="px-3 py-2.5 font-medium">Status</th>
+                    <th className="px-3 py-2.5 text-right font-medium">24h hits</th>
+                    <th className="px-4 py-2.5 text-right font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {policyList.map((policy, index) => {
+                    const chips = selectorChips(policy);
+                    return (
+                      <tr key={policy.id} className="align-top">
+                        <td className="px-3 py-3 text-right font-mono text-xs text-muted-foreground">{index + 1}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-start gap-2">
+                            {policyIcon(policy.policyType)}
+                            <div className="min-w-0">
+                              <div className="font-medium text-foreground">{policy.name}</div>
+                              {policy.description ? (
+                                <div className="truncate text-xs text-muted-foreground">{policy.description}</div>
+                              ) : null}
+                              <div className="text-[11px] text-muted-foreground">priority {policy.priority}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <DecisionBadge decision={effectDecision(policy.policyType)} />
+                        </td>
+                        <td className="px-3 py-3">
+                          {chips.length === 0 ? (
+                            <span className="text-xs text-muted-foreground">company-wide</span>
+                          ) : (
+                            <div className="flex max-w-xs flex-wrap gap-1">
+                              {chips.map((chip) => (
+                                <Badge key={chip} variant="outline" className="font-mono text-[11px]">
+                                  {chip}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-3">
+                          <Badge variant={policy.enabled ? "secondary" : "outline"}>
+                            {policy.enabled ? "enabled" : "disabled"}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-3 text-right font-mono text-xs text-foreground">
+                          {hitsByPolicy.get(policy.id) ?? 0}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-1.5">
+                            <Button size="sm" variant="outline" onClick={() => setForm(policyToForm(policy))}>
+                              <Pencil className="mr-1 h-3.5 w-3.5" />
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={deletePolicy.isPending}
+                              onClick={() => deletePolicy.mutate(policy.id)}
+                            >
+                              <Trash2 className="mr-1 h-3.5 w-3.5" />
+                              Delete
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
         )}
+        <p className="text-xs text-muted-foreground">
+          Rows are shown in evaluation order (#). 24h hits are derived from the recent audit sample's matched
+          policies and may under-count high-traffic rules until a server-side counter ships.
+        </p>
       </div>
 
       <PolicySimulator companyId={companyId} />
