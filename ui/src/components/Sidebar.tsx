@@ -6,6 +6,9 @@ import {
   DollarSign,
   History,
   Search,
+  ListChecks,
+  FolderKanban,
+  BookOpenText,
   SquarePen,
   Network,
   Boxes,
@@ -164,6 +167,9 @@ export function Sidebar() {
         </div>
 
         <SidebarSection label="Work">
+          <SidebarNavItem to="/review-queue" label="Review queue" icon={ListChecks} />
+          <SidebarNavItem to="/pipelines" label="Pipelines" icon={FolderKanban} />
+          <SidebarNavItem to="/learnings" label="Learnings" icon={BookOpenText} />
           <SidebarNavItem to="/issues" label="Tasks" icon={CircleDot} />
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />

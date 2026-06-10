@@ -13,6 +13,14 @@ import { Projects } from "./pages/Projects";
 import { ProjectDetail } from "./pages/ProjectDetail";
 import { ProjectWorkspaceDetail } from "./pages/ProjectWorkspaceDetail";
 import { Workspaces } from "./pages/Workspaces";
+import {
+  LearningsStub,
+  PipelineBoardStub,
+  PipelineItemStub,
+  Pipelines,
+  PipelineSettingsStub,
+  ReviewQueueStub,
+} from "./pages/Pipelines";
 import { Issues } from "./pages/Issues";
 import { Search } from "./pages/Search";
 import { IssueDetail } from "./pages/IssueDetail";
@@ -117,6 +125,12 @@ function boardRoutes() {
       <Route path="projects/:projectId/configuration" element={<ProjectDetail />} />
       <Route path="projects/:projectId/budget" element={<ProjectDetail />} />
       <Route path="workspaces" element={<Workspaces />} />
+      <Route path="review-queue" element={<ReviewQueueStub />} />
+      <Route path="pipelines" element={<Pipelines />} />
+      <Route path="pipelines/:pipelineId" element={<PipelineBoardStub />} />
+      <Route path="pipelines/:pipelineId/items/:caseId" element={<PipelineItemStub />} />
+      <Route path="pipelines/:pipelineId/settings" element={<PipelineSettingsStub />} />
+      <Route path="learnings" element={<LearningsStub />} />
       <Route path="issues" element={<Issues />} />
       <Route path="search" element={<Search />} />
       <Route path="issues/all" element={<Navigate to="/issues" replace />} />

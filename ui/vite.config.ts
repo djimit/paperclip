@@ -23,12 +23,31 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
-    port: 5173,
+    port: 5174,
+    host: "0.0.0.0",
+    allowedHosts: true,
     watch: createUiDevWatchOptions(process.cwd()),
     proxy: {
       "/api": {
-        target: "http://localhost:3100",
+        target: "http://paperclip-dev:3100",
         ws: true,
+        changeOrigin: true,
+        configure(proxy) {
+          proxy.on("proxyReq", (proxyReq) => {
+            proxyReq.setHeader("Origin", "http://paperclip-dev:3100");
+            proxyReq.setHeader("Referer", "http://paperclip-dev:3100/");
+          });
+        },
+      },
+      "/socket.io": {
+        target: "http://paperclip-dev:3100",
+        ws: true,
+        changeOrigin: true,
+        configure(proxy) {
+          proxy.on("proxyReq", (proxyReq) => {
+            proxyReq.setHeader("Origin", "http://paperclip-dev:3100");
+          });
+        },
       },
     },
   },

@@ -26,4 +26,33 @@ describe("pipeline stage variable schema", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("accepts run_routine onEnter action", () => {
+    expect(
+      pipelineStageConfigSchema.safeParse({
+        variables: [],
+        onEnter: {
+          run_routine: {
+            routineId: "11111111-1111-4111-8111-111111111111",
+            variables: { issue_title: "title" },
+            payload: { source: "pipeline" },
+            caseFields: { requestedBy: "requester" },
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects invalid onEnter run_routine configuration", () => {
+    expect(
+      pipelineStageConfigSchema.safeParse({
+        variables: [],
+        onEnter: {
+          run_routine: {
+            routineId: "not-a-uuid",
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
 });

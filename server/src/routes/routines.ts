@@ -114,6 +114,16 @@ export function routineRoutes(
     return { payload, control };
   }
 
+  function pickRoutineValueFields(input: Record<string, unknown>) {
+    const picked: Record<string, string | number | boolean> = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        picked[key] = value;
+      }
+    }
+    return picked;
+  }
+
   router.get("/companies/:companyId/routines", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -370,12 +380,14 @@ export function routineRoutes(
     const caseFields = Object.hasOwn(control, "caseFields")
       ? (control.caseFields as Record<string, unknown> | null)
       : payload;
+    const variablePayload = pickRoutineValueFields(payload);
+    const normalizedCaseFields = caseFields ? pickRoutineValueFields(caseFields) : null;
     const run = await svc.runRoutine(routine.id, {
       ...control,
       source: "api",
       payload: runPayload,
-      variables: payload,
-      caseFields,
+      variables: variablePayload,
+      caseFields: normalizedCaseFields,
     }, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
       userId: req.actor.type === "board" ? req.actor.userId ?? null : null,

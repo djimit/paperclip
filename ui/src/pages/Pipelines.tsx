@@ -1,12 +1,21 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   BookOpenText,
+  Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
+  GitBranch,
   Hexagon,
+  Loader2,
+  MessageSquare,
+  MoreHorizontal,
   Plus,
   Search,
+  Trash2,
 } from "lucide-react";
 import {
   DndContext,
@@ -27,14 +36,17 @@ import {
 } from "@dnd-kit/sortable";
 import type {
   Pipeline,
+  PipelineAttentionItem,
   PipelineCase,
   PipelineCaseEvent,
   PipelineConnectionRef,
   PipelineConnections,
+  PipelineIssueLink,
   PipelineStage,
   PipelineTransition,
 } from "../api/pipelines";
 import { pipelinesApi } from "../api/pipelines";
+import { issuesApi } from "../api/issues";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
@@ -47,11 +59,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "../components/EmptyState";
+import { IssueChatThread } from "../components/IssueChatThread";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { hasBlockingShortcutDialog, isKeyboardShortcutTextInputTarget } from "../lib/keyboardShortcuts";
+import {
+  displayPipelineItemFields,
+  formatPipelineItemEvent,
+  getPendingTransitionBannerState,
+  humanizePipelineItemStatus,
+  itemHasChangedNotice,
+} from "../lib/pipeline-item-detail";
 import { formatLearningEvent } from "../lib/pipeline-learnings";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, formatNumber, formatShortDate, relativeTime } from "../lib/utils";
@@ -223,6 +250,127 @@ function formatPipelineActivity(value: string | Date | null) {
   if (diffDays < 14) return "last week";
   if (diffDays < 30) return `${Math.round(diffDays / 7)} weeks ago`;
   return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+type ReviewQueueKind = "suggestion" | "review" | "headsUp";
+
+export interface ReviewQueueRow {
+  id: string;
+  caseId: string | null;
+  pipelineId: string;
+  pipelineName: string;
+  title: string;
+  prompt: string;
+  kind: ReviewQueueKind;
+  createdAt: string | Date | null;
+  caseItem?: PipelineCase;
+}
+
+const REVIEW_QUEUE_SECTION_LABELS: Record<ReviewQueueKind, string> = {
+  suggestion: "Suggestions to review",
+  review: "Final calls",
+  headsUp: "Heads-up",
+};
+
+const REVIEW_QUEUE_SECTION_ORDER: ReviewQueueKind[] = ["suggestion", "review", "headsUp"];
+
+function attentionItemKind(item: PipelineAttentionItem): ReviewQueueKind {
+  const rawKind = String(item.kind ?? "").toLowerCase();
+  if (rawKind.includes("suggest")) return "suggestion";
+  if (rawKind.includes("review") || rawKind.includes("final")) return "review";
+  return "headsUp";
+}
+
+function hasPendingSuggestion(caseItem: PipelineCase) {
+  const fields = caseItem.fields ?? {};
+  return Boolean(fields.nextSuggestedStageId && !fields.suggestionResolution);
+}
+
+function humanizeFieldLabel(key: string) {
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function reviewCasePrompt(caseItem: PipelineCase) {
+  const fields = caseItem.fields ?? {};
+  if (typeof fields.decision === "string" && fields.decision.trim()) {
+    return fields.decision.trim();
+  }
+  return `Decide whether ${caseItem.title} is ready to move forward.`;
+}
+
+function suggestionPrompt(item: PipelineAttentionItem, pipelineName: string) {
+  return item.summary ?? `${pipelineName} thinks ${item.title} is ready to move forward.`;
+}
+
+function headsUpPrompt(item: PipelineAttentionItem) {
+  return item.summary ?? `${item.title} needs a quick look before work continues.`;
+}
+
+export function buildReviewQueueRows({
+  attentionItems,
+  reviewCases,
+  pipelines,
+}: {
+  attentionItems: PipelineAttentionItem[];
+  reviewCases: PipelineCase[];
+  pipelines: Pipeline[];
+}): ReviewQueueRow[] {
+  const pipelineNameById = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline.name]));
+  const reviewCaseById = new Map(reviewCases.map((caseItem) => [caseItem.id, caseItem]));
+  const rows = new Map<string, ReviewQueueRow>();
+
+  for (const item of attentionItems) {
+    const caseId = item.caseId ?? item.id ?? null;
+    const caseItem = caseId ? reviewCaseById.get(caseId) : undefined;
+    const kind = caseItem ? "review" : attentionItemKind(item);
+    const pipelineName = pipelineNameById.get(item.pipelineId) ?? "Pipeline";
+    rows.set(`${kind}:${caseId ?? item.id}`, {
+      id: `${kind}:${caseId ?? item.id}`,
+      caseId,
+      pipelineId: item.pipelineId,
+      pipelineName,
+      title: item.title,
+      prompt:
+        kind === "suggestion"
+          ? suggestionPrompt(item, pipelineName)
+          : kind === "review" && caseItem
+            ? reviewCasePrompt(caseItem)
+            : headsUpPrompt(item),
+      kind,
+      createdAt: item.createdAt ?? caseItem?.lastActivityAt ?? caseItem?.updatedAt ?? null,
+      caseItem,
+    });
+  }
+
+  for (const caseItem of reviewCases) {
+    const kind: ReviewQueueKind = hasPendingSuggestion(caseItem) ? "suggestion" : "review";
+    const pipelineName = pipelineNameById.get(caseItem.pipelineId) ?? "Pipeline";
+    const id = `${kind}:${caseItem.id}`;
+    if (rows.has(id)) continue;
+    rows.set(id, {
+      id,
+      caseId: caseItem.id,
+      pipelineId: caseItem.pipelineId,
+      pipelineName,
+      title: caseItem.title,
+      prompt:
+        kind === "suggestion"
+          ? `${pipelineName} thinks ${caseItem.title} is ready to move forward.`
+          : reviewCasePrompt(caseItem),
+      kind,
+      createdAt: caseItem.lastActivityAt ?? caseItem.updatedAt ?? caseItem.createdAt ?? null,
+      caseItem,
+    });
+  }
+
+  return [...rows.values()].sort((left, right) => {
+    const leftTime = left.createdAt ? new Date(left.createdAt).getTime() : 0;
+    const rightTime = right.createdAt ? new Date(right.createdAt).getTime() : 0;
+    return rightTime - leftTime;
+  });
 }
 
 const LEARNINGS_PAGE_SIZE = 100;
@@ -596,7 +744,7 @@ function PipelineCaseCard({
   const isWorking = isWorkingCase(caseItem);
   const blockerCount = getOpenBlockerCount(caseItem);
   const hasNeedsAttention = blockerCount > 0;
-  const hasThisChanged = hasThisChanged(caseItem);
+  const hasChangedNotice = hasThisChanged(caseItem);
   const childrenSummary = getChildrenSummaryCount(caseItem);
   const {
     attributes,
@@ -642,7 +790,7 @@ function PipelineCaseCard({
               Needs attention
             </span>
           ) : null}
-          {hasThisChanged ? (
+        {hasChangedNotice ? (
             <span className="inline-flex items-center rounded-full border border-indigo-400/40 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700 dark:border-indigo-300/30 dark:bg-indigo-900/25 dark:text-indigo-300">
               This changed
             </span>
@@ -958,7 +1106,7 @@ export function PipelineBoardStub() {
     onError: (error) => {
       pushToast({
         title: "Move blocked",
-        body: error instanceof Error ? error.message : "Unable to move case",
+        body: error instanceof Error ? error.message : "Unable to move item",
         tone: "error",
       });
       queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.detail(pipelineId!) });
@@ -1072,7 +1220,7 @@ export function PipelineBoardStub() {
         <div>
           <h1 className="text-2xl font-semibold tracking-normal text-foreground">{pipeline.name}</h1>
           {pipeline.description ? <p className="mt-1 text-sm text-muted-foreground">{pipeline.description}</p> : null}
-          <p className="mt-1 text-xs text-muted-foreground">{cases.length} total case{cases.length === 1 ? "" : "s"}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{cases.length} total item{cases.length === 1 ? "" : "s"}</p>
         </div>
         <Button variant="outline" onClick={() => navigate(`/pipelines/${pipeline.id}/settings`)}>
           Settings
@@ -1097,7 +1245,7 @@ export function PipelineBoardStub() {
               const items = boardColumns.byStage.get(stage.id) ?? [];
               const activeSourceStageId = activeCaseId ? boardColumns.caseToColumn.get(activeCaseId) ?? null : null;
               const activeTargetStageId = activeOverId
-                ? resolvePipelineTargetStageId(activeOverId, columnsById, boardColumns.caseById)
+                ? resolvePipelineTargetStageId(activeOverId, columnsById, boardColumns.caseToColumn)
                 : null;
               const isDragTargeted = activeTargetStageId === stage.id;
               const isDragBlocked = isDragTargeted
@@ -1116,8 +1264,8 @@ export function PipelineBoardStub() {
                   isDragBlocked={isDragBlocked}
                   onColumnEmpty={(columnStage) =>
                     columnStage.id === UNASSIGNED_STAGE_ID
-                      ? "Unassigned cases"
-                      : "Drop cases here"
+                      ? "Unassigned items"
+                      : "Drop items here"
                   }
                 />
               );
@@ -1157,8 +1305,542 @@ export function PipelineSettingsStub() {
   return <StubPage title="Pipeline settings" />;
 }
 
+function ReviewQueueStatusChip({ failed }: { failed: boolean }) {
+  if (!failed) return null;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
+      <AlertTriangle className="h-3 w-3" />
+      Needs attention
+    </span>
+  );
+}
+
+function reviewQueueFieldEntries(caseItem: PipelineCase | undefined) {
+  const fields = caseItem?.fields ?? {};
+  const hidden = new Set([
+    "nextSuggestedStageId",
+    "nextSuggestedStageReason",
+    "suggestionResolution",
+    "review",
+  ]);
+  return Object.entries(fields)
+    .filter(([key, value]) => !hidden.has(key) && ["string", "number", "boolean"].includes(typeof value))
+    .slice(0, 6);
+}
+
+function ReviewQueueDetailDialog({
+  row,
+  open,
+  pending,
+  onOpenChange,
+  onApprove,
+  onRequestChanges,
+}: {
+  row: ReviewQueueRow | null;
+  open: boolean;
+  pending: boolean;
+  onOpenChange: (open: boolean) => void;
+  onApprove: (note: string) => void;
+  onRequestChanges: (note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (!open) setNote("");
+  }, [open]);
+
+  const fields = reviewQueueFieldEntries(row?.caseItem);
+  const trimmedNote = note.trim();
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{row?.title ?? "Review item"}</DialogTitle>
+          <DialogDescription>
+            {row ? `${row.pipelineName} is waiting for your decision.` : "Review the item and decide what happens next."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5">
+          <section className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">What is being decided</p>
+            <p className="text-sm text-foreground">{row?.prompt}</p>
+          </section>
+
+          <section className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Item preview</p>
+            {fields.length > 0 ? (
+              <div className="divide-y divide-border rounded-md border border-border">
+                {fields.map(([key, value]) => (
+                  <div key={key} className="grid grid-cols-[160px_1fr] gap-3 px-3 py-2 text-sm">
+                    <span className="text-muted-foreground">{humanizeFieldLabel(key)}</span>
+                    <span className="text-foreground">{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-md border border-border px-3 py-3 text-sm text-muted-foreground">
+                No preview details yet.
+              </p>
+            )}
+          </section>
+
+          <label className="block space-y-1.5 text-sm font-medium">
+            <span>Note</span>
+            <Textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              rows={3}
+              placeholder="Required when requesting changes."
+            />
+          </label>
+        </div>
+
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+            Cancel
+          </Button>
+          <Button type="button" variant="outline" onClick={() => onRequestChanges(trimmedNote)} disabled={pending || !trimmedNote}>
+            Request changes
+          </Button>
+          <Button type="button" onClick={() => onApprove(trimmedNote)} disabled={pending}>
+            {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            Approve
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ReviewQueueSection({
+  title,
+  rows,
+  activeRowId,
+  failedRowIds,
+  selectedRowIds,
+  pendingRowIds,
+  showSelection,
+  onActivate,
+  onToggleSelected,
+  onApprove,
+  onDecline,
+  onRequestChanges,
+  onOpen,
+}: {
+  title: string;
+  rows: ReviewQueueRow[];
+  activeRowId: string | null;
+  failedRowIds: Set<string>;
+  selectedRowIds: Set<string>;
+  pendingRowIds: Set<string>;
+  showSelection: boolean;
+  onActivate: (rowId: string) => void;
+  onToggleSelected: (rowId: string) => void;
+  onApprove: (row: ReviewQueueRow) => void;
+  onDecline: (row: ReviewQueueRow) => void;
+  onRequestChanges: (row: ReviewQueueRow) => void;
+  onOpen: (row: ReviewQueueRow) => void;
+}) {
+  if (rows.length === 0) return null;
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-baseline justify-between border-b border-border pb-2">
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        <span className="text-xs text-muted-foreground">{formatNumber(rows.length)} item{rows.length === 1 ? "" : "s"}</span>
+      </div>
+      <div className="divide-y divide-border">
+        {rows.map((row) => {
+          const pending = pendingRowIds.has(row.id);
+          const failed = failedRowIds.has(row.id);
+          const selected = selectedRowIds.has(row.id);
+          const active = activeRowId === row.id;
+          const selectable = row.kind !== "headsUp" && Boolean(row.caseId);
+
+          return (
+            <div
+              key={row.id}
+              role="button"
+              tabIndex={0}
+              aria-current={active ? "true" : undefined}
+              className={cn(
+                "grid min-h-10 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-2 py-2 text-sm outline-none transition-colors",
+                active ? "bg-accent/60" : "hover:bg-accent/40",
+              )}
+              onMouseEnter={() => onActivate(row.id)}
+              onFocus={() => onActivate(row.id)}
+              onClick={() => onOpen(row)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onOpen(row);
+              }}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                {showSelection ? (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${row.title}`}
+                    checked={selected}
+                    disabled={!selectable || pending}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={() => onToggleSelected(row.id)}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                ) : null}
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="truncate font-semibold text-foreground">{row.title}</p>
+                    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                      {row.pipelineName}
+                    </span>
+                    <ReviewQueueStatusChip failed={failed} />
+                  </div>
+                  <p className="truncate text-muted-foreground">{row.prompt}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">
+                  {row.createdAt ? relativeTime(row.createdAt) : "recently"}
+                </span>
+                {row.kind === "suggestion" ? (
+                  <>
+                    <Button type="button" size="sm" disabled={pending || !row.caseId} onClick={(event) => {
+                      event.stopPropagation();
+                      onApprove(row);
+                    }}>
+                      Approve
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled={pending || !row.caseId} onClick={(event) => {
+                      event.stopPropagation();
+                      onDecline(row);
+                    }}>
+                      Not yet
+                    </Button>
+                  </>
+                ) : row.kind === "review" ? (
+                  <>
+                    <Button type="button" size="sm" disabled={pending || !row.caseId} onClick={(event) => {
+                      event.stopPropagation();
+                      onApprove(row);
+                    }}>
+                      Approve
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled={pending || !row.caseId} onClick={(event) => {
+                      event.stopPropagation();
+                      onRequestChanges(row);
+                    }}>
+                      Request changes
+                    </Button>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export function ReviewQueueStub() {
-  return <StubPage title="Review queue" />;
+  const { selectedCompanyId } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+  const queryClient = useQueryClient();
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
+  const [hiddenRowIds, setHiddenRowIds] = useState<Set<string>>(() => new Set());
+  const [failedRowIds, setFailedRowIds] = useState<Set<string>>(() => new Set());
+  const [pendingRowIds, setPendingRowIds] = useState<Set<string>>(() => new Set());
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const [detailRow, setDetailRow] = useState<ReviewQueueRow | null>(null);
+
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Review queue" }]);
+  }, [setBreadcrumbs]);
+
+  const pipelinesQuery = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.pipelines.list(selectedCompanyId) : ["pipelines", "none"],
+    queryFn: () => pipelinesApi.list(selectedCompanyId!, { includeCounts: true }),
+    enabled: !!selectedCompanyId,
+  });
+
+  const attentionQuery = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.pipelines.attention(selectedCompanyId) : ["pipelines", "attention", "none"],
+    queryFn: () => pipelinesApi.listAttention(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  const reviewCasesQuery = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.pipelines.reviewCases(selectedCompanyId) : ["pipelines", "review-cases", "none"],
+    queryFn: () => pipelinesApi.listReviewCases(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  const rows = useMemo(
+    () =>
+      buildReviewQueueRows({
+        attentionItems: attentionQuery.data ?? [],
+        reviewCases: reviewCasesQuery.data ?? [],
+        pipelines: pipelinesQuery.data ?? [],
+      }),
+    [attentionQuery.data, pipelinesQuery.data, reviewCasesQuery.data],
+  );
+
+  const visibleRows = rows.filter((row) => !hiddenRowIds.has(row.id));
+  const actionableRows = visibleRows.filter((row) => row.kind !== "headsUp" && row.caseId);
+  const selectedRows = visibleRows.filter((row) => selectedRowIds.has(row.id) && row.kind !== "headsUp" && row.caseId);
+  const groupedRows = REVIEW_QUEUE_SECTION_ORDER.map((kind) => ({
+    kind,
+    rows: visibleRows.filter((row) => row.kind === kind),
+  }));
+
+  useEffect(() => {
+    if (visibleRows.length === 0) {
+      setActiveRowId(null);
+      return;
+    }
+    if (!activeRowId || !visibleRows.some((row) => row.id === activeRowId)) {
+      setActiveRowId(visibleRows[0].id);
+    }
+  }, [activeRowId, visibleRows]);
+
+  const invalidateReviewQueue = async () => {
+    if (!selectedCompanyId) return;
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.attention(selectedCompanyId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.reviewCases(selectedCompanyId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.list(selectedCompanyId) }),
+    ]);
+  };
+
+  const decideRow = useMutation({
+    mutationFn: async ({ row, decision, note }: { row: ReviewQueueRow; decision: "approve" | "decline" | "request_changes"; note?: string }) => {
+      if (!row.caseId) throw new Error("This item is not ready for a decision.");
+      if (row.kind === "suggestion") {
+        await pipelinesApi.resolveSuggestion(row.caseId, {
+          decision: decision === "decline" ? "decline" : "accept",
+          note: note || null,
+        });
+        return;
+      }
+      await pipelinesApi.reviewCase(row.caseId, {
+        decision: decision === "request_changes" ? "request_changes" : "approve",
+        note: note || null,
+      });
+    },
+    onMutate: ({ row }) => {
+      setPendingRowIds((current) => new Set(current).add(row.id));
+      setHiddenRowIds((current) => new Set(current).add(row.id));
+      setFailedRowIds((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+      setSelectedRowIds((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+    },
+    onError: (_error, { row }) => {
+      setHiddenRowIds((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+      setFailedRowIds((current) => new Set(current).add(row.id));
+    },
+    onSettled: async (_data, _error, { row }) => {
+      setPendingRowIds((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+      await invalidateReviewQueue();
+    },
+  });
+
+  const bulkApprove = useMutation({
+    mutationFn: async (targetRows: ReviewQueueRow[]) => {
+      if (!selectedCompanyId) throw new Error("Select a company first.");
+      const reviewIds = targetRows
+        .filter((row) => row.kind === "review" && row.caseId)
+        .map((row) => row.caseId!);
+      const suggestionRows = targetRows.filter((row) => row.kind === "suggestion" && row.caseId);
+      await Promise.all([
+        reviewIds.length > 0
+          ? pipelinesApi.bulkReviewCases(selectedCompanyId, { caseIds: reviewIds, decision: "approve" })
+          : Promise.resolve(),
+        ...suggestionRows.map((row) =>
+          pipelinesApi.resolveSuggestion(row.caseId!, { decision: "accept" }),
+        ),
+      ]);
+    },
+    onMutate: (targetRows) => {
+      const ids = targetRows.map((row) => row.id);
+      setPendingRowIds((current) => new Set([...current, ...ids]));
+      setHiddenRowIds((current) => new Set([...current, ...ids]));
+      setSelectedRowIds(new Set());
+      setFailedRowIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+    },
+    onError: (_error, targetRows) => {
+      const ids = targetRows.map((row) => row.id);
+      setHiddenRowIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      setFailedRowIds((current) => new Set([...current, ...ids]));
+    },
+    onSettled: async (_data, _error, targetRows) => {
+      const ids = targetRows.map((row) => row.id);
+      setPendingRowIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      await invalidateReviewQueue();
+    },
+  });
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        hasBlockingShortcutDialog() ||
+        isKeyboardShortcutTextInputTarget(event.target) ||
+        visibleRows.length === 0
+      ) {
+        return;
+      }
+
+      const currentIndex = Math.max(0, visibleRows.findIndex((row) => row.id === activeRowId));
+      const key = event.key.toLowerCase();
+      if (event.key === "ArrowDown" || key === "j") {
+        event.preventDefault();
+        setActiveRowId(visibleRows[Math.min(visibleRows.length - 1, currentIndex + 1)].id);
+        return;
+      }
+      if (event.key === "ArrowUp" || key === "k") {
+        event.preventDefault();
+        setActiveRowId(visibleRows[Math.max(0, currentIndex - 1)].id);
+        return;
+      }
+
+      const activeRow = visibleRows[currentIndex];
+      if (!activeRow) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        setDetailRow(activeRow);
+        return;
+      }
+      if (key === "a" && activeRow.kind !== "headsUp" && activeRow.caseId) {
+        event.preventDefault();
+        decideRow.mutate({ row: activeRow, decision: "approve" });
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [activeRowId, decideRow, visibleRows]);
+
+  if (!selectedCompanyId) {
+    return <EmptyState icon={Hexagon} message="Select a company to view the review queue." />;
+  }
+
+  if (pipelinesQuery.isLoading || attentionQuery.isLoading || reviewCasesQuery.isLoading) {
+    return <PageSkeleton variant="list" />;
+  }
+
+  const selectedCount = selectedRows.length;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-normal text-foreground">Review queue</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Needs your attention ({formatNumber(visibleRows.length)})
+          </p>
+        </div>
+        <Button
+          type="button"
+          disabled={selectedCount === 0 || bulkApprove.isPending}
+          onClick={() => bulkApprove.mutate(selectedRows)}
+        >
+          {bulkApprove.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          Approve {formatNumber(selectedCount)} item{selectedCount === 1 ? "" : "s"}
+        </Button>
+      </div>
+
+      {attentionQuery.error || reviewCasesQuery.error ? (
+        <p className="text-sm text-amber-700 dark:text-amber-300">Some items need attention. Try again in a moment.</p>
+      ) : null}
+
+      {visibleRows.length === 0 ? (
+        <EmptyState icon={Check} message="All caught up." />
+      ) : (
+        <div className="space-y-6">
+          {groupedRows.map((group) => (
+            <ReviewQueueSection
+              key={group.kind}
+              title={REVIEW_QUEUE_SECTION_LABELS[group.kind]}
+              rows={group.rows}
+              activeRowId={activeRowId}
+              failedRowIds={failedRowIds}
+              selectedRowIds={selectedRowIds}
+              pendingRowIds={pendingRowIds}
+              showSelection={actionableRows.length > 1}
+              onActivate={setActiveRowId}
+              onToggleSelected={(rowId) => {
+                setSelectedRowIds((current) => {
+                  const next = new Set(current);
+                  if (next.has(rowId)) next.delete(rowId);
+                  else next.add(rowId);
+                  return next;
+                });
+              }}
+              onApprove={(row) => decideRow.mutate({ row, decision: "approve" })}
+              onDecline={(row) => decideRow.mutate({ row, decision: "decline" })}
+              onRequestChanges={(row) => setDetailRow(row)}
+              onOpen={(row) => setDetailRow(row)}
+            />
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        Shortcuts: <span className="font-semibold">j</span>/<span className="font-semibold">k</span> or arrow keys move, <span className="font-semibold">Enter</span> opens, <span className="font-semibold">a</span> approves.
+      </p>
+
+      <ReviewQueueDetailDialog
+        row={detailRow}
+        open={Boolean(detailRow)}
+        pending={decideRow.isPending}
+        onOpenChange={(open) => {
+          if (!open) setDetailRow(null);
+        }}
+        onApprove={(note) => {
+          if (!detailRow) return;
+          decideRow.mutate({ row: detailRow, decision: "approve", note });
+          setDetailRow(null);
+        }}
+        onRequestChanges={(note) => {
+          if (!detailRow) return;
+          decideRow.mutate({ row: detailRow, decision: "request_changes", note });
+          setDetailRow(null);
+        }}
+      />
+    </div>
+  );
 }
 
 export function LearningsStub() {

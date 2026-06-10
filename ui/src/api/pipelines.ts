@@ -77,6 +77,7 @@ export interface PipelineCase {
   id: string;
   pipelineId: string;
   stageId: string | null;
+  parentCaseId?: string | null;
   title: string;
   activeWork?: boolean | number | null;
   status?: string | null;
