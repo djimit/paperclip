@@ -1,7 +1,11 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, ListTree, Plug, Plus, RefreshCw, Stethoscope, Trash2 } from "lucide-react";
-import type { McpConnectionCredentialRef, ToolConnection } from "@paperclipai/shared";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { KeyRound, ListTree, Plug, Plus, RefreshCw, Stethoscope, Trash2, Vault } from "lucide-react";
+import type {
+  CompanySecret,
+  McpConnectionCredentialRef,
+  ToolConnection,
+} from "@paperclipai/shared";
 import { queryKeys } from "@/lib/queryKeys";
 import { toolsApi, type CreateToolConnectionInput } from "@/api/tools";
 import { secretsApi } from "@/api/secrets";
@@ -38,6 +42,35 @@ import {
   QuarantineBadge,
   RelativeTime,
 } from "./shared";
+
+const TRANSPORT_LABEL: Record<string, string> = {
+  remote_http: "remote http",
+  local_stdio: "local stdio",
+};
+
+/** Mono URL (remote) or command-template (stdio) subtitle for a connection row. */
+function connectionEndpoint(conn: ToolConnection): string | null {
+  const config = { ...(conn.transportConfig ?? {}), ...(conn.config ?? {}) } as Record<string, unknown>;
+  const url = config.url ?? config.endpoint ?? config.endpointUrl;
+  if (typeof url === "string" && url.trim()) return url.trim();
+  const template = config.templateId ?? config.template ?? config.command;
+  if (typeof template === "string" && template.trim()) return template.trim();
+  if (Array.isArray(config.command)) return config.command.join(" ");
+  return null;
+}
+
+/**
+ * Display-only vault reference for a credential. The persisted shape is the
+ * structured {@link McpConnectionCredentialRef} (secretId + version) — this is
+ * just the human-readable `vault://provider/key@version` rendering of it so the
+ * operator can confirm *which* vault entry resolves at gateway time. Free-text
+ * secrets are never accepted; only references to the secret vault.
+ */
+function vaultRef(secret: CompanySecret | undefined, version: number | "latest" = "latest"): string {
+  if (!secret) return "vault://…";
+  const v = version === "latest" || version === undefined ? "latest" : `v${version}`;
+  return `vault://${secret.provider}/${secret.key}@${v}`;
+}
 
 function CatalogDialog({ connection, onClose }: { connection: ToolConnection; onClose: () => void }) {
   const catalog = useQuery({
@@ -84,10 +117,18 @@ function CatalogDialog({ connection, onClose }: { connection: ToolConnection; on
 
 type CredentialDraft = { secretId: string; headerName: string };
 
+/** Probe outcome captured before activation: health + discovered tool count + round-trip latency. */
+type ProbeResult = {
+  connection: ToolConnection;
+  toolCount: number | null;
+  quarantinedCount: number;
+  latencyMs: number | null;
+};
+
 /**
  * New-connection dialog. Enforces secret *references* (no free-text token field)
- * and runs a live gateway probe (health-check) against the draft before the
- * operator activates it — per the Phase 0B spec surface map.
+ * and runs a live gateway probe (health-check + catalog discovery) against the
+ * draft before the operator activates it — per the Phase 0B spec surface map.
  */
 function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClose: () => void }) {
   const qc = useQueryClient();
@@ -115,8 +156,10 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
   const [pendingSecretId, setPendingSecretId] = useState("");
   const [pendingHeader, setPendingHeader] = useState("Authorization");
   const [draft, setDraft] = useState<ToolConnection | null>(null);
+  const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
 
-  const secretName = (id: string) => secrets.data?.find((s) => s.id === id)?.name ?? id.slice(0, 8);
+  const secretById = (id: string) => secrets.data?.find((s) => s.id === id);
+  const secretName = (id: string) => secretById(id)?.name ?? id.slice(0, 8);
 
   const credentialRefs: McpConnectionCredentialRef[] = useMemo(
     () =>
@@ -129,6 +172,29 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
       })),
     [creds],
   );
+
+  // Probe runs a real gateway health-check and then a catalog discovery so the
+  // pre-activation panel can show status + tool count. Latency is the measured
+  // round-trip of the health-check (a single sample — aggregate p95 across
+  // traffic is surfaced on the Runtime tab once the connection is live).
+  const runProbe = async (id: string): Promise<ProbeResult> => {
+    const startedAt = performance.now();
+    const health = await toolsApi.checkConnectionHealth(id);
+    const latencyMs = Math.round(performance.now() - startedAt);
+    try {
+      const refreshed = await toolsApi.refreshCatalog(id);
+      return {
+        connection: refreshed.connection,
+        toolCount: refreshed.discoveredCount,
+        quarantinedCount: refreshed.quarantinedCount,
+        latencyMs,
+      };
+    } catch {
+      // Health may be fine while discovery is not yet possible (e.g. auth pending) —
+      // keep the health result and report tools as unknown rather than failing the probe.
+      return { connection: health.connection, toolCount: null, quarantinedCount: 0, latencyMs };
+    }
+  };
 
   const create = useMutation({
     mutationFn: () => {
@@ -145,7 +211,10 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
       };
       return toolsApi.createConnection(companyId, input);
     },
-    onSuccess: (conn) => setDraft(conn),
+    onSuccess: (conn) => {
+      setDraft(conn);
+      probe.mutate(conn.id);
+    },
     onError: (err) =>
       pushToast({
         title: "Could not create connection",
@@ -155,8 +224,11 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
   });
 
   const probe = useMutation({
-    mutationFn: (id: string) => toolsApi.checkConnectionHealth(id),
-    onSuccess: (res) => setDraft(res.connection),
+    mutationFn: (id: string) => runProbe(id),
+    onSuccess: (res) => {
+      setDraft(res.connection);
+      setProbeResult(res);
+    },
     onError: (err) =>
       pushToast({
         title: "Probe failed",
@@ -189,6 +261,7 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
   const transportConfigValid =
     transport === "remote_http" ? endpointUrl.trim().length > 0 : templateId.length > 0;
   const canCreate = !!applicationId && name.trim().length > 0 && transportConfigValid && !create.isPending;
+  const locked = !!draft;
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -204,7 +277,7 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label>Application</Label>
-            <Select value={applicationId} onValueChange={setApplicationId} disabled={!!draft}>
+            <Select value={applicationId} onValueChange={setApplicationId} disabled={locked}>
               <SelectTrigger>
                 <SelectValue placeholder="Select an application" />
               </SelectTrigger>
@@ -225,7 +298,7 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Production GitHub"
-              disabled={!!draft}
+              disabled={locked}
             />
           </div>
 
@@ -234,7 +307,7 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
             <Select
               value={transport}
               onValueChange={(v) => setTransport(v as "remote_http" | "local_stdio")}
-              disabled={!!draft}
+              disabled={locked}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -254,13 +327,13 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
                 value={endpointUrl}
                 onChange={(e) => setEndpointUrl(e.target.value)}
                 placeholder="https://mcp.example.com"
-                disabled={!!draft}
+                disabled={locked}
               />
             </div>
           ) : (
             <div className="space-y-1.5">
               <Label>Command template</Label>
-              <Select value={templateId} onValueChange={setTemplateId} disabled={!!draft}>
+              <Select value={templateId} onValueChange={setTemplateId} disabled={locked}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select an approved template" />
                 </SelectTrigger>
@@ -278,22 +351,27 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
             </div>
           )}
 
-          {/* Secret-reference picker — no free-text token field. */}
+          {/* Vault-reference credential picker — no free-text token field. */}
           <div className="space-y-1.5">
             <Label>Credential references</Label>
             {creds.length > 0 ? (
               <ul className="space-y-1">
                 {creds.map((c, i) => (
-                  <li key={`${c.secretId}-${i}`} className="flex items-center gap-2 text-sm">
-                    <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
+                  <li
+                    key={`${c.secretId}-${i}`}
+                    className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm"
+                  >
+                    <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <span className="font-mono text-xs">{c.headerName}</span>
-                    <span className="text-muted-foreground">→ secret {secretName(c.secretId)}</span>
-                    {!draft ? (
+                    <span className="truncate font-mono text-xs text-primary" title={vaultRef(secretById(c.secretId))}>
+                      → {vaultRef(secretById(c.secretId))}
+                    </span>
+                    {!locked ? (
                       <button
                         type="button"
                         className="ml-auto text-muted-foreground hover:text-destructive"
                         onClick={() => setCreds((cs) => cs.filter((_, idx) => idx !== i))}
-                        aria-label="Remove credential reference"
+                        aria-label={`Remove credential reference for ${secretName(c.secretId)}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -302,47 +380,94 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
                 ))}
               </ul>
             ) : null}
-            {!draft ? (
-              <div className="flex items-end gap-2">
-                <div className="flex-1 space-y-1">
-                  <Select value={pendingSecretId} onValueChange={setPendingSecretId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Secret" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(secrets.data ?? []).map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+            {!locked ? (
+              <>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    <Select value={pendingSecretId} onValueChange={setPendingSecretId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a vault secret" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(secrets.data ?? []).map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Input
+                    value={pendingHeader}
+                    onChange={(e) => setPendingHeader(e.target.value)}
+                    placeholder="Header"
+                    className="w-32"
+                    aria-label="Header name"
+                  />
+                  <Button type="button" size="sm" variant="outline" onClick={addCred} disabled={!pendingSecretId}>
+                    Add
+                  </Button>
                 </div>
-                <Input
-                  value={pendingHeader}
-                  onChange={(e) => setPendingHeader(e.target.value)}
-                  placeholder="Header"
-                  className="w-32"
-                  aria-label="Header name"
-                />
-                <Button type="button" size="sm" variant="outline" onClick={addCred} disabled={!pendingSecretId}>
-                  Add
-                </Button>
-              </div>
+                {pendingSecretId ? (
+                  <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                    <Vault className="h-3 w-3" />
+                    {vaultRef(secretById(pendingSecretId))}
+                  </p>
+                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  Free-text secrets are not accepted — pick a vault entry; Paperclip stores only the
+                  <span className="font-mono"> vault://</span> reference and resolves it at gateway use time.
+                </p>
+              </>
             ) : null}
           </div>
 
-          {draft ? (
-            <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-foreground">Probe result</span>
-                <HealthBadge status={draft.healthStatus} />
+          {/* Inline probe panel — runs before activation, follows the Loading/Error rhythm. */}
+          {locked ? (
+            probe.isPending ? (
+              <div className="rounded-md border border-border bg-muted/40 p-3">
+                <LoadingState label="Probing connection…" />
               </div>
-              {draft.healthMessage ? (
-                <p className="mt-1 text-xs text-muted-foreground">{draft.healthMessage}</p>
-              ) : null}
-              {draft.lastError ? <p className="mt-1 text-xs text-destructive">{draft.lastError}</p> : null}
-            </div>
+            ) : probe.isError ? (
+              <ErrorState error={probe.error} onRetry={() => draft && probe.mutate(draft.id)} />
+            ) : probeResult ? (
+              <div className="rounded-md border border-border bg-muted/40 p-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-medium text-foreground">Probe result</span>
+                  <HealthBadge status={probeResult.connection.healthStatus} />
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  <div>
+                    <p className="text-lg font-semibold tabular-nums text-foreground">
+                      {probeResult.toolCount ?? "—"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">tools discovered</p>
+                  </div>
+                  <div>
+                    <p className="text-lg font-semibold tabular-nums text-foreground">
+                      {probeResult.latencyMs != null ? `${probeResult.latencyMs}ms` : "—"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">probe latency</p>
+                  </div>
+                  <div>
+                    <p className="text-lg font-semibold tabular-nums text-foreground">
+                      {probeResult.quarantinedCount}
+                    </p>
+                    <p className="text-xs text-muted-foreground">quarantined</p>
+                  </div>
+                </div>
+                {probeResult.connection.healthMessage ? (
+                  <p className="mt-2 text-xs text-muted-foreground">{probeResult.connection.healthMessage}</p>
+                ) : null}
+                {probeResult.connection.lastError ? (
+                  <p className="mt-1 text-xs text-destructive">{probeResult.connection.lastError}</p>
+                ) : null}
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Probe latency is a single round-trip sample. Aggregate p95 latency across traffic is tracked on
+                  the Runtime tab once the connection is live.
+                </p>
+              </div>
+            ) : null
           ) : null}
         </div>
 
@@ -350,21 +475,17 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          {!draft ? (
+          {!locked ? (
             <Button disabled={!canCreate} onClick={() => create.mutate()}>
               {create.isPending ? "Creating draft…" : "Create & probe"}
             </Button>
           ) : (
             <>
-              <Button
-                variant="outline"
-                disabled={probe.isPending}
-                onClick={() => probe.mutate(draft.id)}
-              >
+              <Button variant="outline" disabled={probe.isPending} onClick={() => draft && probe.mutate(draft.id)}>
                 <Stethoscope className="mr-1 h-3.5 w-3.5" />
                 {probe.isPending ? "Probing…" : "Re-probe"}
               </Button>
-              <Button disabled={activate.isPending} onClick={() => activate.mutate(draft.id)}>
+              <Button disabled={activate.isPending || probe.isPending} onClick={() => draft && activate.mutate(draft.id)}>
                 {activate.isPending ? "Activating…" : "Activate"}
               </Button>
             </>
@@ -385,6 +506,40 @@ export function ConnectionsTab({ companyId }: { companyId: string }) {
     queryKey: queryKeys.tools.connections(companyId),
     queryFn: () => toolsApi.listConnections(companyId),
   });
+  const apps = useQuery({
+    queryKey: queryKeys.tools.applications(companyId),
+    queryFn: () => toolsApi.listApplications(companyId),
+  });
+
+  const appName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of apps.data?.applications ?? []) map.set(a.id, a.name);
+    return map;
+  }, [apps.data]);
+
+  const list = useMemo(
+    () => (connections.data?.connections ?? []).filter((c) => (c.status ?? "active") !== "archived"),
+    [connections.data],
+  );
+
+  // Per-connection catalog counts — no company-wide aggregate endpoint exists, so
+  // we fan out one cached catalog query per visible connection (same pattern as
+  // ApplicationsTab) to render the "catalog count" column.
+  const catalogs = useQueries({
+    queries: list.map((c) => ({
+      queryKey: queryKeys.tools.catalog(c.id),
+      queryFn: () => toolsApi.listCatalog(c.id),
+      staleTime: 60_000,
+    })),
+  });
+  const catalogCountByConn = useMemo(() => {
+    const counts = new Map<string, number | null>();
+    list.forEach((c, i) => {
+      const q = catalogs[i];
+      counts.set(c.id, q?.data ? q.data.catalog.length : null);
+    });
+    return counts;
+  }, [list, catalogs]);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.tools.connections(companyId) });
 
@@ -428,8 +583,6 @@ export function ConnectionsTab({ companyId }: { companyId: string }) {
   if (connections.isLoading) return <LoadingState />;
   if (connections.error) return <ErrorState error={connections.error} onRetry={() => connections.refetch()} />;
 
-  const list = (connections.data?.connections ?? []).filter((c) => (c.status ?? "active") !== "archived");
-
   return (
     <div className="space-y-4">
       <ToolsPageHeader
@@ -452,53 +605,103 @@ export function ConnectionsTab({ companyId }: { companyId: string }) {
           onAction={() => setCreateOpen(true)}
         />
       ) : (
-        <div className="grid gap-3">
-          {list.map((conn) => (
-            <Card key={conn.id}>
-              <CardContent className="flex flex-wrap items-center gap-3 py-4">
-                <Plug className="h-5 w-5 text-muted-foreground" />
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-foreground">{conn.name}</span>
-                    <Badge variant="outline">{conn.transport ?? "—"}</Badge>
-                    <HealthBadge status={conn.healthStatus} />
-                    {!conn.enabled ? <Badge variant="outline">disabled</Badge> : null}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {(conn.credentialRefs?.length ?? 0) + conn.credentialSecretRefs.length} credential
-                    ref(s) · last refresh{" "}
-                    <RelativeTime value={conn.lastCatalogRefreshAt ?? conn.updatedAt} />
-                    {conn.lastError ? <span className="text-destructive"> · {conn.lastError}</span> : null}
-                  </p>
-                </div>
-                <div className="ml-auto flex shrink-0 gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={healthCheck.isPending}
-                    onClick={() => healthCheck.mutate(conn.id)}
-                  >
-                    <Stethoscope className="mr-1 h-3.5 w-3.5" />
-                    Test
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={refresh.isPending}
-                    onClick={() => refresh.mutate(conn.id)}
-                  >
-                    <RefreshCw className="mr-1 h-3.5 w-3.5" />
-                    Refresh
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setCatalogFor(conn)}>
-                    <ListTree className="mr-1 h-3.5 w-3.5" />
-                    Tools
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        <Card>
+          <CardContent className="px-0 py-0">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="px-3 py-2.5 font-medium">Connection</th>
+                  <th className="px-3 py-2.5 font-medium">Application</th>
+                  <th className="px-3 py-2.5 font-medium">Transport</th>
+                  <th className="px-3 py-2.5 font-medium">Health</th>
+                  <th className="px-3 py-2.5 font-medium">Catalog</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {list.map((conn) => {
+                  const endpoint = connectionEndpoint(conn);
+                  const credCount = (conn.credentialRefs?.length ?? 0) + conn.credentialSecretRefs.length;
+                  const catalogCount = catalogCountByConn.get(conn.id);
+                  return (
+                    <tr key={conn.id} className="align-top">
+                      <td className="px-3 py-3">
+                        <div className="flex items-start gap-2">
+                          <Plug className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-foreground">{conn.name}</span>
+                              {!conn.enabled ? <Badge variant="outline">disabled</Badge> : null}
+                              {conn.status === "draft" ? <Badge variant="outline">draft</Badge> : null}
+                            </div>
+                            {endpoint ? (
+                              <div className="truncate font-mono text-xs text-muted-foreground" title={endpoint}>
+                                {endpoint}
+                              </div>
+                            ) : null}
+                            <div className="text-[11px] text-muted-foreground">
+                              {credCount} credential ref{credCount === 1 ? "" : "s"}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 text-foreground">
+                        {appName.get(conn.applicationId) ?? <span className="text-muted-foreground">—</span>}
+                      </td>
+                      <td className="px-3 py-3">
+                        <Badge variant="outline">
+                          {TRANSPORT_LABEL[conn.transport ?? ""] ?? conn.transport ?? "—"}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-3">
+                        <HealthBadge status={conn.healthStatus} />
+                        {conn.lastError ? (
+                          <p className="mt-1 max-w-[14rem] truncate text-[11px] text-destructive" title={conn.lastError}>
+                            {conn.lastError}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="font-medium tabular-nums text-foreground">
+                          {catalogCount == null ? "—" : `${catalogCount} tool${catalogCount === 1 ? "" : "s"}`}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          refreshed <RelativeTime value={conn.lastCatalogRefreshAt ?? conn.updatedAt} />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-1.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={healthCheck.isPending}
+                            onClick={() => healthCheck.mutate(conn.id)}
+                          >
+                            <Stethoscope className="mr-1 h-3.5 w-3.5" />
+                            Test
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={refresh.isPending}
+                            onClick={() => refresh.mutate(conn.id)}
+                          >
+                            <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                            Refresh
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => setCatalogFor(conn)}>
+                            <ListTree className="mr-1 h-3.5 w-3.5" />
+                            Tools
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
       )}
 
       {catalogFor ? <CatalogDialog connection={catalogFor} onClose={() => setCatalogFor(null)} /> : null}
