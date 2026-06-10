@@ -182,7 +182,7 @@ describe("ConnectionsTab", () => {
     expect(text).toContain("1 credential ref");
   });
 
-  it("opens the new-connection dialog and enforces vault references (no free-text secrets)", async () => {
+  it("opens the unified add wizard without offering free-text secrets", async () => {
     await render();
     const newBtn = Array.from(container.querySelectorAll("button")).find((b) =>
       b.textContent?.includes("New connection"),
@@ -194,8 +194,8 @@ describe("ConnectionsTab", () => {
     await flushReact();
 
     const body = document.body.textContent ?? "";
-    expect(body).toContain("Free-text secrets are not accepted");
-    expect(body).toContain("Credential references");
+    expect(body).toContain("Add application");
+    expect(body).toContain("Use existing application");
     // The dialog must NOT offer a free-text token/secret input.
     const inputs = Array.from(document.querySelectorAll("input"));
     const hasSecretValueField = inputs.some((i) =>
