@@ -664,26 +664,39 @@ async function notifyDependentWorkIssuesOfUpstreamContentChange(
     version: number;
   },
 ) {
-  const rows = await db
-    .selectDistinctOn([issues.id], { issueId: issues.id })
+  const dependents = await db
+    .select({ dependentCase: pipelineCases })
     .from(pipelineCaseBlockers)
     .innerJoin(pipelineCases, eq(pipelineCaseBlockers.caseId, pipelineCases.id))
-    .innerJoin(pipelineCaseIssueLinks, eq(pipelineCaseIssueLinks.caseId, pipelineCases.id))
-    .innerJoin(issues, eq(pipelineCaseIssueLinks.issueId, issues.id))
     .where(and(
       eq(pipelineCaseBlockers.companyId, input.companyId),
       eq(pipelineCaseBlockers.blockedByCaseId, input.upstreamCase.id),
       eq(pipelineCases.companyId, input.companyId),
       isNull(pipelineCases.terminalKind),
+    ));
+
+  if (dependents.length === 0) return;
+
+  const dependentCaseIds = dependents.map((row) => row.dependentCase.id);
+  const linkRows = await db
+    .select({ caseId: pipelineCaseIssueLinks.caseId, issueId: issues.id })
+    .from(pipelineCaseIssueLinks)
+    .innerJoin(issues, eq(pipelineCaseIssueLinks.issueId, issues.id))
+    .where(and(
       eq(pipelineCaseIssueLinks.companyId, input.companyId),
+      inArray(pipelineCaseIssueLinks.caseId, dependentCaseIds),
       eq(pipelineCaseIssueLinks.role, "work"),
       eq(issues.companyId, input.companyId),
       ne(issues.status, "done"),
       ne(issues.status, "cancelled"),
       isNull(issues.hiddenAt),
     ));
-
-  if (rows.length === 0) return;
+  const issueIdsByCase = new Map<string, string[]>();
+  for (const row of linkRows) {
+    const list = issueIdsByCase.get(row.caseId) ?? [];
+    list.push(row.issueId);
+    issueIdsByCase.set(row.caseId, list);
+  }
 
   const upstreamLink = buildCaseDeepLink({
     pipelineId: input.upstreamCase.pipelineId,
@@ -691,14 +704,36 @@ async function notifyDependentWorkIssuesOfUpstreamContentChange(
   });
   const body = `Upstream case [${input.upstreamCase.caseKey}](${upstreamLink}) changed (v${input.previousVersion}→v${input.version}).`;
 
-  for (const row of rows) {
-    await db.insert(issueComments).values({
+  const notifiedIssueIds = new Set<string>();
+  for (const { dependentCase } of dependents) {
+    const issueIds = issueIdsByCase.get(dependentCase.id) ?? [];
+    for (const issueId of issueIds) {
+      if (notifiedIssueIds.has(issueId)) continue;
+      notifiedIssueIds.add(issueId);
+      await db.insert(issueComments).values({
+        companyId: input.companyId,
+        issueId,
+        authorType: "system",
+        body,
+      });
+      await db.update(issues).set({ updatedAt: nowDate() }).where(eq(issues.id, issueId));
+    }
+    // The drift event intentionally does not bump the dependent case's
+    // updatedAt: "unresolved drift" is derived as event.createdAt > case.updatedAt.
+    await writeCaseEvent(db, {
       companyId: input.companyId,
-      issueId: row.issueId,
-      authorType: "system",
-      body,
+      caseId: dependentCase.id,
+      type: "upstream_drift",
+      actor: { type: "system" },
+      payload: {
+        upstreamCaseId: input.upstreamCase.id,
+        upstreamCaseKey: input.upstreamCase.caseKey,
+        upstreamPipelineId: input.upstreamCase.pipelineId,
+        previousVersion: input.previousVersion,
+        version: input.version,
+        notifiedIssueIds: issueIds,
+      },
     });
-    await db.update(issues).set({ updatedAt: nowDate() }).where(eq(issues.id, row.issueId));
   }
 }
 
@@ -865,15 +900,18 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
     dbOrTx: PipelineDb,
     input: { companyId: string; routineId: string; exceptStageId?: string | null },
   ) {
-    const stages = await dbOrTx
-      .select({ id: pipelineStages.id, config: pipelineStages.config })
+    const referencing = await dbOrTx
+      .select({ id: pipelineStages.id })
       .from(pipelineStages)
       .innerJoin(pipelines, eq(pipelineStages.pipelineId, pipelines.id))
-      .where(eq(pipelines.companyId, input.companyId));
-    return stages.some((stage) =>
-      stage.id !== input.exceptStageId &&
-      stageAutomationRoutineIdFromConfig((stage.config ?? {}) as PipelineStageConfig) === input.routineId
-    );
+      .where(and(
+        eq(pipelines.companyId, input.companyId),
+        sql`${pipelineStages.config}->'onEnter'->>'type' = 'run_routine'`,
+        sql`${pipelineStages.config}->'onEnter'->>'routineId' = ${input.routineId}`,
+        input.exceptStageId ? ne(pipelineStages.id, input.exceptStageId) : undefined,
+      ))
+      .limit(1);
+    return referencing.length > 0;
   }
 
   async function clearPipelineAutomationRoutineIfUnreferenced(
