@@ -955,7 +955,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .where(eq(issues.id, issueId))
       .then((rows) => rows[0] ?? null);
     expect(issue?.executionRunId).toBe(retryRun?.id ?? null);
-    expect(issue?.checkoutRunId).toBe(runId);
+    // Terminal run cleanup releases the checkout lock so future checkout 409s only mean a live owner exists.
+    expect(issue?.checkoutRunId).toBeNull();
   });
 
   it("releases active environment leases when an orphaned run is reaped", async () => {
@@ -1201,7 +1202,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
     expect(issue?.status).toBe("in_progress");
     expect(issue?.executionRunId).toBeNull();
-    expect(issue?.checkoutRunId).toBe(runId);
+    // Terminal run cleanup releases the checkout lock even when paused-tree recovery is suppressed.
+    expect(issue?.checkoutRunId).toBeNull();
 
     const recoveryIssues = await db
       .select()
