@@ -33,6 +33,7 @@ import {
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
+const originalToolActionSigningSecret = process.env.PAPERCLIP_TOOL_ACTION_SIGNING_SECRET;
 
 type Db = ReturnType<typeof createDb>;
 
@@ -147,6 +148,7 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
   beforeAll(async () => {
+    process.env.PAPERCLIP_TOOL_ACTION_SIGNING_SECRET = "test-tool-action-signing-secret";
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-tool-gateway-");
     db = createDb(tempDb.connectionString);
   }, 20_000);
@@ -173,6 +175,11 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
 
   afterAll(async () => {
     await tempDb?.cleanup();
+    if (originalToolActionSigningSecret === undefined) {
+      delete process.env.PAPERCLIP_TOOL_ACTION_SIGNING_SECRET;
+    } else {
+      process.env.PAPERCLIP_TOOL_ACTION_SIGNING_SECRET = originalToolActionSigningSecret;
+    }
   });
 
   it("hides and denies every external tool when an agent has no gateway profile", async () => {
