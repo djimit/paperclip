@@ -1910,7 +1910,7 @@ registry.registerPath({
     params: z.object({ id: z.string() }),
     body: jsonBody(runRoutineIntakeFormSchema),
   },
-  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized },
+  responses: { 202: r.ok(), 400: r.badRequest, 401: r.unauthorized },
 });
 
 registry.registerPath({
