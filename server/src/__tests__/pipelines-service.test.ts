@@ -367,7 +367,7 @@ describeEmbeddedPostgres("pipelineService", () => {
         expectedVersion: 1,
         actor: userActor,
       }),
-    ).rejects.toMatchObject({ status: 409, details: { code: "transition_not_allowed" } });
+    ).rejects.toMatchObject({ status: 422, details: { code: "transition_not_allowed" } });
 
     await db.update(pipelines).set({ enforceTransitions: false }).where(eq(pipelines.id, pipeline.id));
     const moved = await svc.transitionCase({
@@ -378,6 +378,136 @@ describeEmbeddedPostgres("pipelineService", () => {
       actor: userActor,
     });
     expect(moved.case.terminalKind).toBe("done");
+  });
+
+  it("records forced off-graph transitions only with a reason", async () => {
+    const { company, pipeline } = await seedPipeline({ enforceTransitions: true });
+    const created = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "forced-edge",
+      title: "Forced edge",
+      actor: userActor,
+    });
+
+    await expect(
+      svc.transitionCase({
+        companyId: company.id,
+        caseId: created.case.id,
+        toStageKey: "done",
+        expectedVersion: 1,
+        force: true,
+        actor: userActor,
+      }),
+    ).rejects.toMatchObject({ status: 422, details: { code: "transition_not_allowed" } });
+
+    const moved = await svc.transitionCase({
+      companyId: company.id,
+      caseId: created.case.id,
+      toStageKey: "done",
+      expectedVersion: 1,
+      force: true,
+      reason: "Board override",
+      actor: userActor,
+    });
+    expect(moved.case.terminalKind).toBe("done");
+
+    const events = await svc.listCaseEvents(company.id, created.case.id);
+    const forced = events.find((event) => event.type === "transition_forced");
+    expect(forced?.payload).toMatchObject({
+      fromStageId: created.case.stageId,
+      toStageId: moved.case.stageId,
+      reason: "Board override",
+      actor: { type: "user", userId: userActor.userId },
+    });
+  });
+
+  it("rejects disabled stages for ingest, transition, suggestion resolution, and auto-advance", async () => {
+    const { company, pipeline, byKey } = await seedPipeline();
+    await svc.updateStage({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId: byKey.get("done")!.id,
+      patch: { config: { disabled: true } },
+      actor: userActor,
+    });
+
+    await expect(
+      svc.ingestCase({
+        companyId: company.id,
+        pipelineId: pipeline.id,
+        stageKey: "done",
+        caseKey: "disabled-ingest",
+        title: "Disabled ingest",
+        actor: userActor,
+      }),
+    ).rejects.toMatchObject({ status: 422, details: { code: "stage_disabled" } });
+
+    const created = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "disabled-transition",
+      title: "Disabled transition",
+      actor: userActor,
+    });
+    await expect(
+      svc.transitionCase({
+        companyId: company.id,
+        caseId: created.case.id,
+        toStageKey: "done",
+        expectedVersion: 1,
+        actor: userActor,
+      }),
+    ).rejects.toMatchObject({ status: 422, details: { code: "stage_disabled" } });
+
+    const suggestion = await svc.suggestTransition({
+      companyId: company.id,
+      caseId: created.case.id,
+      toStageKey: "done",
+      rationale: "Looks complete",
+      actor: userActor,
+    });
+    await expect(
+      svc.resolveSuggestion({
+        companyId: company.id,
+        caseId: created.case.id,
+        suggestionId: suggestion.suggestion.id,
+        decision: "accept",
+        expectedVersion: 1,
+        actor: userActor,
+      }),
+    ).rejects.toMatchObject({ status: 422, details: { code: "stage_disabled" } });
+
+    const autoPipeline = await svc.createPipeline({
+      companyId: company.id,
+      key: "disabled-auto",
+      name: "Disabled auto",
+      actor: userActor,
+      stages: [
+        { key: "intake", name: "Intake", kind: "open", config: { autoAdvanceOnChildrenTerminal: "blocked_done" } },
+        { key: "child_done", name: "Child done", kind: "done" },
+        { key: "blocked_done", name: "Blocked done", kind: "done", config: { disabled: true } },
+        { key: "cancelled", name: "Cancelled", kind: "cancelled" },
+      ],
+    });
+    const root = await svc.ingestCase({ companyId: company.id, pipelineId: autoPipeline.id, caseKey: "auto-root", title: "Root", actor: userActor });
+    const child = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: autoPipeline.id,
+      caseKey: "auto-child",
+      title: "Child",
+      parentCaseId: root.case.id,
+      actor: userActor,
+    });
+    await expect(
+      svc.transitionCase({
+        companyId: company.id,
+        caseId: child.case.id,
+        toStageKey: "child_done",
+        expectedVersion: 1,
+        actor: userActor,
+      }),
+    ).rejects.toMatchObject({ status: 422, details: { code: "stage_disabled", action: "auto_advance" } });
   });
 
   it("blocks transitions while blockers are not done", async () => {
@@ -939,6 +1069,129 @@ describeEmbeddedPostgres("pipelineService", () => {
     expect(freshRoot!.version).toBe(2);
     const rootEvents = await svc.listCaseEvents(company.id, root.case.id);
     expect(rootEvents.map((event) => event.type)).toEqual(["ingested", "children_terminal", "transitioned"]);
+  });
+
+  it("normalizes legacy reviewerKind and enforces configured approvers", async () => {
+    const company = await seedCompany();
+    const legacyHuman = await svc.createPipeline({
+      companyId: company.id,
+      key: "legacy-human-review",
+      name: "Legacy human review",
+      actor: userActor,
+      stages: [
+        { key: "intake", name: "Intake", kind: "open" },
+        {
+          key: "review",
+          name: "Review",
+          kind: "review",
+          config: { approveToStageKey: "done", rejectToStageKey: "cancelled", reviewerKind: "human" },
+        },
+        { key: "done", name: "Done", kind: "done" },
+        { key: "cancelled", name: "Cancelled", kind: "cancelled" },
+      ],
+    });
+    const legacyReview = legacyHuman.stages.find((stage) => stage.key === "review")!;
+    expect(legacyReview.config).toMatchObject({
+      requireApproval: true,
+      approver: { kind: "any_human" },
+    });
+    expect(legacyReview.config).not.toHaveProperty("reviewerKind");
+
+    const legacyAny = await svc.createPipeline({
+      companyId: company.id,
+      key: "legacy-any-review",
+      name: "Legacy any review",
+      actor: userActor,
+      stages: [
+        { key: "intake", name: "Intake", kind: "open" },
+        {
+          key: "review",
+          name: "Review",
+          kind: "review",
+          config: { approveToStageKey: "done", rejectToStageKey: "cancelled", reviewerKind: "any" },
+        },
+        { key: "done", name: "Done", kind: "done" },
+        { key: "cancelled", name: "Cancelled", kind: "cancelled" },
+      ],
+    });
+    expect(legacyAny.stages.find((stage) => stage.key === "review")!.config).toMatchObject({
+      requireApproval: false,
+      approver: { kind: "any_human" },
+    });
+
+    const [approver] = await db.insert(agents).values({
+      companyId: company.id,
+      name: "Approver",
+      role: "reviewer",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    }).returning();
+    const [otherAgent] = await db.insert(agents).values({
+      companyId: company.id,
+      name: "Other approver",
+      role: "reviewer",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    }).returning();
+    const agentPipeline = await svc.createPipeline({
+      companyId: company.id,
+      key: "agent-review",
+      name: "Agent review",
+      actor: userActor,
+      stages: [
+        { key: "intake", name: "Intake", kind: "open" },
+        {
+          key: "review",
+          name: "Review",
+          kind: "review",
+          config: {
+            approveToStageKey: "done",
+            rejectToStageKey: "cancelled",
+            requireApproval: true,
+            approver: { kind: "agent", id: approver!.id },
+          },
+        },
+        { key: "done", name: "Done", kind: "done" },
+        { key: "cancelled", name: "Cancelled", kind: "cancelled" },
+      ],
+    });
+    const caseInReview = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: agentPipeline.id,
+      caseKey: "agent-approval",
+      title: "Agent approval",
+      actor: userActor,
+    });
+    await svc.transitionCase({
+      companyId: company.id,
+      caseId: caseInReview.case.id,
+      toStageKey: "review",
+      expectedVersion: 1,
+      actor: userActor,
+    });
+
+    await expect(
+      svc.reviewCase({
+        companyId: company.id,
+        caseId: caseInReview.case.id,
+        decision: "approve",
+        expectedVersion: 2,
+        actor: { type: "agent", agentId: otherAgent!.id, runId: randomUUID() },
+      }),
+    ).rejects.toMatchObject({ status: 403, details: { code: "approval_required" } });
+
+    const approved = await svc.reviewCase({
+      companyId: company.id,
+      caseId: caseInReview.case.id,
+      decision: "approve",
+      expectedVersion: 2,
+      actor: { type: "agent", agentId: approver!.id, runId: randomUUID() },
+    });
+    expect(approved.case.terminalKind).toBe("done");
   });
 
   it("records suggestion supersede, accept, and dismiss lifecycles", async () => {

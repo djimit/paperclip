@@ -34,6 +34,7 @@ export const pipelineCaseEvents = pgTable(
         'lease_released',
         'lease_expired',
         'transitioned',
+        'transition_forced',
         'transition_suggested',
         'suggestion_resolved',
         'review_decided',

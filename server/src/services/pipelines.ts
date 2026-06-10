@@ -38,7 +38,13 @@ const DEFAULT_STAGES = [
     name: "Review",
     kind: "review",
     position: 300,
-    config: { approveToStageKey: "done", rejectToStageKey: "cancelled", requireRejectReason: true, reviewerKind: "human" },
+    config: {
+      approveToStageKey: "done",
+      rejectToStageKey: "cancelled",
+      requireRejectReason: true,
+      requireApproval: true,
+      approver: { kind: "any_human" },
+    },
   },
   { key: "done", name: "Done", kind: "done", position: 900 },
   { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
@@ -58,6 +64,12 @@ export type PipelineStageConfig = Record<string, unknown> & {
   rejectToStageKey?: string;
   requestChangesToStageKey?: string;
   requireRejectReason?: boolean;
+  disabled?: boolean;
+  requireApproval?: boolean;
+  approver?: {
+    kind?: "any_human" | "user" | "agent";
+    id?: string;
+  };
   reviewerKind?: "human" | "any";
   variables?: Array<{
     key?: unknown;
@@ -96,6 +108,12 @@ function eventActorPatch(actor: PipelineActor) {
     return { actorType: "user", actorUserId: actor.userId };
   }
   return { actorType: "system" };
+}
+
+function eventActorPayload(actor: PipelineActor) {
+  if (actor.type === "agent") return { type: "agent", agentId: actor.agentId, runId: actor.runId };
+  if (actor.type === "user") return { type: "user", userId: actor.userId };
+  return { type: "system" };
 }
 
 function activityActorPatch(actor: PipelineActor) {
@@ -171,7 +189,27 @@ function stageConfig(stage: typeof pipelineStages.$inferSelect): PipelineStageCo
 }
 
 function normalizeStageConfig(kind: PipelineStageKind | string, config?: PipelineStageConfig | null): PipelineStageConfig {
-  const next = { ...(config ?? {}) };
+  const { reviewerKind, ...rest } = { ...(config ?? {}) };
+  const next = rest as PipelineStageConfig;
+
+  if (next.disabled !== undefined && typeof next.disabled !== "boolean") {
+    throw unprocessable("Stage disabled must be boolean", { code: "validation" });
+  }
+
+  if (next.requireApproval !== undefined && typeof next.requireApproval !== "boolean") {
+    throw unprocessable("Stage requireApproval must be boolean", { code: "validation" });
+  }
+
+  if (reviewerKind !== undefined && reviewerKind !== "human" && reviewerKind !== "any") {
+    throw unprocessable("Review stage reviewerKind must be human or any", { code: "validation" });
+  }
+
+  const legacyRequiresApproval = reviewerKind === "human" ? true : reviewerKind === "any" ? false : undefined;
+  const requireApproval = legacyRequiresApproval ?? next.requireApproval ?? false;
+  const approver = normalizeStageApprover(next.approver, requireApproval);
+  next.requireApproval = requireApproval;
+  next.approver = approver;
+
   if (kind !== "review") return next;
 
   if (typeof next.approveToStageKey !== "string" || next.approveToStageKey.trim().length === 0) {
@@ -189,22 +227,76 @@ function normalizeStageConfig(kind: PipelineStageKind | string, config?: Pipelin
   if (next.requireRejectReason !== undefined && typeof next.requireRejectReason !== "boolean") {
     throw unprocessable("Review stage requireRejectReason must be boolean", { code: "validation" });
   }
-  if (next.reviewerKind !== undefined && next.reviewerKind !== "human" && next.reviewerKind !== "any") {
-    throw unprocessable("Review stage reviewerKind must be human or any", { code: "validation" });
-  }
-
   return {
     ...next,
     approveToStageKey: next.approveToStageKey.trim(),
     rejectToStageKey: next.rejectToStageKey.trim(),
     ...(next.requestChangesToStageKey !== undefined ? { requestChangesToStageKey: next.requestChangesToStageKey.trim() } : {}),
     requireRejectReason: next.requireRejectReason ?? true,
-    reviewerKind: next.reviewerKind ?? "human",
+    requireApproval,
+    approver,
   };
 }
 
 function reviewConfigForStage(stage: typeof pipelineStages.$inferSelect) {
   return normalizeStageConfig(stage.kind, stageConfig(stage));
+}
+
+function normalizeStageApprover(
+  approver: PipelineStageConfig["approver"] | undefined,
+  requireApproval: boolean,
+): NonNullable<PipelineStageConfig["approver"]> {
+  if (approver !== undefined && (typeof approver !== "object" || approver === null || Array.isArray(approver))) {
+    throw unprocessable("Stage approver must be an object", { code: "validation" });
+  }
+  const kind = approver?.kind ?? "any_human";
+  if (kind !== "any_human" && kind !== "user" && kind !== "agent") {
+    throw unprocessable("Stage approver kind must be any_human, user, or agent", { code: "validation" });
+  }
+  const id = typeof approver?.id === "string" ? approver.id.trim() : approver?.id;
+  if ((kind === "user" || kind === "agent") && (typeof id !== "string" || id.length === 0)) {
+    throw unprocessable("Specific stage approvers require an id", { code: "validation" });
+  }
+  if (kind === "any_human") {
+    return { kind };
+  }
+  if (!requireApproval) {
+    return { kind, id: id as string };
+  }
+  return { kind, id: id as string };
+}
+
+function assertStageEnabled(stage: typeof pipelineStages.$inferSelect, action: string) {
+  const config = normalizeStageConfig(stage.kind, stageConfig(stage));
+  if (config.disabled !== true) return;
+  throw unprocessable("Pipeline stage is disabled", {
+    code: "stage_disabled",
+    action,
+    stageId: stage.id,
+    stageKey: stage.key,
+  });
+}
+
+function assertActorCanApproveStageExit(stage: typeof pipelineStages.$inferSelect, actor: PipelineActor) {
+  const config = normalizeStageConfig(stage.kind, stageConfig(stage));
+  if (config.requireApproval !== true) return;
+  const approver = config.approver ?? { kind: "any_human" };
+  if (approver.kind === "any_human") {
+    if (actor.type === "user") return;
+    throw new HttpError(403, "Stage approval requires a human approver", { code: "approval_required" });
+  }
+  if (approver.kind === "user") {
+    if (actor.type === "user" && actor.userId === approver.id) return;
+    throw new HttpError(403, "Stage approval requires the configured user approver", {
+      code: "approval_required",
+      approver,
+    });
+  }
+  if (actor.type === "agent" && actor.agentId === approver.id) return;
+  throw new HttpError(403, "Stage approval requires the configured agent approver", {
+    code: "approval_required",
+    approver,
+  });
 }
 
 function assertReviewTargetsInSet(
@@ -1167,6 +1259,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       transitionClass?: "manual" | "suggested" | "auto";
       suggestionId?: string;
       reason?: string | null;
+      force?: boolean;
     },
   ) {
     if (input.transitionClass === "auto") {
@@ -1178,20 +1271,19 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
     if (current.version !== input.expectedVersion) {
       throw conflict("Pipeline case version conflict", conflictDetailsForCase(current, fromStage));
     }
-    if (fromStage.kind === "review" && input.actor.type === "agent") {
-      const config = stageConfig(fromStage);
-      if (config.reviewerKind !== "any") {
-        throw new HttpError(403, "Human review is required", { code: "review_required" });
-      }
-    }
 
     const toStage = input.toStageId
       ? await getStageOrThrow(tx, current.pipelineId, input.toStageId)
       : await getStageByKeyOrThrow(tx, current.pipelineId, input.toStageKey ?? "");
+    assertStageEnabled(toStage, "transition");
+    if (fromStage.id !== toStage.id) {
+      assertActorCanApproveStageExit(fromStage, input.actor);
+    }
     const toConfig = stageConfig(toStage);
     if (toConfig.autonomy === "auto") {
       throw unprocessable("Pipeline auto autonomy is not enabled", { code: "autonomy_not_enabled" });
     }
+    let forcedTransition = false;
     if (pipeline.enforceTransitions && fromStage.id !== toStage.id) {
       const allowed = await tx
         .select({ id: pipelineTransitions.id })
@@ -1206,7 +1298,11 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
         .limit(1)
         .then((rows) => rows[0] ?? null);
       if (!allowed) {
-        throw conflict("Pipeline transition is not allowed", { code: "transition_not_allowed" });
+        const reason = input.reason?.trim() ?? "";
+        if (input.force !== true || reason.length === 0) {
+          throw unprocessable("Pipeline transition is not allowed", { code: "transition_not_allowed" });
+        }
+        forcedTransition = true;
       }
     }
     await assertNoOpenBlockers(tx, current, toStage);
@@ -1249,6 +1345,22 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
         transitionClass: input.transitionClass ?? "manual",
       },
     });
+    if (forcedTransition) {
+      await writeCaseEvent(tx, {
+        companyId: input.companyId,
+        caseId: current.id,
+        type: "transition_forced",
+        actor: input.actor,
+        fromStageId: fromStage.id,
+        toStageId: toStage.id,
+        payload: {
+          fromStageId: fromStage.id,
+          toStageId: toStage.id,
+          reason: input.reason!.trim(),
+          actor: eventActorPayload(input.actor),
+        },
+      });
+    }
     const ledger = await enqueueStageAutomationLedger(tx, {
       companyId: input.companyId,
       caseId: current.id,
@@ -1298,6 +1410,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
         continue;
       }
       const toStage = await getStageByKeyOrThrow(tx, ancestor.case.pipelineId, toStageKey);
+      assertStageEnabled(toStage, "auto_advance");
       if (toStage.id === ancestor.stage.id) continue;
       await transitionCaseInTransaction(tx, {
         companyId,
@@ -1419,6 +1532,16 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       await validateStageTargets(input.companyId, input.pipelineId, input.kind, config);
       await validateStageAutomationConfig(input.companyId, config);
       return db.transaction(async (tx) => {
+        await tx
+          .update(pipelineStages)
+          .set({
+            position: sql`${pipelineStages.position} + 100` as unknown as number,
+            updatedAt: nowDate(),
+          })
+          .where(and(
+            eq(pipelineStages.pipelineId, input.pipelineId),
+            sql`${pipelineStages.position} >= ${input.position}`,
+          ));
         const [stage] = await tx
           .insert(pipelineStages)
           .values({
@@ -1623,6 +1746,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
             .limit(1)
             .then((rows) => rows[0] ?? null);
         if (!stage) throw unprocessable("Pipeline has no stages", { code: "validation" });
+        assertStageEnabled(stage, "ingest");
         validateAddFormFieldsForStage(stage, input.fields ?? {});
 
         const [inserted] = await tx
@@ -1928,6 +2052,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       transitionClass?: "manual" | "suggested" | "auto";
       suggestionId?: string;
       reason?: string | null;
+      force?: boolean;
     }) {
       const result = await db.transaction((tx) => transitionCaseInTransaction(tx, input));
       if (result.automationLedger) {
@@ -2083,9 +2208,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
           throw unprocessable("Pipeline case is not in a review stage", { code: "validation" });
         }
         const config = reviewConfigForStage(detail.stage);
-        if (input.actor.type === "agent" && config.reviewerKind !== "any") {
-          throw new HttpError(403, "Human review is required", { code: "review_required" });
-        }
+        assertActorCanApproveStageExit(detail.stage, input.actor);
         if (input.decision !== "approve" && config.requireRejectReason !== false && !input.reason?.trim()) {
           throw unprocessable("Review decision reason is required", { code: "validation" });
         }

@@ -579,7 +579,18 @@ describeEmbeddedPostgres("pipeline routes", () => {
         name: "Cross-company",
         stages: [
           { key: "intake", name: "Intake", kind: "open", position: 100 },
-          { key: "review", name: "Review", kind: "review", position: 200, config: { approveToStageKey: "done", rejectToStageKey: "cancelled" } },
+          {
+            key: "review",
+            name: "Review",
+            kind: "review",
+            position: 200,
+            config: {
+              approveToStageKey: "done",
+              rejectToStageKey: "cancelled",
+              requireApproval: true,
+              approver: { kind: "any_human" },
+            },
+          },
           { key: "done", name: "Done", kind: "done", position: 900 },
           { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
         ],
@@ -699,7 +710,18 @@ describeEmbeddedPostgres("pipeline routes", () => {
         name: "Review authz",
         stages: [
           { key: "intake", name: "Intake", kind: "open", position: 100 },
-          { key: "review", name: "Review", kind: "review", position: 200, config: { approveToStageKey: "done", rejectToStageKey: "cancelled" } },
+          {
+            key: "review",
+            name: "Review",
+            kind: "review",
+            position: 200,
+            config: {
+              approveToStageKey: "done",
+              rejectToStageKey: "cancelled",
+              requireApproval: true,
+              approver: { kind: "any_human" },
+            },
+          },
           { key: "done", name: "Done", kind: "done", position: 900 },
           { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
         ],
@@ -720,7 +742,58 @@ describeEmbeddedPostgres("pipeline routes", () => {
       .send({ toStageKey: "done", expectedVersion: 2 });
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe("review_required");
+    expect(res.body.code).toBe("approval_required");
+  });
+
+  it("resequences stages when inserting at an occupied position", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "insert-position", name: "Insert position" })
+      .expect(201);
+
+    await http
+      .post(`/api/pipelines/${pipeline.body.id}/stages`)
+      .send({ key: "qa", name: "QA", kind: "working", position: 200 })
+      .expect(201);
+
+    const detail = await http.get(`/api/pipelines/${pipeline.body.id}`).expect(200);
+    expect(detail.body.stages.map((stage: { key: string; position: number }) => [stage.key, stage.position])).toEqual([
+      ["intake", 100],
+      ["qa", 200],
+      ["in_progress", 300],
+      ["review", 400],
+      ["done", 1000],
+      ["cancelled", 1100],
+    ]);
+  });
+
+  it("requires a reason for forced off-path transition requests", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "force-route", name: "Force route", enforceTransitions: true })
+      .expect(201);
+    const created = await http
+      .post(`/api/pipelines/${pipeline.body.id}/cases`)
+      .send({ caseKey: "force-me", title: "Force me" })
+      .expect(201);
+
+    const missingReason = await http
+      .post(`/api/cases/${created.body.case.id}/transition`)
+      .send({ toStageKey: "done", expectedVersion: 1, force: true });
+    expect(missingReason.status).toBe(422);
+    expect(missingReason.body.code).toBe("transition_not_allowed");
+
+    await http
+      .post(`/api/cases/${created.body.case.id}/transition`)
+      .send({ toStageKey: "done", expectedVersion: 1, force: true, reason: "Operator override" })
+      .expect(200);
+
+    const events = await db.select().from(pipelineCaseEvents).where(eq(pipelineCaseEvents.caseId, created.body.case.id));
+    expect(events.some((event) => event.type === "transition_forced" && event.payload.reason === "Operator override")).toBe(true);
   });
 
   it("validates review stage config on create and update", async () => {
@@ -917,7 +990,8 @@ describeEmbeddedPostgres("pipeline routes", () => {
       approveToStageKey: "done",
       rejectToStageKey: "cancelled",
       requireRejectReason: true,
-      reviewerKind: "human",
+      requireApproval: true,
+      approver: { kind: "any_human" },
     });
   });
 

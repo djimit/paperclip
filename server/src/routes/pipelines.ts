@@ -119,6 +119,7 @@ const transitionCaseSchema = z.object({
   expectedVersion: z.number().int().positive(),
   leaseToken: z.string().uuid().nullable().optional(),
   reason: z.string().max(4_000).nullable().optional(),
+  force: z.boolean().optional(),
   acceptSuggestionId: z.string().uuid().optional(),
 });
 const suggestTransitionSchema = z.object({
@@ -730,6 +731,7 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
       expectedVersion: req.body.expectedVersion,
       leaseToken: req.body.leaseToken,
       reason: req.body.reason,
+      force: req.body.force,
       suggestionId: req.body.acceptSuggestionId,
       actor,
     }));
