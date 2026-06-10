@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Layers, Plus, Pencil, Trash2, Link2, ShieldCheck } from "lucide-react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Layers, Plus, Pencil, Trash2, Link2, ShieldCheck } from "lucide-react";
 import type {
+  ToolCatalogEntry,
+  ToolProfileBinding,
   ToolProfileBindingTargetType,
   ToolProfileDefaultAction,
   ToolProfileEntry,
@@ -23,6 +25,7 @@ import {
 } from "@/api/tools";
 import { ApiError } from "@/api/client";
 import { queryKeys } from "@/lib/queryKeys";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -46,7 +49,14 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/context/ToastContext";
 import { EmptyState } from "@/components/EmptyState";
-import { ErrorState, LoadingState, RelativeTime, RiskBadge, ToolsPageHeader } from "./shared";
+import {
+  CapabilityBadges,
+  ErrorState,
+  LoadingState,
+  RelativeTime,
+  RiskBadge,
+  ToolsPageHeader,
+} from "./shared";
 
 const SELECTOR_TYPES: Array<{ value: ToolProfileEntrySelectorType; label: string }> = [
   { value: "tool_name", label: "Tool name" },
@@ -150,6 +160,150 @@ function bindingLabel(
   if (targetType === "project") return labels.projectsById.get(targetId) ?? targetId;
   if (targetType === "routine") return labels.routinesById.get(targetId) ?? targetId;
   return targetId;
+}
+
+/** Short, human subtitle for the master rail: prefers the agent count the spec calls for. */
+function bindingsSubtitle(bindings: ToolProfileBinding[]): string {
+  if (bindings.length === 0) return "unbound";
+  const agents = bindings.filter((b) => b.targetType === "agent").length;
+  if (agents === bindings.length) return `bound to ${agents} agent${agents === 1 ? "" : "s"}`;
+  return `${bindings.length} binding${bindings.length === 1 ? "" : "s"}`;
+}
+
+// --- Allow-list resolution ------------------------------------------------
+//
+// The v2 Profiles surface resolves a profile's selector entries against the
+// known tool catalog so reviewers see *concrete tools* and, crucially, *why*
+// each one is allowed (the Source column). A pattern selector (wildcard tool
+// name, application, connection, or risk level) is a foot-gun precisely
+// because the tool it pulls in is invisible without this resolution.
+
+export type AllowSource =
+  | { kind: "explicit" }
+  | { kind: "pattern"; label: string }
+  | { kind: "default" };
+
+export interface AllowListRow {
+  key: string;
+  toolName: string;
+  applicationName: string | null;
+  isReadOnly: boolean;
+  isWrite: boolean;
+  isDestructive: boolean;
+  risk: ToolRiskLevel | null;
+  source: AllowSource;
+}
+
+function wildcardToRegExp(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
+function entryMatchesTool(entry: ToolProfileEntry, tool: ToolCatalogEntry): boolean {
+  switch (entry.selectorType) {
+    case "tool_name":
+      if (!entry.toolName) return false;
+      return entry.toolName.includes("*")
+        ? wildcardToRegExp(entry.toolName).test(tool.toolName)
+        : entry.toolName === tool.toolName;
+    case "catalog_entry":
+      return entry.catalogEntryId != null && entry.catalogEntryId === tool.id;
+    case "application":
+      return entry.applicationId != null && entry.applicationId === tool.applicationId;
+    case "connection":
+      return entry.connectionId != null && entry.connectionId === tool.connectionId;
+    case "risk_level":
+      return entry.riskLevel != null && entry.riskLevel === tool.riskLevel;
+    default:
+      return false;
+  }
+}
+
+/** Higher = more specific. Explicit grants win over patterns when both match a tool. */
+function entrySpecificity(entry: ToolProfileEntry): number {
+  if (entry.selectorType === "catalog_entry") return 5;
+  if (entry.selectorType === "tool_name") return entry.toolName?.includes("*") ? 3 : 4;
+  if (entry.selectorType === "application" || entry.selectorType === "connection") return 2;
+  return 1; // risk_level
+}
+
+function sourceFromEntry(
+  entry: ToolProfileEntry,
+  applicationsById: Map<string, string>,
+  connectionsById: Map<string, string>,
+): AllowSource {
+  if (entry.selectorType === "catalog_entry") return { kind: "explicit" };
+  if (entry.selectorType === "tool_name") {
+    return entry.toolName?.includes("*")
+      ? { kind: "pattern", label: entry.toolName }
+      : { kind: "explicit" };
+  }
+  if (entry.selectorType === "application") {
+    return { kind: "pattern", label: `app:${applicationsById.get(entry.applicationId ?? "") ?? entry.applicationId ?? "?"}` };
+  }
+  if (entry.selectorType === "connection") {
+    return { kind: "pattern", label: `conn:${connectionsById.get(entry.connectionId ?? "") ?? entry.connectionId ?? "?"}` };
+  }
+  return { kind: "pattern", label: `risk:${entry.riskLevel ?? "?"}` };
+}
+
+export function resolveAllowList(
+  profile: ToolProfileWithDetails,
+  catalog: ToolCatalogEntry[],
+  applicationsById: Map<string, string>,
+  connectionsById: Map<string, string>,
+): AllowListRow[] {
+  const includes = profile.entries.filter((e) => e.effect === "include");
+  const excludes = profile.entries.filter((e) => e.effect === "exclude");
+  const rows: AllowListRow[] = [];
+
+  for (const tool of catalog) {
+    if (excludes.some((e) => entryMatchesTool(e, tool))) continue;
+    const matchingIncludes = includes.filter((e) => entryMatchesTool(e, tool));
+    let source: AllowSource;
+    if (matchingIncludes.length > 0) {
+      const best = matchingIncludes.reduce((a, b) =>
+        entrySpecificity(b) > entrySpecificity(a) ? b : a,
+      );
+      source = sourceFromEntry(best, applicationsById, connectionsById);
+    } else if (profile.defaultAction === "allow") {
+      source = { kind: "default" };
+    } else {
+      continue;
+    }
+    rows.push({
+      key: tool.id,
+      toolName: tool.toolName,
+      applicationName: applicationsById.get(tool.applicationId ?? "") ?? null,
+      isReadOnly: tool.isReadOnly,
+      isWrite: tool.isWrite,
+      isDestructive: tool.isDestructive,
+      risk: tool.riskLevel,
+      source,
+    });
+  }
+
+  // Surface explicit grants that don't resolve to a known catalog tool yet
+  // (stale/empty catalog) so they aren't silently dropped from the allow list.
+  const resolvedNames = new Set(rows.map((r) => r.toolName));
+  for (const entry of includes) {
+    if (entry.selectorType !== "tool_name" || !entry.toolName || entry.toolName.includes("*")) continue;
+    if (resolvedNames.has(entry.toolName)) continue;
+    if (excludes.some((e) => e.selectorType === "tool_name" && e.toolName === entry.toolName)) continue;
+    rows.push({
+      key: `entry-${entry.id}`,
+      toolName: entry.toolName,
+      applicationName: null,
+      isReadOnly: false,
+      isWrite: false,
+      isDestructive: false,
+      risk: null,
+      source: { kind: "explicit" },
+    });
+    resolvedNames.add(entry.toolName);
+  }
+
+  return rows.sort((a, b) => a.toolName.localeCompare(b.toolName));
 }
 
 function useLookupData(companyId: string) {
@@ -292,7 +446,7 @@ function EntryFields({
       {selectorType === "tool_name" ? (
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="tool-name">Tool name</Label>
-          <Input id="tool-name" value={toolName} onChange={(event) => setToolName(event.target.value)} placeholder="e.g. send_email" />
+          <Input id="tool-name" value={toolName} onChange={(event) => setToolName(event.target.value)} placeholder="e.g. send_email or slack.list_*" />
         </div>
       ) : null}
       {selectorType === "risk_level" ? (
@@ -372,6 +526,101 @@ function EffectiveAgentPanel({ companyId, agentOptions }: { companyId: string; a
   );
 }
 
+/** The Source column — the key v2 addition. Patterns are flagged as a foot-gun. */
+function SourceBadge({ source }: { source: AllowSource }) {
+  if (source.kind === "explicit") {
+    return <Badge variant="secondary">explicit</Badge>;
+  }
+  if (source.kind === "default") {
+    return <Badge variant="outline">default allow</Badge>;
+  }
+  return (
+    <Badge variant="outline" className="gap-1 border-amber-500/50 text-amber-700 dark:text-amber-400">
+      <AlertTriangle className="h-3 w-3" />
+      <span className="font-mono text-[11px]">pattern {source.label}</span>
+    </Badge>
+  );
+}
+
+function AllowList({ rows, catalogLoading }: { rows: AllowListRow[]; catalogLoading: boolean }) {
+  const patternCount = rows.filter((r) => r.source.kind === "pattern").length;
+  const explicitCount = rows.filter((r) => r.source.kind === "explicit").length;
+  const defaultCount = rows.filter((r) => r.source.kind === "default").length;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-foreground">Allow list</h4>
+        <p className="text-xs text-muted-foreground">
+          {rows.length} tool{rows.length === 1 ? "" : "s"}
+          {explicitCount > 0 ? ` · ${explicitCount} explicit` : ""}
+          {patternCount > 0 ? ` · ${patternCount} via pattern` : ""}
+          {defaultCount > 0 ? ` · ${defaultCount} via default` : ""}
+        </p>
+      </div>
+      {rows.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+          {catalogLoading
+            ? "Resolving allowed tools…"
+            : "No tools resolved for this profile. Add an include selector or refresh the tool catalog."}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="px-0 py-0">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="px-3 py-2.5 font-medium">Tool</th>
+                  <th className="px-3 py-2.5 font-medium">Application</th>
+                  <th className="px-3 py-2.5 font-medium">Capabilities</th>
+                  <th className="px-3 py-2.5 font-medium">Risk</th>
+                  <th className="px-3 py-2.5 font-medium">Source</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {rows.map((row) => (
+                  <tr key={row.key} className="align-top">
+                    <td className="px-3 py-2.5">
+                      <span className="font-mono text-xs text-foreground">{row.toolName}</span>
+                    </td>
+                    <td className="px-3 py-2.5 text-muted-foreground">
+                      {row.applicationName ?? <span className="text-muted-foreground/60">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {row.isReadOnly || row.isWrite || row.isDestructive ? (
+                        <CapabilityBadges
+                          isReadOnly={row.isReadOnly}
+                          isWrite={row.isWrite}
+                          isDestructive={row.isDestructive}
+                        />
+                      ) : (
+                        <span className="text-muted-foreground/60">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {row.risk ? <RiskBadge risk={row.risk} /> : <span className="text-muted-foreground/60">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <SourceBadge source={row.source} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+      )}
+      {patternCount > 0 ? (
+        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+          Tools marked <span className="font-medium">pattern</span> were pulled in by a wildcard, application,
+          connection, or risk selector rather than named explicitly — review them when the catalog changes.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function ProfilesTab({ companyId }: { companyId: string }) {
   const qc = useQueryClient();
   const { pushToast } = useToast();
@@ -379,6 +628,7 @@ export function ProfilesTab({ companyId }: { companyId: string }) {
   const [editProfile, setEditProfile] = useState<ToolProfileWithDetails | null>(null);
   const [entryProfile, setEntryProfile] = useState<ToolProfileWithDetails | null>(null);
   const [bindProfileFor, setBindProfileFor] = useState<ToolProfileWithDetails | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [profileKey, setProfileKey] = useState("");
@@ -406,6 +656,23 @@ export function ProfilesTab({ companyId }: { companyId: string }) {
     queryKey: queryKeys.tools.profiles(companyId),
     queryFn: () => toolsApi.listProfiles(companyId),
   });
+
+  const connectionList = lookups.connections.data?.connections ?? [];
+  // Company-wide catalog, assembled per connection (there is no aggregate
+  // endpoint). It powers allow-list resolution: concrete tool + capabilities +
+  // risk + which selector pulled it in.
+  const catalogQueries = useQueries({
+    queries: connectionList.map((c) => ({
+      queryKey: queryKeys.tools.catalog(c.id),
+      queryFn: () => toolsApi.listCatalog(c.id),
+      staleTime: 60_000,
+    })),
+  });
+  const catalog = useMemo(
+    () => catalogQueries.flatMap((q) => q.data?.catalog ?? []),
+    [catalogQueries],
+  );
+  const catalogLoading = catalogQueries.some((q) => q.isLoading);
 
   const applicationOptions = lookups.applications.data?.applications ?? [];
   const connectionOptions = lookups.connections.data?.connections ?? [];
@@ -438,9 +705,10 @@ export function ProfilesTab({ companyId }: { companyId: string }) {
 
   const createProfile = useMutation({
     mutationFn: (input: CreateToolProfileInput) => toolsApi.createProfile(companyId, input),
-    onSuccess: () => {
+    onSuccess: (created) => {
       invalidateProfiles();
       setCreateOpen(false);
+      setSelectedId(created.id);
       resetProfileForm();
       resetEntryForm();
       pushToast({ title: "Profile created", tone: "success" });
@@ -535,6 +803,7 @@ export function ProfilesTab({ companyId }: { companyId: string }) {
   if (profiles.error) return <ErrorState error={profiles.error} onRetry={() => profiles.refetch()} />;
 
   const list = profiles.data?.profiles ?? [];
+  const selected = list.find((p) => p.id === selectedId) ?? list[0] ?? null;
 
   const openEdit = (profile: ToolProfileWithDetails) => {
     setEditProfile(profile);
@@ -646,94 +915,72 @@ export function ProfilesTab({ companyId }: { companyId: string }) {
           onAction={() => setCreateOpen(true)}
         />
       ) : (
-        <div className="grid gap-3">
-          {list.map((profile) => (
-            <Card key={profile.id}>
-              <CardContent className="space-y-3 py-4">
-                <div className="flex flex-wrap items-start gap-3">
-                  <Layers className="mt-0.5 h-5 w-5 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-foreground">{profile.name}</span>
-                      <Badge variant="outline">{profile.profileKey}</Badge>
-                      <Badge variant={statusVariant(profile.status)}>{profile.status}</Badge>
-                      <Badge variant={profile.defaultAction === "allow" ? "secondary" : "outline"}>
-                        default {profile.defaultAction}
-                      </Badge>
-                    </div>
-                    {profile.description ? (
-                      <p className="mt-1 text-sm text-muted-foreground">{profile.description}</p>
-                    ) : null}
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {profile.entries.length} entries / {profile.bindings.length} bindings / updated{" "}
-                      <RelativeTime value={profile.updatedAt} />
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap gap-1.5">
-                    <Button size="sm" variant="outline" onClick={() => openEdit(profile)}>
-                      <Pencil className="mr-1 h-3.5 w-3.5" />
-                      Edit
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => {
-                      setEntryProfile(profile);
-                      resetEntryForm();
-                    }}>
-                      <Plus className="mr-1 h-3.5 w-3.5" />
-                      Entry
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setBindProfileFor(profile)}>
-                      <Link2 className="mr-1 h-3.5 w-3.5" />
-                      Bind
-                    </Button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {profile.entries.length === 0 ? (
-                    <span className="text-sm text-muted-foreground">No entries.</span>
-                  ) : profile.entries.map((entry) => (
-                    <span key={entry.id} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
-                      <Badge variant={entry.effect === "include" ? "secondary" : "destructive"}>{entry.effect}</Badge>
-                      <span className="font-mono">{entry.selectorType}</span>
-                      {entry.selectorType === "risk_level" ? <RiskBadge risk={entry.riskLevel} /> : (
-                        <span className="max-w-64 truncate">{entryLabel(entry, lookups.maps.applicationsById, lookups.maps.connectionsById)}</span>
-                      )}
+        <div className="grid gap-4 md:grid-cols-[280px_1fr]">
+          {/* Master rail */}
+          <Card className="h-fit">
+            <CardContent className="p-0">
+              <ul className="divide-y divide-border">
+                {list.map((profile) => {
+                  const toolCount = resolveAllowList(
+                    profile,
+                    catalog,
+                    lookups.maps.applicationsById,
+                    lookups.maps.connectionsById,
+                  ).length;
+                  const isActive = selected?.id === profile.id;
+                  return (
+                    <li key={profile.id}>
                       <button
                         type="button"
-                        className="rounded p-0.5 text-muted-foreground hover:text-destructive"
-                        onClick={() => deleteEntry.mutate(entry.id)}
-                        aria-label={`Delete ${entry.selectorType} entry`}
+                        onClick={() => setSelectedId(profile.id)}
+                        className={cn(
+                          "flex w-full flex-col gap-1 px-3 py-2.5 text-left transition-colors hover:bg-accent/50",
+                          isActive && "bg-accent/70",
+                        )}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <span className="flex items-center gap-2">
+                          <span className="truncate font-medium text-foreground">{profile.name}</span>
+                          {profile.status !== "active" ? (
+                            <Badge variant={statusVariant(profile.status)} className="text-[10px]">
+                              {profile.status}
+                            </Badge>
+                          ) : null}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {toolCount} tool{toolCount === 1 ? "" : "s"} · {bindingsSubtitle(profile.bindings)}
+                        </span>
                       </button>
-                    </span>
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {profile.bindings.length === 0 ? (
-                    <span className="text-sm text-muted-foreground">No bindings.</span>
-                  ) : profile.bindings.map((binding) => (
-                    <span key={binding.id} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
-                      <Badge variant="outline">{binding.targetType}</Badge>
-                      <span>{bindingLabel(binding.targetType, binding.targetId, { companyId, ...lookups.maps })}</span>
-                      <span className="text-muted-foreground">p{binding.priority}</span>
-                      <button
-                        type="button"
-                        className="rounded p-0.5 text-muted-foreground hover:text-destructive"
-                        onClick={() => unbind.mutate({
-                          profileId: profile.id,
-                          targetType: binding.targetType,
-                          targetId: binding.targetId,
-                        })}
-                        aria-label={`Remove ${binding.targetType} binding`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                    </li>
+                  );
+                })}
+              </ul>
+            </CardContent>
+          </Card>
+
+          {/* Detail pane */}
+          {selected ? (
+            <ProfileDetail
+              profile={selected}
+              catalog={catalog}
+              catalogLoading={catalogLoading}
+              maps={lookups.maps}
+              companyId={companyId}
+              onEdit={() => openEdit(selected)}
+              onAddEntry={() => {
+                setEntryProfile(selected);
+                resetEntryForm();
+              }}
+              onBind={() => setBindProfileFor(selected)}
+              onDeleteEntry={(entryId) => deleteEntry.mutate(entryId)}
+              onUnbind={(binding) =>
+                unbind.mutate({
+                  profileId: selected.id,
+                  targetType: binding.targetType,
+                  targetId: binding.targetId,
+                })
+              }
+            />
+          ) : null}
         </div>
       )}
 
@@ -959,5 +1206,154 @@ export function ProfilesTab({ companyId }: { companyId: string }) {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function ProfileDetail({
+  profile,
+  catalog,
+  catalogLoading,
+  maps,
+  companyId,
+  onEdit,
+  onAddEntry,
+  onBind,
+  onDeleteEntry,
+  onUnbind,
+}: {
+  profile: ToolProfileWithDetails;
+  catalog: ToolCatalogEntry[];
+  catalogLoading: boolean;
+  maps: {
+    companyId?: string;
+    agentsById: Map<string, string>;
+    projectsById: Map<string, string>;
+    routinesById: Map<string, string>;
+    applicationsById: Map<string, string>;
+    connectionsById: Map<string, string>;
+  };
+  companyId: string;
+  onEdit: () => void;
+  onAddEntry: () => void;
+  onBind: () => void;
+  onDeleteEntry: (entryId: string) => void;
+  onUnbind: (binding: ToolProfileBinding) => void;
+}) {
+  const rows = useMemo(
+    () => resolveAllowList(profile, catalog, maps.applicationsById, maps.connectionsById),
+    [profile, catalog, maps.applicationsById, maps.connectionsById],
+  );
+  const includeCount = profile.entries.filter((e) => e.effect === "include").length;
+  const excludeCount = profile.entries.filter((e) => e.effect === "exclude").length;
+
+  return (
+    <Card>
+      <CardContent className="space-y-5 py-4">
+        {/* Header */}
+        <div className="flex flex-wrap items-start gap-3">
+          <Layers className="mt-0.5 h-5 w-5 text-muted-foreground" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-foreground">{profile.name}</span>
+              <Badge variant="outline">{profile.profileKey}</Badge>
+              <Badge variant={statusVariant(profile.status)}>{profile.status}</Badge>
+              <Badge variant={profile.defaultAction === "allow" ? "secondary" : "outline"}>
+                default {profile.defaultAction}
+              </Badge>
+            </div>
+            {profile.description ? (
+              <p className="mt-1 text-sm text-muted-foreground">{profile.description}</p>
+            ) : null}
+            <p className="mt-1 text-xs text-muted-foreground">
+              updated <RelativeTime value={profile.updatedAt} />
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-1.5">
+            <Button size="sm" variant="outline" onClick={onEdit}>
+              <Pencil className="mr-1 h-3.5 w-3.5" />
+              Edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={onAddEntry}>
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              Entry
+            </Button>
+            <Button size="sm" variant="outline" onClick={onBind}>
+              <Link2 className="mr-1 h-3.5 w-3.5" />
+              Bind
+            </Button>
+          </div>
+        </div>
+
+        {/* Targets */}
+        <div className="space-y-2">
+          <h4 className="text-sm font-semibold text-foreground">Targets</h4>
+          <div className="flex flex-wrap gap-2">
+            {profile.bindings.length === 0 ? (
+              <span className="text-sm text-muted-foreground">No targets bound.</span>
+            ) : profile.bindings.map((binding) => (
+              <span key={binding.id} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+                <Badge variant="outline">{binding.targetType}</Badge>
+                <span>{bindingLabel(binding.targetType, binding.targetId, { companyId, ...maps })}</span>
+                <span className="text-muted-foreground">p{binding.priority}</span>
+                <button
+                  type="button"
+                  className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+                  onClick={() => onUnbind(binding)}
+                  aria-label={`Remove ${binding.targetType} binding`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* Effective scope summary */}
+        <div className="space-y-2">
+          <h4 className="text-sm font-semibold text-foreground">Effective scope</h4>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="rounded-md border border-border px-2 py-1 text-muted-foreground">
+              Default <span className="font-medium text-foreground">{profile.defaultAction}</span>
+            </span>
+            <span className="rounded-md border border-border px-2 py-1 text-muted-foreground">
+              <span className="font-medium text-foreground">{rows.length}</span> tools allowed
+            </span>
+            <span className="rounded-md border border-border px-2 py-1 text-muted-foreground">
+              <span className="font-medium text-foreground">{includeCount}</span> include /{" "}
+              <span className="font-medium text-foreground">{excludeCount}</span> exclude
+            </span>
+          </div>
+        </div>
+
+        {/* Selectors (entry management) */}
+        <div className="space-y-2">
+          <h4 className="text-sm font-semibold text-foreground">Selectors</h4>
+          <div className="flex flex-wrap gap-2">
+            {profile.entries.length === 0 ? (
+              <span className="text-sm text-muted-foreground">No selectors.</span>
+            ) : profile.entries.map((entry) => (
+              <span key={entry.id} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+                <Badge variant={entry.effect === "include" ? "secondary" : "destructive"}>{entry.effect}</Badge>
+                <span className="font-mono">{entry.selectorType}</span>
+                {entry.selectorType === "risk_level" ? <RiskBadge risk={entry.riskLevel} /> : (
+                  <span className="max-w-64 truncate">{entryLabel(entry, maps.applicationsById, maps.connectionsById)}</span>
+                )}
+                <button
+                  type="button"
+                  className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+                  onClick={() => onDeleteEntry(entry.id)}
+                  aria-label={`Delete ${entry.selectorType} entry`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* Allow list */}
+        <AllowList rows={rows} catalogLoading={catalogLoading} />
+      </CardContent>
+    </Card>
   );
 }
