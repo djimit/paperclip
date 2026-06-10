@@ -60,6 +60,14 @@ export interface ChatComposerProps {
   singleLine?: boolean;
   /** Visual tone. `"planning"` tints the whole box amber (task planning mode, PAP-95b). */
   tone?: "standard" | "planning";
+  /**
+   * Surface treatment (PAP-128 A / PAP-131).
+   * - `"card"`: opaque `bg-card` box (default).
+   * - `"translucent"`: the task-comments glass recipe — translucent background,
+   *   backdrop blur, and a soft upward shadow — so chat text reads through the
+   *   box as it scrolls behind (mirrors `IssueChatThread.tsx` composer shell).
+   */
+  surface?: "card" | "translucent";
   autoFocus?: boolean;
   /** Accessible label for the send button. */
   sendLabel?: string;
@@ -111,6 +119,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     submitKey = "mod-enter",
     singleLine = false,
     tone = "standard",
+    surface = "card",
     autoFocus = false,
     sendLabel = "Send message",
     onAttachFiles,
@@ -216,8 +225,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     <div
       data-testid="chat-composer"
       data-tone={tone}
+      data-surface={surface}
       className={cn(
-        "relative rounded-xl border border-border bg-card px-3 pt-2.5 pb-2 transition-colors duration-150 focus-within:border-muted-foreground/40",
+        "relative rounded-xl border px-3 pt-2.5 pb-2 transition-colors duration-150 focus-within:border-muted-foreground/40",
+        // Surface: opaque card vs the task glass recipe (IssueChatThread.tsx shell).
+        surface === "translucent"
+          ? "border-border/70 bg-background/95 shadow-[0_-12px_28px_rgba(15,23,42,0.08)] backdrop-blur supports-[backdrop-filter]:bg-background/85 dark:shadow-[0_-12px_28px_rgba(0,0,0,0.28)]"
+          : "border-border bg-card",
         // No blue focus ring — neutral border darkening only.
         isPlanning &&
           "border-amber-500/55 bg-amber-50/50 focus-within:border-amber-500/70 dark:border-amber-500/50 dark:bg-amber-500/[0.07]",

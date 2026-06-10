@@ -187,4 +187,57 @@ describe("ChatComposer", () => {
     expect(box?.getAttribute("data-tone")).toBe("planning");
     act(() => root.unmount());
   });
+
+  it('defaults to the opaque "card" surface', () => {
+    // PAP-131: surface is opt-in — existing adopters keep the bg-card box.
+    const root = createRoot(container);
+    act(() => {
+      root.render(<Harness />);
+    });
+    const box = container.querySelector('[data-testid="chat-composer"]')!;
+    expect(box.getAttribute("data-surface")).toBe("card");
+    expect(box.className).toContain("bg-card");
+    expect(box.className).not.toContain("backdrop-blur");
+    // Rounded corners are shared chrome on both surfaces.
+    expect(box.className).toContain("rounded-xl");
+    act(() => root.unmount());
+  });
+
+  it('surface="translucent" applies the task glass recipe and keeps shared chrome (PAP-131)', () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(<Harness surface="translucent" />);
+    });
+    const box = container.querySelector('[data-testid="chat-composer"]')!;
+    expect(box.getAttribute("data-surface")).toBe("translucent");
+    // Glass recipe — mirrors the task-comments composer shell.
+    expect(box.className).toContain("bg-background/95");
+    expect(box.className).toContain("supports-[backdrop-filter]:bg-background/85");
+    expect(box.className).toContain("backdrop-blur");
+    expect(box.className).toContain("shadow-[0_-12px_28px_rgba(15,23,42,0.08)]");
+    expect(box.className).toContain("dark:shadow-[0_-12px_28px_rgba(0,0,0,0.28)]");
+    expect(box.className).not.toContain("bg-card");
+    // Shared chrome survives: rounded-xl corners + neutral focus darkening.
+    expect(box.className).toContain("rounded-xl");
+    expect(box.className).toContain("focus-within:border-muted-foreground/40");
+    act(() => root.unmount());
+  });
+
+  it("translucent surface keeps the drag-over attach layering", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(<Harness surface="translucent" onAttachFiles={() => {}} />);
+    });
+    const box = container.querySelector<HTMLDivElement>('[data-testid="chat-composer"]')!;
+    act(() => {
+      const dataTransfer = { types: ["Files"], dropEffect: "none" };
+      const evt = new Event("dragenter", { bubbles: true }) as DragEvent & {
+        dataTransfer: typeof dataTransfer;
+      };
+      Object.defineProperty(evt, "dataTransfer", { value: dataTransfer });
+      box.dispatchEvent(evt);
+    });
+    expect(container.querySelector('[data-testid="chat-composer-drop-overlay"]')).toBeTruthy();
+    act(() => root.unmount());
+  });
 });

@@ -708,7 +708,9 @@ export function BoardChat() {
             ref={scrollContainerRef}
             className="scrollbar-auto-hide absolute inset-0 overflow-y-auto overflow-x-hidden"
           >
-            <div className="flex flex-col gap-4 px-6 py-3">
+            {/* pb clears the floating glass dock (PAP-131) so the last bubble can
+                 scroll fully above the composer. */}
+            <div className="flex flex-col gap-4 px-6 pt-3 pb-32">
               {/* Typing bubble — shown unconditionally until the reveal
                    timer fires, so the animation is guaranteed to be
                    visible even while agent/goal data is still loading. */}
@@ -907,13 +909,6 @@ export function BoardChat() {
               <div ref={messagesEndRef} />
             </div>
           </div>
-            {/* Bottom fade — softens the transition between the last bubble
-                 and the input field. Uses the pane's background color so it
-                 matches both light and dark themes. */}
-            <div
-              className="pointer-events-none absolute bottom-0 left-0 right-2 h-10 bg-gradient-to-t from-background to-transparent"
-              aria-hidden
-            />
           </div>
 
           {/* Jump-to-latest — shows when user is scrolled away and new content has arrived */}
@@ -922,7 +917,7 @@ export function BoardChat() {
               type="button"
               onClick={() => scrollToLatest("smooth")}
               aria-label="Jump to latest messages"
-              className="absolute bottom-24 left-1/2 z-10 grid h-8 w-8 -translate-x-1/2 place-items-center rounded-full border border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:border-muted-foreground/30"
+              className="absolute bottom-24 left-1/2 z-20 grid h-8 w-8 -translate-x-1/2 place-items-center rounded-full border border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:border-muted-foreground/30"
             >
               <ArrowDown className="h-4 w-4" />
             </button>
@@ -933,8 +928,14 @@ export function BoardChat() {
                comments (PAP-116): text soft-wraps and the box auto-grows instead of
                clipping / showing a horizontal scrollbar. Sends on plain Enter today
                (Shift+Enter for a newline); flipping to ⌘/Ctrl+Enter is pending board
-               confirmation. */}
-          <div className="shrink-0 px-6 pt-3 pb-5">
+               confirmation.
+
+               PAP-131 (PAP-128 A): the dock floats over the message stream so text
+               scrolls behind the translucent glass box. The old hard black gradient
+               mask is gone — the dock carries the task-style soft top fade instead
+               (mirrors IssueChatThread's composer dock). pointer-events pass through
+               the fade so the scrollbar stays usable; the composer re-enables them. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-background/0 px-6 pt-6 pb-5">
             <ChatComposer
               ref={composerRef}
               value={input}
@@ -942,9 +943,11 @@ export function BoardChat() {
               onSubmit={handleSend}
               placeholder="Ask anything about your company..."
               submitKey="enter"
+              surface="translucent"
               submitting={sending}
               disabled={sending}
               sendLabel="Send message"
+              className="pointer-events-auto"
             />
           </div>
         </div>
