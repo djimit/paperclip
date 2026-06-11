@@ -14,7 +14,12 @@ const STAGES = [
     name: "Drafting",
     kind: "working",
     position: 100,
-    config: { variables: [{ key: "audience", label: "Audience", type: "text", showInAddForm: true }] },
+    config: {
+      variables: [
+        { name: "audience", label: "Audience", type: "text", required: true, options: [], defaultValue: null },
+        { name: "deadline", label: "Deadline", type: "text", required: false, options: [], defaultValue: null },
+      ],
+    },
   },
   {
     id: "stage-review",
@@ -78,6 +83,67 @@ function installFixtures() {
     __pipelineSettingsOriginalFetch?: typeof window.fetch;
     __pipelineSettingsInstalled?: boolean;
   };
+  const draftingDocKey = "stage-instructions:stage-drafting";
+  const draftingDocBody =
+    "Draft a piece for the **{{audience}}** audience.\n\nGround it in the latest launch notes and keep the tone punchy. Ship before {{deadline}}.";
+  const draftingDoc = {
+    link: { key: draftingDocKey, documentId: "doc-drafting" },
+    document: {
+      id: "doc-drafting",
+      title: "Drafting instructions",
+      latestBody: draftingDocBody,
+      latestRevisionId: "rev-drafting-3",
+      latestRevisionNumber: 3,
+    },
+    revision: { id: "rev-drafting-3", body: draftingDocBody, title: "Drafting instructions" },
+  };
+  const draftingRevisions = [
+    {
+      id: "rev-drafting-3",
+      companyId: COMPANY_ID,
+      documentId: "doc-drafting",
+      pipelineId: PIPELINE_ID,
+      key: draftingDocKey,
+      revisionNumber: 3,
+      title: "Drafting instructions",
+      format: "markdown",
+      body: draftingDocBody,
+      changeSummary: "Tightened the tone guidance",
+      createdByAgentId: null,
+      createdByUserId: null,
+      createdAt: "2026-06-09T16:00:00.000Z",
+    },
+    {
+      id: "rev-drafting-2",
+      companyId: COMPANY_ID,
+      documentId: "doc-drafting",
+      pipelineId: PIPELINE_ID,
+      key: draftingDocKey,
+      revisionNumber: 2,
+      title: "Drafting instructions",
+      format: "markdown",
+      body: "Draft a piece for the {{audience}} audience.",
+      changeSummary: "Added the deadline variable",
+      createdByAgentId: null,
+      createdByUserId: null,
+      createdAt: "2026-06-07T10:30:00.000Z",
+    },
+    {
+      id: "rev-drafting-1",
+      companyId: COMPANY_ID,
+      documentId: "doc-drafting",
+      pipelineId: PIPELINE_ID,
+      key: draftingDocKey,
+      revisionNumber: 1,
+      title: "Drafting instructions",
+      format: "markdown",
+      body: "Draft the piece.",
+      changeSummary: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+      createdAt: "2026-06-05T09:00:00.000Z",
+    },
+  ];
   const fixtures: Record<string, unknown> = {
     [`/api/pipelines/${PIPELINE_ID}`]: PIPELINE,
     [`/api/companies/${COMPANY_ID}/agents`]: [
@@ -96,8 +162,20 @@ function installFixtures() {
     if (Object.prototype.hasOwnProperty.call(fixtures, url.pathname)) {
       return Response.json(fixtures[url.pathname]);
     }
+    const decoded = decodeURIComponent(url.pathname);
     // Pipeline guidance document — none yet.
     if (url.pathname === `/api/pipelines/${PIPELINE_ID}/documents/guidance`) {
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    }
+    // Drafting stage instructions document + revision history.
+    if (decoded === `/api/pipelines/${PIPELINE_ID}/documents/${draftingDocKey}/revisions`) {
+      return Response.json(draftingRevisions);
+    }
+    if (decoded === `/api/pipelines/${PIPELINE_ID}/documents/${draftingDocKey}`) {
+      return Response.json(draftingDoc);
+    }
+    // Any other per-stage instructions document — none yet.
+    if (decoded.includes(`/api/pipelines/${PIPELINE_ID}/documents/stage-instructions:`)) {
       return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
     }
     return originalFetch(input, init);

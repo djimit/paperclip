@@ -10,7 +10,30 @@ import type { PipelineDetail, PipelineDocumentPayload } from "../api/pipelines";
 import { agentsApi } from "../api/agents";
 import { accessApi } from "../api/access";
 import { pipelinesApi } from "../api/pipelines";
+import { ApiError } from "../api/client";
 import { PipelineSettings } from "./PipelineSettings";
+
+// MarkdownEditor pulls in heavy Lexical/sandpack deps that crash jsdom at import.
+// Mock it with a controllable textarea so tests can drive the instructions body
+// (and the real RoutineVariablesEditor still syncs against it).
+vi.mock("../components/MarkdownEditor", () => ({
+  MarkdownEditor: ({
+    value,
+    onChange,
+    placeholder,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+  }) => (
+    <textarea
+      aria-label="Stage instructions"
+      value={value}
+      placeholder={placeholder}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+}));
 
 vi.mock("@/lib/router", () => ({
   Link: ({
@@ -130,6 +153,19 @@ async function flushQueries() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function setNativeValue(element: HTMLTextAreaElement | HTMLInputElement, value: string) {
+  const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const valueSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  valueSetter?.call(element, value);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function findButton(container: HTMLElement, text: string) {
+  return Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes(text)) as
+    | HTMLButtonElement
+    | undefined;
+}
+
 describe("PipelineSettings", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
@@ -145,10 +181,36 @@ describe("PipelineSettings", () => {
       position: 101,
       config: { variables: [] },
     });
-    vi.spyOn(pipelinesApi, "getDocument").mockResolvedValue(makeGuidanceDocument());
+    // Key-aware: guidance has a document; per-stage instructions docs 404 by
+    // default so the editor falls back to legacy `config.whatHappensHere`.
+    vi.spyOn(pipelinesApi, "getDocument").mockImplementation(async (_pipelineId, key) => {
+      if (key === "guidance") return makeGuidanceDocument();
+      throw new ApiError("Pipeline document not found", 404, null);
+    });
     vi.spyOn(pipelinesApi, "upsertDocument").mockResolvedValue({
       document: makeGuidanceDocument().document,
       revision: { body: "Updated.", title: "Pipeline guidance" },
+    });
+    vi.spyOn(pipelinesApi, "listDocumentRevisions").mockResolvedValue([]);
+    vi.spyOn(pipelinesApi, "restoreDocumentRevision").mockResolvedValue({
+      document: makeGuidanceDocument().document,
+      revision: {
+        id: "rev-restored",
+        companyId: "company-1",
+        documentId: "doc-stage",
+        pipelineId: "pipeline-1",
+        key: "stage-instructions:stage-1",
+        revisionNumber: 3,
+        title: null,
+        format: "markdown",
+        body: "Restored body.",
+        changeSummary: "Restored from revision 1",
+        createdByAgentId: null,
+        createdByUserId: null,
+        createdAt: "2026-06-01T00:00:00.000Z",
+      },
+      restoredFromRevisionId: "rev-1",
+      restoredFromRevisionNumber: 1,
     });
     vi.spyOn(pipelinesApi, "update").mockResolvedValue(makePipeline());
     vi.spyOn(agentsApi, "list").mockResolvedValue([
@@ -184,23 +246,20 @@ describe("PipelineSettings", () => {
     queryClient.clear();
   });
 
-  it("renders selected stage sections in the required order", async () => {
+  it("renders the Instructions section and drops the old plain-text fields", async () => {
     const { container, root, queryClient } = renderSettings();
     await flushQueries();
 
-    const expected = [
-      "Basics",
-      "Disable",
-      "Approval",
-      "What happens here",
-      "Routine variables",
-      "Connections",
-      "Advanced identifiers",
-    ];
-    const headings = Array.from(container.querySelectorAll("h2"))
-      .map((heading) => heading.textContent ?? "")
-      .filter((heading) => expected.includes(heading));
-    expect(headings).toEqual(expected);
+    const headings = Array.from(container.querySelectorAll("h2")).map((heading) => heading.textContent ?? "");
+    // The stage panel keeps Basics + Approval before the routine-style editor.
+    const stageHeadings = headings.filter((heading) =>
+      ["Basics", "Approval", "Instructions", "Allowed next steps", "New entries"].includes(heading),
+    );
+    expect(stageHeadings.slice(0, 3)).toEqual(["Basics", "Approval", "Instructions"]);
+    expect(headings).not.toContain("What happens here");
+    expect(headings).not.toContain("Routine variables");
+    // The instructions body is the mocked MarkdownEditor, not a plain Textarea.
+    expect(container.querySelector('[aria-label="Stage instructions"]')).not.toBeNull();
 
     flushSync(() => {
       root.unmount();
@@ -214,10 +273,10 @@ describe("PipelineSettings", () => {
 
     expect(container.querySelector('[aria-label="Approval picker"]')).toBeNull();
     const switches = Array.from(container.querySelectorAll('[role="switch"]')) as HTMLButtonElement[];
-    expect(switches.length).toBeGreaterThanOrEqual(2);
+    expect(switches.length).toBeGreaterThanOrEqual(1);
 
     flushSync(() => {
-      switches[1]!.click();
+      switches[0]!.click();
     });
 
     const picker = container.querySelector<HTMLSelectElement>('[aria-label="Approval picker"]');
@@ -255,6 +314,87 @@ describe("PipelineSettings", () => {
     });
 
     expect(archiveButton?.disabled).toBe(false);
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("seeds the instructions body from legacy whatHappensHere when no document exists", async () => {
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    const editor = container.querySelector<HTMLTextAreaElement>('[aria-label="Stage instructions"]')!;
+    expect(editor.value).toBe("Collect requests.");
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("syncs variables from {{name}} tokens and saves body + variables in one action", async () => {
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    const editor = container.querySelector<HTMLTextAreaElement>('[aria-label="Stage instructions"]')!;
+    flushSync(() => {
+      setNativeValue(editor, "Draft {{topic}} for the {{channel}} channel");
+    });
+    await flushQueries();
+    // The real RoutineVariablesEditor detected and surfaced both variables.
+    expect(container.textContent).toContain("{{topic}}");
+    expect(container.textContent).toContain("{{channel}}");
+
+    const saveButton = findButton(container, "Save stage")!;
+    expect(saveButton).toBeTruthy();
+    flushSync(() => {
+      saveButton.click();
+    });
+    await flushQueries();
+
+    // One save action writes the per-stage document...
+    expect(pipelinesApi.upsertDocument).toHaveBeenCalledWith(
+      "pipeline-1",
+      "stage-instructions:stage-1",
+      expect.objectContaining({ body: "Draft {{topic}} for the {{channel}} channel", baseRevisionId: null }),
+    );
+    // ...and persists the synced routine variables in the stage config.
+    const updateStageCalls = (pipelinesApi.updateStage as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const lastConfig = (updateStageCalls.at(-1)?.[2] as { config: { variables: Array<{ name: string }> } }).config;
+    expect(lastConfig.variables.map((variable) => variable.name)).toEqual(["topic", "channel"]);
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("recovers from a stale-revision conflict on the instructions upsert", async () => {
+    (pipelinesApi.upsertDocument as unknown as { mockRejectedValueOnce: (error: unknown) => void }).mockRejectedValueOnce(
+      new ApiError("Pipeline document was updated by someone else", 409, { code: "stale_base_revision" }),
+    );
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    const editor = container.querySelector<HTMLTextAreaElement>('[aria-label="Stage instructions"]')!;
+    flushSync(() => {
+      setNativeValue(editor, "Updated instructions body");
+    });
+    await flushQueries();
+
+    flushSync(() => {
+      findButton(container, "Save stage")!.click();
+    });
+    await flushQueries();
+
+    expect(container.textContent).toContain("Someone else updated these instructions");
+    expect(findButton(container, "Reload latest")).toBeTruthy();
+    // No silent last-write-wins: the edited body is preserved for the user.
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Stage instructions"]')!.value).toBe(
+      "Updated instructions body",
+    );
 
     flushSync(() => {
       root.unmount();

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Agent } from "@paperclipai/shared";
+import { syncRoutineVariablesWithTemplate, type Agent, type RoutineVariable } from "@paperclipai/shared";
 import {
   AlertTriangle,
   Archive,
@@ -10,8 +10,8 @@ import {
   Pause,
   Play,
   Plus,
+  RefreshCw,
   Save,
-  Trash2,
 } from "lucide-react";
 import { agentsApi } from "../api/agents";
 import { accessApi, type CompanyUserDirectoryEntry } from "../api/access";
@@ -20,6 +20,9 @@ import type { PipelineDetail, PipelineStage, PipelineTransitionEdge } from "../a
 import { pipelinesApi } from "../api/pipelines";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { MarkdownEditor } from "../components/MarkdownEditor";
+import { RoutineVariablesEditor, RoutineVariablesHint } from "../components/RoutineVariablesEditor";
+import { PipelineStageHistoryPanel } from "../components/PipelineStageHistoryPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,23 +30,20 @@ import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useToastActions } from "../context/ToastContext";
+import { buildMarkdownMentionOptions } from "../lib/company-members";
 import { queryKeys } from "../lib/queryKeys";
 import { cn } from "../lib/utils";
 import { Link, useNavigate, useParams } from "@/lib/router";
 
 type SettingsTab = "stages" | "guidance" | "advanced";
-type VariableType = "text" | "multiline" | "select";
 type ApproverKind = "any_human" | "user" | "agent";
 
 type StageConfig = {
-  variables?: Array<{
-    key: string;
-    label: string;
-    type?: VariableType;
-    options?: string[];
-    required?: boolean;
-    showInAddForm?: boolean;
-  }>;
+  // Stage instruction variables are stored in the routine variable shape
+  // (`{ name, label, type, defaultValue, required, options }`) and kept in sync
+  // with the instructions body. Legacy entries used `{ key, ... }`; both are
+  // read through `toRoutineVariables`.
+  variables?: unknown[];
   disabled?: boolean;
   disabledReason?: string | null;
   requireApproval?: boolean;
@@ -60,16 +60,6 @@ type StageConfig = {
   [key: string]: unknown;
 };
 
-type EditorVariable = {
-  id: string;
-  key: string;
-  label: string;
-  type: VariableType;
-  optionsText: string;
-  required: boolean;
-  showInAddForm: boolean;
-};
-
 const TAB_LABELS: Array<{ id: SettingsTab; label: string }> = [
   { id: "stages", label: "Stages" },
   { id: "guidance", label: "Guidance" },
@@ -77,6 +67,70 @@ const TAB_LABELS: Array<{ id: SettingsTab; label: string }> = [
 ];
 
 const PIPELINE_GUIDANCE_KEY = "guidance";
+
+/** Per-stage instructions document key — keyed by stage id so it survives renames. */
+function stageInstructionsKey(stageId: string) {
+  return `stage-instructions:${stageId}`;
+}
+
+/** Raised when the instructions document upsert is rejected for a stale base revision. */
+class StageInstructionsConflictError extends Error {
+  constructor() {
+    super("Stage instructions were updated by someone else.");
+    this.name = "StageInstructionsConflictError";
+  }
+}
+
+const ROUTINE_VARIABLE_TYPES: ReadonlySet<RoutineVariable["type"]> = new Set([
+  "text",
+  "textarea",
+  "number",
+  "boolean",
+  "select",
+]);
+
+/**
+ * Read stage `config.variables` into the routine variable shape, tolerating
+ * both the current shape (`{ name, ... }`) and the legacy pipeline shape
+ * (`{ key, type: text|multiline|select, showInAddForm }`).
+ */
+function toRoutineVariables(raw: unknown): RoutineVariable[] {
+  if (!Array.isArray(raw)) return [];
+  const result: RoutineVariable[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const name = typeof record.name === "string" && record.name.trim()
+      ? record.name.trim()
+      : typeof record.key === "string" && record.key.trim()
+        ? record.key.trim()
+        : null;
+    if (!name) continue;
+    const rawType = typeof record.type === "string" ? record.type : "text";
+    const type: RoutineVariable["type"] = ROUTINE_VARIABLE_TYPES.has(rawType as RoutineVariable["type"])
+      ? (rawType as RoutineVariable["type"])
+      : rawType === "multiline"
+        ? "textarea"
+        : "text";
+    const options = Array.isArray(record.options)
+      ? record.options.filter((option): option is string => typeof option === "string")
+      : [];
+    const defaultValue = record.defaultValue as RoutineVariable["defaultValue"];
+    result.push({
+      name,
+      label: typeof record.label === "string" && record.label.trim() ? record.label.trim() : null,
+      type,
+      defaultValue:
+        defaultValue === undefined ||
+        (typeof defaultValue !== "string" && typeof defaultValue !== "number" && typeof defaultValue !== "boolean")
+          ? null
+          : defaultValue,
+      required: record.required === true,
+      options,
+    });
+  }
+  return result;
+}
 
 function stageConfig(stage: PipelineStage | null | undefined): StageConfig {
   const config = stage?.config;
@@ -90,38 +144,13 @@ function stageNewEntriesDisabled(stage: PipelineStage | null | undefined) {
   return stageConfig(stage).disabled === true;
 }
 
-function variableRows(stage: PipelineStage | null | undefined): EditorVariable[] {
-  return (stageConfig(stage).variables ?? []).map((variable, index) => ({
-    id: `${variable.key || "variable"}-${index}`,
-    key: variable.key,
-    label: variable.label,
-    type: variable.type ?? "text",
-    optionsText: (variable.options ?? []).join(", "),
-    required: Boolean(variable.required),
-    showInAddForm: Boolean(variable.showInAddForm),
-  }));
-}
-
-function cleanVariables(variables: EditorVariable[]) {
-  return variables
-    .map((variable) => {
-      const type = variable.type;
-      const options = type === "select"
-        ? variable.optionsText
-          .split(",")
-          .map((option) => option.trim())
-          .filter(Boolean)
-        : [];
-      return {
-        key: variable.key.trim(),
-        label: variable.label.trim() || variable.key.trim(),
-        type,
-        options,
-        required: variable.required,
-        showInAddForm: variable.showInAddForm,
-      };
-    })
-    .filter((variable) => variable.key);
+/**
+ * The saved variable baseline. Variables are body-driven, so the saved value is
+ * the synced result of the saved instructions body against the saved config
+ * variables — matching what `RoutineVariablesEditor` produces on first load.
+ */
+function savedStageVariables(stage: PipelineStage | null | undefined, savedBody: string): RoutineVariable[] {
+  return syncRoutineVariablesWithTemplate(["", savedBody], toRoutineVariables(stageConfig(stage).variables));
 }
 
 type StageFormValues = {
@@ -131,12 +160,10 @@ type StageFormValues = {
   disableReason: string;
   approvalRequired: boolean;
   approval: string;
-  whatHappensHere: string;
   approveTarget: string;
   rejectTarget: string;
   requestChangesTarget: string;
   requireRejectReason: boolean;
-  variables: ReturnType<typeof cleanVariables>;
   transitionTargetIds: string[];
 };
 
@@ -154,12 +181,10 @@ function computeStageForm(
     disableReason: config.disabledReason ?? "",
     approvalRequired: Boolean(config.requireApproval),
     approval: approvalValue(config),
-    whatHappensHere: config.whatHappensHere ?? "",
     approveTarget: config.approveToStageKey ?? "",
     rejectTarget: config.rejectToStageKey ?? "",
     requestChangesTarget: config.requestChangesToStageKey ?? "",
     requireRejectReason: config.requireRejectReason ?? true,
-    variables: cleanVariables(variableRows(stage)),
     transitionTargetIds: transitions
       .filter((transition) => transition.fromStageId === stage.id)
       .map((transition) => transition.toStageId)
@@ -265,12 +290,13 @@ export function PipelineSettings() {
   const [disableReason, setDisableReason] = useState("");
   const [approvalRequired, setApprovalRequired] = useState(false);
   const [selectedApproval, setSelectedApproval] = useState("any_human");
-  const [whatHappensHere, setWhatHappensHere] = useState("");
+  const [instructionsBody, setInstructionsBody] = useState("");
+  const [instructionsVariables, setInstructionsVariables] = useState<RoutineVariable[]>([]);
+  const [instructionsConflict, setInstructionsConflict] = useState(false);
   const [approveTarget, setApproveTarget] = useState("");
   const [rejectTarget, setRejectTarget] = useState("");
   const [requestChangesTarget, setRequestChangesTarget] = useState("");
   const [requireRejectReason, setRequireRejectReason] = useState(true);
-  const [variables, setVariables] = useState<EditorVariable[]>([]);
   const [transitionTargets, setTransitionTargets] = useState<Set<string>>(() => new Set());
   const [guidanceBody, setGuidanceBody] = useState("");
   const [pipelineName, setPipelineName] = useState("");
@@ -318,6 +344,40 @@ export function PipelineSettings() {
     ? guidanceDocument.revision?.body ?? guidanceDocument.document?.latestBody ?? ""
     : "";
 
+  const instructionsKey = selectedStage ? stageInstructionsKey(selectedStage.id) : null;
+  const instructionsQuery = useQuery({
+    queryKey: pipelineId && instructionsKey
+      ? queryKeys.pipelines.document(pipelineId, instructionsKey)
+      : ["pipelines", "document", "none-stage"],
+    queryFn: async () => {
+      try {
+        return await pipelinesApi.getDocument(pipelineId!, instructionsKey!);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    enabled: !!pipelineId && !!instructionsKey && !!selectedCompanyId,
+  });
+  const instructionsDocument = instructionsQuery.data ?? null;
+  // Read-through back-compat: when no per-stage document exists yet, seed the
+  // editor from the legacy `config.whatHappensHere`; the first save writes the
+  // document and the document becomes the source of truth thereafter.
+  const savedInstructionsBody = instructionsDocument
+    ? instructionsDocument.revision?.body ?? instructionsDocument.document?.latestBody ?? ""
+    : stageConfig(selectedStage).whatHappensHere ?? "";
+  const instructionsBaseRevisionId =
+    (instructionsDocument?.document?.latestRevisionId as string | null | undefined) ?? null;
+  const savedInstructionsVariables = useMemo(
+    () => savedStageVariables(selectedStage, savedInstructionsBody),
+    [selectedStage, savedInstructionsBody],
+  );
+
+  const mentionOptions = useMemo(
+    () => buildMarkdownMentionOptions({ agents: agentsQuery.data, members: usersQuery.data?.users }),
+    [agentsQuery.data, usersQuery.data?.users],
+  );
+
   useEffect(() => {
     if (!pipeline) return;
     setBreadcrumbs([
@@ -342,14 +402,20 @@ export function PipelineSettings() {
     setDisableReason(form.disableReason);
     setApprovalRequired(form.approvalRequired);
     setSelectedApproval(form.approval);
-    setWhatHappensHere(form.whatHappensHere);
     setApproveTarget(form.approveTarget);
     setRejectTarget(form.rejectTarget);
     setRequestChangesTarget(form.requestChangesTarget);
     setRequireRejectReason(form.requireRejectReason);
-    setVariables(variableRows(selectedStage));
     setTransitionTargets(new Set(form.transitionTargetIds));
   }, [pipeline?.transitions, selectedStage]);
+
+  // Instructions body + variables hydrate from the per-stage document (or the
+  // legacy field). Resetting on the saved value clears dirty after save/reload.
+  useEffect(() => {
+    setInstructionsBody(savedInstructionsBody);
+    setInstructionsVariables(savedInstructionsVariables);
+    setInstructionsConflict(false);
+  }, [selectedStage?.id, savedInstructionsBody, savedInstructionsVariables]);
 
   useEffect(() => {
     setGuidanceBody(savedGuidanceBody);
@@ -373,14 +439,16 @@ export function PipelineSettings() {
       const parsedApproval = parseApprovalValue(selectedApproval);
       const config: StageConfig = {
         ...stageConfig(selectedStage),
-        variables: cleanVariables(variables),
+        variables: instructionsVariables,
         disabled: newEntriesDisabled,
         disabledReason: newEntriesDisabled ? disableReason.trim() || null : null,
         requireApproval: approvalRequired,
         approver: approvalRequired && parsedApproval.kind !== "any_human"
           ? { kind: parsedApproval.kind, id: parsedApproval.id }
           : { kind: "any_human" },
-        whatHappensHere: whatHappensHere.trim(),
+        // Mirror the body into the legacy field so read-through stays consistent
+        // for any caller still reading `config.whatHappensHere`.
+        whatHappensHere: instructionsBody.trim(),
       };
       // The approval model replaces the legacy reviewerKind input.
       delete config.reviewerKind;
@@ -431,6 +499,25 @@ export function PipelineSettings() {
         return [{ fromStageKey: selectedStage.key, toStageKey, label: prior?.label ?? null }];
       });
 
+      // Persist the instructions body first so a stale-revision conflict aborts
+      // before we mutate the rest of the stage config (no half-applied save).
+      const bodyChanged = instructionsBody !== savedInstructionsBody;
+      const needsFirstWrite = !instructionsDocument && instructionsBody.trim().length > 0;
+      if (bodyChanged || needsFirstWrite) {
+        try {
+          await pipelinesApi.upsertDocument(pipelineId, stageInstructionsKey(selectedStage.id), {
+            title: `${stageName.trim() || selectedStage.name} instructions`,
+            body: instructionsBody,
+            baseRevisionId: instructionsBaseRevisionId,
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409) {
+            throw new StageInstructionsConflictError();
+          }
+          throw error;
+        }
+      }
+
       await pipelinesApi.updateStage(pipelineId, selectedStage.id, {
         name: stageName.trim(),
         kind: stageKind,
@@ -442,10 +529,42 @@ export function PipelineSettings() {
       return null;
     },
     onSuccess: async () => {
+      setInstructionsConflict(false);
+      if (pipelineId && instructionsKey) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.document(pipelineId, instructionsKey) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.documentRevisions(pipelineId, instructionsKey) }),
+        ]);
+      }
       await refreshPipeline();
       pushToast({ title: "Stage saved", tone: "success" });
     },
+    onError: async (error) => {
+      if (error instanceof StageInstructionsConflictError) {
+        setInstructionsConflict(true);
+        if (pipelineId && instructionsKey) {
+          await queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.document(pipelineId, instructionsKey) });
+        }
+        pushToast({
+          title: "Instructions changed",
+          body: "Someone else updated these instructions. Reload to see the latest version.",
+          tone: "warn",
+        });
+        return;
+      }
+      pushToast({
+        title: "Failed to save stage",
+        body: error instanceof Error ? error.message : "Paperclip could not save the stage.",
+        tone: "error",
+      });
+    },
   });
+
+  const reloadInstructions = async () => {
+    if (!pipelineId || !instructionsKey) return;
+    setInstructionsConflict(false);
+    await queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.document(pipelineId, instructionsKey) });
+  };
 
   const addStage = useMutation({
     mutationFn: async (afterStage: PipelineStage | null) => {
@@ -540,28 +659,6 @@ export function PipelineSettings() {
     },
   });
 
-  const addVariable = () => {
-    const nextIndex = variables.length + 1;
-    setVariables((current) => [
-      ...current,
-      {
-        id: `new-${Date.now()}`,
-        key: `field_${nextIndex}`,
-        label: `Field ${nextIndex}`,
-        type: "text",
-        optionsText: "",
-        required: false,
-        showInAddForm: true,
-      },
-    ]);
-  };
-
-  const updateVariable = (id: string, patch: Partial<EditorVariable>) => {
-    setVariables((current) =>
-      current.map((variable) => variable.id === id ? { ...variable, ...patch } : variable),
-    );
-  };
-
   const setStageKindWithDefaults = (kind: string) => {
     setStageKind(kind);
     if (kind === "review") {
@@ -607,19 +704,23 @@ export function PipelineSettings() {
         disableReason,
         approvalRequired,
         approval: selectedApproval,
-        whatHappensHere,
         approveTarget,
         rejectTarget,
         requestChangesTarget,
         requireRejectReason,
-        variables: cleanVariables(variables),
         transitionTargetIds: [...transitionTargets].sort(),
       }
     : null;
+  const instructionsBodyDirty = selectedStage != null && instructionsBody !== savedInstructionsBody;
+  const variablesDirty =
+    selectedStage != null &&
+    JSON.stringify(instructionsVariables) !== JSON.stringify(savedInstructionsVariables);
   const stageDirty =
-    savedStageForm != null &&
-    currentStageForm != null &&
-    JSON.stringify(savedStageForm) !== JSON.stringify(currentStageForm);
+    (savedStageForm != null &&
+      currentStageForm != null &&
+      JSON.stringify(savedStageForm) !== JSON.stringify(currentStageForm)) ||
+    instructionsBodyDirty ||
+    variablesDirty;
 
   return (
     <div className="space-y-6">
@@ -819,80 +920,57 @@ export function PipelineSettings() {
                 </Section>
               ) : null}
 
-              <Section title="What happens here">
-                <Textarea
-                  value={whatHappensHere}
-                  onChange={(event) => setWhatHappensHere(event.target.value)}
-                  rows={4}
-                  placeholder="Describe the work that should happen in this stage."
-                />
-              </Section>
-
-              <Section title="Routine variables">
-                <div className="space-y-3">
-                  {variables.map((variable) => (
-                    <div key={variable.id} className="grid gap-2 border-b border-border pb-3 md:grid-cols-[160px_1fr_140px_1fr_auto]">
-                      <Input
-                        aria-label="Variable key"
-                        value={variable.key}
-                        onChange={(event) => updateVariable(variable.id, { key: event.target.value })}
-                        placeholder="field_key"
-                      />
-                      <Input
-                        aria-label="Variable label"
-                        value={variable.label}
-                        onChange={(event) => updateVariable(variable.id, { label: event.target.value })}
-                        placeholder="Field label"
-                      />
-                      <select
-                        aria-label="Variable type"
-                        value={variable.type}
-                        onChange={(event) => updateVariable(variable.id, { type: event.target.value as VariableType })}
-                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                      >
-                        <option value="text">Text</option>
-                        <option value="multiline">Multiline</option>
-                        <option value="select">Select</option>
-                      </select>
-                      <Input
-                        aria-label="Variable options"
-                        value={variable.optionsText}
-                        onChange={(event) => updateVariable(variable.id, { optionsText: event.target.value })}
-                        placeholder="Options, comma separated"
-                        disabled={variable.type !== "select"}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Remove ${variable.label || variable.key}`}
-                        onClick={() => setVariables((current) => current.filter((item) => item.id !== variable.id))}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                      <label className="flex items-center gap-2 text-sm text-muted-foreground md:col-span-2">
-                        <input
-                          type="checkbox"
-                          checked={variable.required}
-                          onChange={(event) => updateVariable(variable.id, { required: event.target.checked })}
-                        />
-                        Required
-                      </label>
-                      <label className="flex items-center gap-2 text-sm text-muted-foreground md:col-span-3">
-                        <input
-                          type="checkbox"
-                          checked={variable.showInAddForm}
-                          onChange={(event) => updateVariable(variable.id, { showInAddForm: event.target.checked })}
-                        />
-                        Show in Add-items form
-                      </label>
-                    </div>
-                  ))}
-                  <Button type="button" variant="outline" onClick={addVariable}>
-                    <Plus className="h-4 w-4" />
-                    Add variable
-                  </Button>
+              <Section title="Instructions">
+                <p className="text-sm text-muted-foreground">
+                  The plain-language routine this stage runs. Type <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{"{{name}}"}</code> to add a
+                  variable; it appears below and the first stage&apos;s variables become the Add-item form fields.
+                </p>
+                <div data-testid="stage-instructions-editor" className="rounded-md border border-input">
+                  <MarkdownEditor
+                    value={instructionsBody}
+                    onChange={setInstructionsBody}
+                    placeholder="Describe the work that should happen in this stage."
+                    bordered={false}
+                    contentClassName="min-h-[120px] px-3 py-2 text-[15px] leading-7"
+                    mentions={mentionOptions}
+                    onSubmit={() => {
+                      if (!saveStage.isPending && stageName.trim() && !reviewTargetsMissing) {
+                        saveStage.mutate();
+                      }
+                    }}
+                  />
                 </div>
+                {instructionsConflict ? (
+                  <div className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm text-amber-900 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+                    <span>Someone else updated these instructions. Reload to get their version, then re-apply your edits.</span>
+                    <Button type="button" variant="outline" size="sm" onClick={reloadInstructions}>
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Reload latest
+                    </Button>
+                  </div>
+                ) : null}
+                <div className="space-y-3">
+                  <RoutineVariablesHint />
+                  <RoutineVariablesEditor
+                    title=""
+                    description={instructionsBody}
+                    value={instructionsVariables}
+                    onChange={setInstructionsVariables}
+                  />
+                </div>
+                {instructionsKey ? (
+                  <PipelineStageHistoryPanel
+                    pipelineId={pipelineId}
+                    documentKey={instructionsKey}
+                    currentRevisionId={instructionsBaseRevisionId}
+                    hasDocument={Boolean(instructionsDocument)}
+                    onRestored={(body, baseRevisionId) => {
+                      setInstructionsBody(body);
+                      setInstructionsConflict(false);
+                      void baseRevisionId;
+                    }}
+                  />
+                ) : null}
               </Section>
 
               {isReviewStage ? null : (

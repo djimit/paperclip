@@ -396,6 +396,46 @@ describeEmbeddedPostgres("pipeline routes", () => {
     });
   });
 
+  it("derives intake-form fields from routine-shaped stage variables", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({
+        key: "routine-vars",
+        name: "Routine vars",
+        stages: [
+          {
+            key: "drafting",
+            name: "Drafting",
+            kind: "open",
+            position: 100,
+            config: {
+              // Routine variable shape — synced from `{{name}}` body placeholders,
+              // no `showInAddForm`: every variable becomes an Add-item field.
+              variables: [
+                { name: "topic", label: "Topic", type: "text", required: true, options: [], defaultValue: null },
+                { name: "channel", label: "Channel", type: "select", required: false, options: ["Blog", "Email"], defaultValue: null },
+                { name: "brief", label: null, type: "textarea", required: false, options: [], defaultValue: null },
+              ],
+            },
+          },
+          { key: "done", name: "Done", kind: "done", position: 900 },
+          { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
+        ],
+      })
+      .expect(201);
+
+    const form = await http.get(`/api/pipelines/${pipeline.body.id}/intake-form`).expect(200);
+    expect(form.body.fields).toEqual([
+      { key: "title", label: "Name", type: "text", required: true, options: [] },
+      { key: "topic", label: "Topic", type: "text", required: true, options: [] },
+      { key: "channel", label: "Channel", type: "select", required: false, options: ["Blog", "Email"] },
+      // textarea maps to multiline; missing label falls back to the variable name.
+      { key: "brief", label: "brief", type: "multiline", required: false, options: [] },
+    ]);
+  });
+
   it("stamps and clears pipeline automation routine origins when stage wiring changes", async () => {
     const company = await seedCompany();
     const http = request(app(boardActor));

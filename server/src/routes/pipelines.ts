@@ -175,15 +175,39 @@ function extractIntakeFormFields(stage: typeof pipelineStages.$inferSelect | nul
     ...variables.flatMap((raw) => {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
       const variable = raw as Record<string, unknown>;
-      if (variable.showInAddForm !== true) return [];
-      if (typeof variable.key !== "string" || variable.key.trim().length === 0) return [];
-      if (typeof variable.label !== "string" || variable.label.trim().length === 0) return [];
-      const type = typeof variable.type === "string" && intakeFieldTypes.has(variable.type) ? variable.type : "text";
+      const routineName = typeof variable.name === "string" && variable.name.trim().length > 0
+        ? variable.name.trim()
+        : null;
+      const legacyKey = typeof variable.key === "string" && variable.key.trim().length > 0
+        ? variable.key.trim()
+        : null;
+
       const options = Array.isArray(variable.options)
         ? variable.options.filter((option): option is string => typeof option === "string" && option.trim().length > 0)
         : [];
+
+      // Routine variable shape (body-driven `{{name}}`): every variable on the
+      // stage becomes an Add-item field; routine types map onto intake types.
+      if (routineName) {
+        const rawType = typeof variable.type === "string" ? variable.type : "text";
+        const type = rawType === "select"
+          ? "select"
+          : rawType === "textarea" || rawType === "multiline"
+            ? "multiline"
+            : "text";
+        const label = typeof variable.label === "string" && variable.label.trim().length > 0
+          ? variable.label.trim()
+          : routineName;
+        return [{ key: routineName, label, type, required: variable.required === true, options }];
+      }
+
+      // Legacy pipeline variable shape: opt-in via `showInAddForm`, keyed by `key`.
+      if (!legacyKey) return [];
+      if (variable.showInAddForm !== true) return [];
+      if (typeof variable.label !== "string" || variable.label.trim().length === 0) return [];
+      const type = typeof variable.type === "string" && intakeFieldTypes.has(variable.type) ? variable.type : "text";
       return [{
-        key: variable.key,
+        key: legacyKey,
         label: variable.label,
         type,
         required: variable.required === true,
