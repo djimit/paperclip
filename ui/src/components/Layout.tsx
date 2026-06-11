@@ -540,7 +540,12 @@ export function Layout() {
               tabIndex={-1}
               className={cn(
                 "flex-1 p-4 outline-none md:p-6",
-                isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto",
+                // Reserve the scrollbar gutter on desktop so pages whose height
+                // changes (e.g. switching skill-detail tabs) don't widen/shift
+                // when the vertical scrollbar appears or disappears (PAP-10907).
+                isMobile
+                  ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]"
+                  : "overflow-auto [scrollbar-gutter:stable]",
               )}
             >
               {hasUnknownCompanyPrefix ? (
