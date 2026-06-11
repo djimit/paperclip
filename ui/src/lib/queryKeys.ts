@@ -128,6 +128,10 @@ export const queryKeys = {
     caseEvents: (caseId: string) => ["pipelines", "item", caseId, "events"] as const,
     caseIssueLinks: (caseId: string) => ["pipelines", "item", caseId, "issue-links"] as const,
     intakeForm: (pipelineId: string) => ["pipelines", "intake-form", pipelineId] as const,
+    attention: (companyId: string) => ["pipelines", "attention", companyId] as const,
+    reviewCases: (companyId: string) => ["pipelines", "review-cases", companyId] as const,
+    learnings: (companyId: string, offset: number) =>
+      ["pipelines", "learnings", companyId, offset] as const,
   },
   goals: {
     list: (companyId: string) => ["goals", companyId] as const,

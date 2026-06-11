@@ -186,6 +186,120 @@ export interface PipelineCaseEventsPage {
   };
 }
 
+export interface PipelineAttentionCaseRef {
+  id: string;
+  caseKey: string | null;
+  title: string;
+  summary?: string | null;
+  version: number;
+  terminalKind?: string | null;
+  parentCaseId?: string | null;
+  updatedAt: Date | string;
+  createdAt: Date | string;
+  pipeline: { id: string; key: string; name: string };
+  stage: { id: string; key: string; name: string; kind: string };
+}
+
+export interface PipelineAttentionSuggestion {
+  case: PipelineAttentionCaseRef;
+  suggestion: {
+    id: string;
+    fromStageKey: string;
+    fromStageName: string;
+    toStageKey: string;
+    toStageName: string | null;
+    rationale: string;
+    confidence?: number | null;
+    createdAt: Date | string;
+    suggestedBy: { agentId: string; agentName: string } | null;
+  };
+}
+
+export interface PipelineAttentionReview {
+  case: PipelineAttentionCaseRef;
+  review: {
+    expectedVersion: number;
+    approveToStageKey: string | null;
+    rejectToStageKey: string | null;
+    requestChangesToStageKey: string | null;
+    requireRejectReason: boolean;
+    reviewerKind: string;
+  };
+}
+
+export interface PipelineAttentionHeadsUp {
+  case: PipelineAttentionCaseRef;
+  drift: {
+    eventId: string;
+    createdAt: Date | string;
+    previousVersion: number | null;
+    version: number | null;
+    upstream: {
+      caseId: string | null;
+      caseKey: string | null;
+      title: string | null;
+      pipelineId: string | null;
+      pipelineName: string | null;
+    };
+  };
+  activeWork?: PipelineCaseActiveWork | null;
+  workIssue?: Record<string, unknown> | null;
+}
+
+export interface PipelineAttentionFeed {
+  suggestions: PipelineAttentionSuggestion[];
+  reviews: PipelineAttentionReview[];
+  headsUp: PipelineAttentionHeadsUp[];
+  counts: { suggestions: number; reviews: number; headsUp: number };
+}
+
+export interface PipelineReviewConfig {
+  approveToStageKey?: string | null;
+  rejectToStageKey?: string | null;
+  requestChangesToStageKey?: string | null;
+  requireRejectReason?: boolean;
+  reviewerKind?: string;
+  [key: string]: unknown;
+}
+
+export interface PipelineReviewCaseRow {
+  case: PipelineCase;
+  pipeline: { id: string; key: string; name: string; [key: string]: unknown };
+  stage: PipelineStage;
+  parentCase?: PipelineCase | null;
+  pendingSuggestion?: PipelineCasePendingSuggestion | null;
+  reviewConfig: PipelineReviewConfig;
+}
+
+export type PipelineReviewDecision = "approve" | "reject" | "request_changes";
+
+export interface PipelineBulkReviewResult {
+  results: Array<{
+    caseId: string;
+    ok: boolean;
+    result?: unknown;
+    error?: { status?: number; message?: string; code?: string; details?: Record<string, unknown> };
+  }>;
+}
+
+export interface PipelineCompanyCaseEvent extends PipelineCaseEvent {
+  case: { id: string; caseKey: string | null; title: string; terminalKind?: string | null };
+  pipeline: { id: string; key: string; name: string };
+  fromStage?: { id: string; key: string; name: string; kind: string } | null;
+  toStage?: { id: string; key: string; name: string; kind: string } | null;
+  actorAgent?: { id: string; name: string } | null;
+}
+
+export interface PipelineCompanyCaseEventsPage {
+  items: PipelineCompanyCaseEvent[];
+  pagination: {
+    limit: number;
+    offset: number;
+    nextOffset: number | null;
+    hasMore: boolean;
+  };
+}
+
 export type PipelineBatchIngestResult =
   | { ok: true; case: PipelineCase; created: boolean }
   | {
@@ -267,4 +381,48 @@ export const pipelinesApi = {
   ) => api.post<unknown>(`/cases/${caseId}/transition`, data),
   ingestCasesBatch: (pipelineId: string, data: { items: Array<{ title: string; fields?: Record<string, unknown> }> }) =>
     api.post<PipelineBatchIngestResult[]>(`/pipelines/${pipelineId}/cases/batch`, data),
+  listAttention: (companyId: string, options?: { limit?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    const qs = params.toString();
+    return api.get<PipelineAttentionFeed>(`/companies/${companyId}/pipelines-attention${qs ? `?${qs}` : ""}`);
+  },
+  listReviewCases: (companyId: string, filters?: { pipelineId?: string; parentCaseId?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.pipelineId) params.set("pipelineId", filters.pipelineId);
+    if (filters?.parentCaseId) params.set("parentCaseId", filters.parentCaseId);
+    const qs = params.toString();
+    return api.get<PipelineReviewCaseRow[]>(`/companies/${companyId}/review-cases${qs ? `?${qs}` : ""}`);
+  },
+  reviewCase: (
+    caseId: string,
+    data: {
+      decision: PipelineReviewDecision;
+      reason?: string | null;
+      expectedVersion: number;
+      leaseToken?: string | null;
+    },
+  ) => api.post<unknown>(`/cases/${caseId}/review`, data),
+  bulkReviewCases: (
+    companyId: string,
+    data: {
+      items: Array<{
+        caseId: string;
+        decision: PipelineReviewDecision;
+        reason?: string | null;
+        expectedVersion: number;
+      }>;
+    },
+  ) => api.post<PipelineBulkReviewResult>(`/companies/${companyId}/review-cases/bulk`, data),
+  listCompanyCaseEvents: (
+    companyId: string,
+    filters?: { types?: string; limit?: number; offset?: number },
+  ) => {
+    const params = new URLSearchParams();
+    if (filters?.types) params.set("types", filters.types);
+    if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
+    if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
+    const qs = params.toString();
+    return api.get<PipelineCompanyCaseEventsPage>(`/companies/${companyId}/case-events${qs ? `?${qs}` : ""}`);
+  },
 };

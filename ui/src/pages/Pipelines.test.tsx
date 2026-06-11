@@ -5,10 +5,18 @@ import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PipelineBatchIngestResult, PipelineIntakeField, PipelineListItem } from "../api/pipelines";
+import type {
+  PipelineAttentionCaseRef,
+  PipelineAttentionFeed,
+  PipelineBatchIngestResult,
+  PipelineIntakeField,
+  PipelineListItem,
+  PipelineReviewCaseRow,
+} from "../api/pipelines";
 import {
   buildBatchPayload,
   buildPipelineTableRows,
+  buildReviewQueueRows,
   GeneratedField,
   isGuardedTransitionAllowed,
   PipelineItemDetailView,
@@ -17,6 +25,7 @@ import {
   pipelinesHaveConnectionData,
   plainBatchError,
   resolvePipelineTargetStageId,
+  ReviewQueue,
   validateDraftRows,
   type PipelineViewMode,
 } from "./Pipelines";
@@ -39,6 +48,11 @@ const mockPipelinesApi = vi.hoisted(() => ({
   resolveSuggestion: vi.fn(),
   transitionCase: vi.fn(),
   ingestCasesBatch: vi.fn(),
+  listAttention: vi.fn(),
+  listReviewCases: vi.fn(),
+  reviewCase: vi.fn(),
+  bulkReviewCases: vi.fn(),
+  listCompanyCaseEvents: vi.fn(),
 }));
 const mockIssuesApi = vi.hoisted(() => ({
   listComments: vi.fn(),
@@ -631,5 +645,275 @@ describe("pipeline board guard helpers", () => {
     expect(resolvePipelineTargetStageId("stage-a", columns, caseToColumn)).toBe("stage-a");
     expect(resolvePipelineTargetStageId("item-1", columns, caseToColumn)).toBe("stage-b");
     expect(resolvePipelineTargetStageId("missing", columns, caseToColumn)).toBeNull();
+  });
+});
+
+function attentionCase(
+  overrides: Partial<PipelineAttentionCaseRef> & { id: string; title: string },
+): PipelineAttentionCaseRef {
+  return {
+    caseKey: overrides.id.toUpperCase(),
+    summary: null,
+    version: 1,
+    terminalKind: null,
+    parentCaseId: null,
+    updatedAt: "2026-06-10T10:00:00.000Z",
+    createdAt: "2026-06-10T08:00:00.000Z",
+    pipeline: { id: "pipeline-1", key: "content", name: "Content production" },
+    stage: { id: "stage-review", key: "review", name: "Review", kind: "review" },
+    ...overrides,
+  };
+}
+
+function attentionFeed(overrides: Partial<PipelineAttentionFeed> = {}): PipelineAttentionFeed {
+  const feed: PipelineAttentionFeed = {
+    suggestions: [],
+    reviews: [],
+    headsUp: [],
+    counts: { suggestions: 0, reviews: 0, headsUp: 0 },
+    ...overrides,
+  };
+  feed.counts = {
+    suggestions: feed.suggestions.length,
+    reviews: feed.reviews.length,
+    headsUp: feed.headsUp.length,
+  };
+  return feed;
+}
+
+const triageFeed = attentionFeed({
+  suggestions: [
+    {
+      case: attentionCase({
+        id: "suggestion-1",
+        title: "Draft launch post",
+        stage: { id: "stage-drafting", key: "drafting", name: "Drafting", kind: "working" },
+        version: 2,
+      }),
+      suggestion: {
+        id: "sg-1",
+        fromStageKey: "drafting",
+        fromStageName: "Drafting",
+        toStageKey: "review",
+        toStageName: "Review",
+        rationale: "Drafting agent thinks Draft launch post is ready to move forward.",
+        confidence: null,
+        createdAt: "2026-06-10T11:00:00.000Z",
+        suggestedBy: { agentId: "agent-1", agentName: "Drafting agent" },
+      },
+    },
+  ],
+  reviews: [
+    {
+      case: attentionCase({
+        id: "review-1",
+        title: "Final launch post",
+        version: 3,
+        updatedAt: "2026-06-10T10:00:00.000Z",
+      }),
+      review: {
+        expectedVersion: 3,
+        approveToStageKey: "done",
+        rejectToStageKey: null,
+        requestChangesToStageKey: "drafting",
+        requireRejectReason: true,
+        reviewerKind: "human",
+      },
+    },
+  ],
+  headsUp: [
+    {
+      case: attentionCase({
+        id: "heads-up-1",
+        title: "Launch tweet",
+        stage: { id: "stage-drafting", key: "drafting", name: "Drafting", kind: "working" },
+      }),
+      drift: {
+        eventId: "event-1",
+        createdAt: "2026-06-10T09:00:00.000Z",
+        previousVersion: 1,
+        version: 2,
+        upstream: {
+          caseId: "upstream-1",
+          caseKey: "FEAT-1",
+          title: "Launch plan",
+          pipelineId: "pipeline-2",
+          pipelineName: "Features",
+        },
+      },
+      activeWork: null,
+      workIssue: null,
+    },
+  ],
+});
+
+describe("buildReviewQueueRows", () => {
+  it("groups attention rows into the daily triage sections", () => {
+    const rows = buildReviewQueueRows({ attention: triageFeed, reviewCases: [] });
+
+    expect(rows.map((row) => row.kind)).toEqual(["suggestion", "review", "headsUp"]);
+    expect(rows.find((row) => row.kind === "review")?.pipelineName).toBe("Content production");
+    expect(rows.find((row) => row.kind === "review")?.expectedVersion).toBe(3);
+    expect(rows.find((row) => row.kind === "suggestion")?.suggestionId).toBe("sg-1");
+    expect(rows.map((row) => row.prompt).join(" ")).not.toMatch(/\bcase\b/i);
+  });
+
+  it("merges review-stage details and skips duplicate suggestion rows", () => {
+    const reviewCaseRow = {
+      case: {
+        id: "review-1",
+        pipelineId: "pipeline-1",
+        stageId: "stage-review",
+        title: "Final launch post",
+        fields: { audience: "Operators" },
+        version: 3,
+        updatedAt: "2026-06-10T10:00:00.000Z",
+        createdAt: "2026-06-10T08:00:00.000Z",
+        pendingSuggestion: {
+          id: "sg-review",
+          toStageKey: "done",
+          rationale: "Ready to publish.",
+          createdAt: "2026-06-10T09:30:00.000Z",
+        },
+      },
+      pipeline: { id: "pipeline-1", key: "content", name: "Content production" },
+      stage: { id: "stage-review", pipelineId: "pipeline-1", key: "review", name: "Review", kind: "review", position: 200 },
+      parentCase: null,
+      pendingSuggestion: null,
+      reviewConfig: { requireRejectReason: true },
+    } as unknown as PipelineReviewCaseRow;
+
+    const duplicateSuggestionFeed = attentionFeed({
+      suggestions: [
+        {
+          case: attentionCase({ id: "review-1", title: "Final launch post", version: 3 }),
+          suggestion: {
+            id: "sg-review",
+            fromStageKey: "review",
+            fromStageName: "Review",
+            toStageKey: "done",
+            toStageName: "Done",
+            rationale: "Ready to publish.",
+            confidence: null,
+            createdAt: "2026-06-10T09:30:00.000Z",
+            suggestedBy: null,
+          },
+        },
+      ],
+      reviews: triageFeed.reviews,
+    });
+
+    const rows = buildReviewQueueRows({
+      attention: duplicateSuggestionFeed,
+      reviewCases: [reviewCaseRow],
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("review");
+    expect(rows[0].fields).toEqual({ audience: "Operators" });
+  });
+});
+
+async function renderReviewQueue() {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <ReviewQueue />
+      </QueryClientProvider>,
+    );
+  });
+  for (let index = 0; index < 3; index += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  return { container, root, queryClient };
+}
+
+describe("ReviewQueue", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  it("approves a final-review row through the review endpoint", async () => {
+    mockPipelinesApi.listAttention.mockResolvedValue(attentionFeed({ reviews: triageFeed.reviews }));
+    mockPipelinesApi.listReviewCases.mockResolvedValue([]);
+    mockPipelinesApi.reviewCase.mockResolvedValue({});
+
+    const { container, root } = await renderReviewQueue();
+
+    expect(container.textContent).toContain("Final calls");
+    expect(container.textContent).toContain("Final launch post");
+    const approveButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Approve",
+    );
+    expect(approveButton).toBeTruthy();
+
+    await act(async () => {
+      approveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mockPipelinesApi.reviewCase).toHaveBeenCalledWith("review-1", {
+      decision: "approve",
+      reason: null,
+      expectedVersion: 3,
+    });
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("accepts a suggestion row through the resolve-suggestion endpoint", async () => {
+    mockPipelinesApi.listAttention.mockResolvedValue(attentionFeed({ suggestions: triageFeed.suggestions }));
+    mockPipelinesApi.listReviewCases.mockResolvedValue([]);
+    mockPipelinesApi.resolveSuggestion.mockResolvedValue({});
+
+    const { container, root } = await renderReviewQueue();
+
+    expect(container.textContent).toContain("Suggestions to review");
+    const approveButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Approve",
+    );
+    expect(approveButton).toBeTruthy();
+
+    await act(async () => {
+      approveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mockPipelinesApi.resolveSuggestion).toHaveBeenCalledWith("suggestion-1", {
+      suggestionId: "sg-1",
+      resolution: "accept",
+      expectedVersion: 2,
+      reason: null,
+    });
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("shows the empty state when nothing needs attention", async () => {
+    mockPipelinesApi.listAttention.mockResolvedValue(attentionFeed());
+    mockPipelinesApi.listReviewCases.mockResolvedValue([]);
+
+    const { container, root } = await renderReviewQueue();
+
+    expect(container.textContent).toContain("Nothing needs you right now.");
+
+    act(() => {
+      root.unmount();
+    });
   });
 });

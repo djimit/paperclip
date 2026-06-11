@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, GitBranch, Hexagon, Info, MessageSquare, MoreHorizontal, Plus, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, GitBranch, Hexagon, Info, Loader2, MessageSquare, MoreHorizontal, Plus, Search, Trash2, X } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -36,6 +36,7 @@ import { Link, useLocation, useNavigate, useParams } from "@/lib/router";
 import { ApiError } from "../api/client";
 import {
   pipelinesApi,
+  type PipelineAttentionFeed,
   type PipelineBatchIngestResult,
   type PipelineCase,
   type PipelineCaseActiveWork,
@@ -47,6 +48,7 @@ import {
   type PipelineIntakeField,
   type PipelineIntakeForm,
   type PipelineListItem,
+  type PipelineReviewCaseRow,
   type PipelineStage,
 } from "../api/pipelines";
 import { issuesApi } from "../api/issues";
@@ -63,8 +65,10 @@ import {
   humanizePipelineItemStatus,
   itemHasChangedNotice,
 } from "../lib/pipeline-item-detail";
+import { hasBlockingShortcutDialog, isKeyboardShortcutTextInputTarget } from "../lib/keyboardShortcuts";
+import { formatLearningEvent, groupLearningEventsByDay } from "../lib/pipeline-learnings";
 import { queryKeys } from "../lib/queryKeys";
-import { cn, formatNumber } from "../lib/utils";
+import { cn, formatNumber, relativeTime } from "../lib/utils";
 
 interface DraftRow {
   id: string;
@@ -2007,5 +2011,856 @@ export function GeneratedField({
       )}
       {error ? <span className="text-xs text-destructive">{error}</span> : null}
     </label>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Review queue
+// ---------------------------------------------------------------------------
+
+type ReviewQueueKind = "suggestion" | "review" | "headsUp";
+
+export interface ReviewQueueRow {
+  id: string;
+  caseId: string;
+  pipelineId: string;
+  pipelineName: string;
+  title: string;
+  prompt: string;
+  kind: ReviewQueueKind;
+  createdAt: string | Date | null;
+  expectedVersion: number | null;
+  suggestionId: string | null;
+  requireRejectReason: boolean;
+  fields: Record<string, unknown> | null;
+}
+
+const REVIEW_QUEUE_SECTION_LABELS: Record<ReviewQueueKind, string> = {
+  suggestion: "Suggestions to review",
+  review: "Final calls",
+  headsUp: "Heads-up",
+};
+
+const REVIEW_QUEUE_SECTION_ORDER: ReviewQueueKind[] = ["suggestion", "review", "headsUp"];
+
+function humanizeFieldLabel(key: string) {
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function buildReviewQueueRows({
+  attention,
+  reviewCases,
+}: {
+  attention: PipelineAttentionFeed | null | undefined;
+  reviewCases: PipelineReviewCaseRow[];
+}): ReviewQueueRow[] {
+  const rows = new Map<string, ReviewQueueRow>();
+  const reviewStageCaseIds = new Set<string>([
+    ...(attention?.reviews ?? []).map((entry) => entry.case.id),
+    ...reviewCases.map((entry) => entry.case.id),
+  ]);
+
+  for (const entry of attention?.suggestions ?? []) {
+    if (reviewStageCaseIds.has(entry.case.id)) continue;
+    const id = `suggestion:${entry.case.id}`;
+    rows.set(id, {
+      id,
+      caseId: entry.case.id,
+      pipelineId: entry.case.pipeline.id,
+      pipelineName: entry.case.pipeline.name,
+      title: entry.case.title,
+      prompt:
+        entry.suggestion.rationale?.trim() ||
+        `${entry.case.pipeline.name} thinks ${entry.case.title} is ready to move forward.`,
+      kind: "suggestion",
+      createdAt: entry.suggestion.createdAt ?? entry.case.updatedAt ?? null,
+      expectedVersion: entry.case.version ?? null,
+      suggestionId: entry.suggestion.id,
+      requireRejectReason: false,
+      fields: null,
+    });
+  }
+
+  for (const entry of attention?.reviews ?? []) {
+    const id = `review:${entry.case.id}`;
+    rows.set(id, {
+      id,
+      caseId: entry.case.id,
+      pipelineId: entry.case.pipeline.id,
+      pipelineName: entry.case.pipeline.name,
+      title: entry.case.title,
+      prompt:
+        entry.case.summary?.trim() ||
+        `Decide whether ${entry.case.title} is ready to move forward.`,
+      kind: "review",
+      createdAt: entry.case.updatedAt ?? entry.case.createdAt ?? null,
+      expectedVersion: entry.review.expectedVersion ?? entry.case.version ?? null,
+      suggestionId: null,
+      requireRejectReason: entry.review.requireRejectReason !== false,
+      fields: null,
+    });
+  }
+
+  for (const entry of attention?.headsUp ?? []) {
+    const id = `headsUp:${entry.case.id}`;
+    const upstreamTitle = entry.drift.upstream?.title?.trim();
+    rows.set(id, {
+      id,
+      caseId: entry.case.id,
+      pipelineId: entry.case.pipeline.id,
+      pipelineName: entry.case.pipeline.name,
+      title: entry.case.title,
+      prompt: upstreamTitle
+        ? `${upstreamTitle} changed upstream. Take a quick look before work continues.`
+        : `${entry.case.title} needs a quick look before work continues.`,
+      kind: "headsUp",
+      createdAt: entry.drift.createdAt ?? entry.case.updatedAt ?? null,
+      expectedVersion: entry.case.version ?? null,
+      suggestionId: null,
+      requireRejectReason: false,
+      fields: null,
+    });
+  }
+
+  for (const entry of reviewCases) {
+    const id = `review:${entry.case.id}`;
+    const pendingSuggestion = entry.pendingSuggestion ?? entry.case.pendingSuggestion ?? null;
+    const existing = rows.get(id);
+    if (existing) {
+      existing.fields = entry.case.fields ?? null;
+      if (existing.expectedVersion === null && typeof entry.case.version === "number") {
+        existing.expectedVersion = entry.case.version;
+      }
+      continue;
+    }
+    rows.set(id, {
+      id,
+      caseId: entry.case.id,
+      pipelineId: entry.pipeline.id,
+      pipelineName: entry.pipeline.name,
+      title: entry.case.title,
+      prompt:
+        pendingSuggestion?.rationale?.trim() ||
+        entry.case.summary?.trim() ||
+        `Decide whether ${entry.case.title} is ready to move forward.`,
+      kind: "review",
+      createdAt: entry.case.updatedAt ?? entry.case.createdAt ?? null,
+      expectedVersion: typeof entry.case.version === "number" ? entry.case.version : null,
+      suggestionId: null,
+      requireRejectReason: entry.reviewConfig?.requireRejectReason !== false,
+      fields: entry.case.fields ?? null,
+    });
+  }
+
+  return [...rows.values()].sort((left, right) => {
+    const leftTime = left.createdAt ? new Date(left.createdAt).getTime() : 0;
+    const rightTime = right.createdAt ? new Date(right.createdAt).getTime() : 0;
+    return rightTime - leftTime;
+  });
+}
+
+function ReviewQueueStatusChip({ failed }: { failed: boolean }) {
+  if (!failed) return null;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
+      <AlertTriangle className="h-3 w-3" />
+      Needs attention
+    </span>
+  );
+}
+
+function reviewQueueFieldEntries(fields: Record<string, unknown> | null | undefined) {
+  const hidden = new Set(["review"]);
+  return Object.entries(fields ?? {})
+    .filter(([key, value]) => !hidden.has(key) && ["string", "number", "boolean"].includes(typeof value))
+    .slice(0, 6);
+}
+
+function ReviewQueueDetailDialog({
+  row,
+  open,
+  pending,
+  onOpenChange,
+  onApprove,
+  onRequestChanges,
+}: {
+  row: ReviewQueueRow | null;
+  open: boolean;
+  pending: boolean;
+  onOpenChange: (open: boolean) => void;
+  onApprove: (note: string) => void;
+  onRequestChanges: (note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (!open) setNote("");
+  }, [open]);
+
+  const fields = reviewQueueFieldEntries(row?.fields);
+  const trimmedNote = note.trim();
+  const canDecide = row ? row.kind !== "headsUp" : false;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{row?.title ?? "Review item"}</DialogTitle>
+          <DialogDescription>
+            {row ? `${row.pipelineName} is waiting for your decision.` : "Review the item and decide what happens next."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5">
+          <section className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">What is being decided</p>
+            <p className="text-sm text-foreground">{row?.prompt}</p>
+          </section>
+
+          <section className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Item preview</p>
+            {fields.length > 0 ? (
+              <div className="divide-y divide-border rounded-md border border-border">
+                {fields.map(([key, value]) => (
+                  <div key={key} className="grid grid-cols-[160px_1fr] gap-3 px-3 py-2 text-sm">
+                    <span className="text-muted-foreground">{humanizeFieldLabel(key)}</span>
+                    <span className="text-foreground">{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-md border border-border px-3 py-3 text-sm text-muted-foreground">
+                No preview details yet.
+              </p>
+            )}
+          </section>
+
+          {row ? (
+            <Link
+              to={`/pipelines/${row.pipelineId}/items/${row.caseId}`}
+              className="inline-block text-sm font-medium text-primary hover:underline"
+              onClick={() => onOpenChange(false)}
+            >
+              Open the full item
+            </Link>
+          ) : null}
+
+          {canDecide ? (
+            <label className="block space-y-1.5 text-sm font-medium">
+              <span>Note</span>
+              <Textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                rows={3}
+                placeholder="Required when requesting changes."
+              />
+            </label>
+          ) : null}
+        </div>
+
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+            Cancel
+          </Button>
+          {canDecide ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onRequestChanges(trimmedNote)}
+                disabled={pending || !trimmedNote}
+              >
+                {row?.kind === "suggestion" ? "Not yet" : "Request changes"}
+              </Button>
+              <Button type="button" onClick={() => onApprove(trimmedNote)} disabled={pending}>
+                {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                Approve
+              </Button>
+            </>
+          ) : null}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ReviewQueueSection({
+  title,
+  rows,
+  activeRowId,
+  failedRowIds,
+  selectedRowIds,
+  pendingRowIds,
+  showSelection,
+  onActivate,
+  onToggleSelected,
+  onApprove,
+  onDecline,
+  onRequestChanges,
+  onOpen,
+}: {
+  title: string;
+  rows: ReviewQueueRow[];
+  activeRowId: string | null;
+  failedRowIds: Set<string>;
+  selectedRowIds: Set<string>;
+  pendingRowIds: Set<string>;
+  showSelection: boolean;
+  onActivate: (rowId: string) => void;
+  onToggleSelected: (rowId: string) => void;
+  onApprove: (row: ReviewQueueRow) => void;
+  onDecline: (row: ReviewQueueRow) => void;
+  onRequestChanges: (row: ReviewQueueRow) => void;
+  onOpen: (row: ReviewQueueRow) => void;
+}) {
+  if (rows.length === 0) return null;
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-baseline justify-between border-b border-border pb-2">
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        <span className="text-xs text-muted-foreground">{formatNumber(rows.length)} item{rows.length === 1 ? "" : "s"}</span>
+      </div>
+      <div className="divide-y divide-border">
+        {rows.map((row) => {
+          const pending = pendingRowIds.has(row.id);
+          const failed = failedRowIds.has(row.id);
+          const selected = selectedRowIds.has(row.id);
+          const active = activeRowId === row.id;
+          const selectable = row.kind !== "headsUp";
+
+          return (
+            <div
+              key={row.id}
+              role="button"
+              tabIndex={0}
+              aria-current={active ? "true" : undefined}
+              className={cn(
+                "grid min-h-10 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-2 py-2 text-sm outline-none transition-colors",
+                active ? "bg-accent/60" : "hover:bg-accent/40",
+              )}
+              onMouseEnter={() => onActivate(row.id)}
+              onFocus={() => onActivate(row.id)}
+              onClick={() => onOpen(row)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onOpen(row);
+              }}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                {showSelection ? (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${row.title}`}
+                    checked={selected}
+                    disabled={!selectable || pending}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={() => onToggleSelected(row.id)}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                ) : null}
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="truncate font-semibold text-foreground">{row.title}</p>
+                    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                      {row.pipelineName}
+                    </span>
+                    <ReviewQueueStatusChip failed={failed} />
+                  </div>
+                  <p className="truncate text-muted-foreground">{row.prompt}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">
+                  {row.createdAt ? relativeTime(row.createdAt) : "recently"}
+                </span>
+                {row.kind === "suggestion" ? (
+                  <>
+                    <Button type="button" size="sm" disabled={pending} onClick={(event) => {
+                      event.stopPropagation();
+                      onApprove(row);
+                    }}>
+                      Approve
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled={pending} onClick={(event) => {
+                      event.stopPropagation();
+                      onDecline(row);
+                    }}>
+                      Not yet
+                    </Button>
+                  </>
+                ) : row.kind === "review" ? (
+                  <>
+                    <Button type="button" size="sm" disabled={pending} onClick={(event) => {
+                      event.stopPropagation();
+                      onApprove(row);
+                    }}>
+                      Approve
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled={pending} onClick={(event) => {
+                      event.stopPropagation();
+                      onRequestChanges(row);
+                    }}>
+                      Request changes
+                    </Button>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+export function ReviewQueue() {
+  const { selectedCompanyId } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+  const queryClient = useQueryClient();
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
+  const [hiddenRowIds, setHiddenRowIds] = useState<Set<string>>(() => new Set());
+  const [failedRowIds, setFailedRowIds] = useState<Set<string>>(() => new Set());
+  const [pendingRowIds, setPendingRowIds] = useState<Set<string>>(() => new Set());
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const [detailRow, setDetailRow] = useState<ReviewQueueRow | null>(null);
+
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Review queue" }]);
+  }, [setBreadcrumbs]);
+
+  const attentionQuery = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.pipelines.attention(selectedCompanyId) : ["pipelines", "attention", "none"],
+    queryFn: () => pipelinesApi.listAttention(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  const reviewCasesQuery = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.pipelines.reviewCases(selectedCompanyId) : ["pipelines", "review-cases", "none"],
+    queryFn: () => pipelinesApi.listReviewCases(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  const rows = useMemo(
+    () =>
+      buildReviewQueueRows({
+        attention: attentionQuery.data,
+        reviewCases: reviewCasesQuery.data ?? [],
+      }),
+    [attentionQuery.data, reviewCasesQuery.data],
+  );
+
+  const visibleRows = rows.filter((row) => !hiddenRowIds.has(row.id));
+  const actionableRows = visibleRows.filter((row) => row.kind !== "headsUp");
+  const selectedRows = visibleRows.filter((row) => selectedRowIds.has(row.id) && row.kind !== "headsUp");
+  const groupedRows = REVIEW_QUEUE_SECTION_ORDER.map((kind) => ({
+    kind,
+    rows: visibleRows.filter((row) => row.kind === kind),
+  }));
+
+  useEffect(() => {
+    if (visibleRows.length === 0) {
+      setActiveRowId(null);
+      return;
+    }
+    if (!activeRowId || !visibleRows.some((row) => row.id === activeRowId)) {
+      setActiveRowId(visibleRows[0].id);
+    }
+  }, [activeRowId, visibleRows]);
+
+  const invalidateReviewQueue = async () => {
+    if (!selectedCompanyId) return;
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.attention(selectedCompanyId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.reviewCases(selectedCompanyId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.list(selectedCompanyId) }),
+    ]);
+  };
+
+  const decideRow = useMutation({
+    mutationFn: async ({ row, decision, note }: { row: ReviewQueueRow; decision: "approve" | "decline" | "request_changes"; note?: string }) => {
+      if (row.kind === "suggestion") {
+        if (!row.suggestionId) throw new Error("This item is not ready for a decision.");
+        await pipelinesApi.resolveSuggestion(row.caseId, {
+          suggestionId: row.suggestionId,
+          resolution: decision === "approve" ? "accept" : "dismiss",
+          expectedVersion: row.expectedVersion ?? undefined,
+          reason: note || null,
+        });
+        return;
+      }
+      if (row.expectedVersion === null) throw new Error("This item is not ready for a decision.");
+      await pipelinesApi.reviewCase(row.caseId, {
+        decision: decision === "request_changes" ? "request_changes" : "approve",
+        reason: note || null,
+        expectedVersion: row.expectedVersion,
+      });
+    },
+    onMutate: ({ row }) => {
+      setPendingRowIds((current) => new Set(current).add(row.id));
+      setHiddenRowIds((current) => new Set(current).add(row.id));
+      setFailedRowIds((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+      setSelectedRowIds((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+    },
+    onError: (_error, { row }) => {
+      setHiddenRowIds((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+      setFailedRowIds((current) => new Set(current).add(row.id));
+    },
+    onSettled: async (_data, _error, { row }) => {
+      setPendingRowIds((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+      await invalidateReviewQueue();
+    },
+  });
+
+  const bulkApprove = useMutation({
+    mutationFn: async (targetRows: ReviewQueueRow[]) => {
+      if (!selectedCompanyId) throw new Error("Select a company first.");
+      const reviewRows = targetRows.filter((row) => row.kind === "review");
+      const suggestionRows = targetRows.filter((row) => row.kind === "suggestion" && row.suggestionId);
+      const tasks: Promise<unknown>[] = [];
+      if (reviewRows.length > 0) {
+        const items = reviewRows.map((row) => {
+          if (row.expectedVersion === null) throw new Error("This item is not ready for a decision.");
+          return { caseId: row.caseId, decision: "approve" as const, expectedVersion: row.expectedVersion };
+        });
+        tasks.push(
+          pipelinesApi.bulkReviewCases(selectedCompanyId, { items }).then((response) => {
+            const failures = (response.results ?? []).filter((result) => !result.ok);
+            if (failures.length > 0) {
+              throw new Error("Some items could not be approved.");
+            }
+          }),
+        );
+      }
+      tasks.push(
+        ...suggestionRows.map((row) =>
+          pipelinesApi.resolveSuggestion(row.caseId, {
+            suggestionId: row.suggestionId!,
+            resolution: "accept",
+            expectedVersion: row.expectedVersion ?? undefined,
+          }),
+        ),
+      );
+      await Promise.all(tasks);
+    },
+    onMutate: (targetRows) => {
+      const ids = targetRows.map((row) => row.id);
+      setPendingRowIds((current) => new Set([...current, ...ids]));
+      setHiddenRowIds((current) => new Set([...current, ...ids]));
+      setSelectedRowIds(new Set());
+      setFailedRowIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+    },
+    onError: (_error, targetRows) => {
+      const ids = targetRows.map((row) => row.id);
+      setHiddenRowIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      setFailedRowIds((current) => new Set([...current, ...ids]));
+    },
+    onSettled: async (_data, _error, targetRows) => {
+      const ids = targetRows.map((row) => row.id);
+      setPendingRowIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      await invalidateReviewQueue();
+    },
+  });
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        hasBlockingShortcutDialog() ||
+        isKeyboardShortcutTextInputTarget(event.target) ||
+        visibleRows.length === 0
+      ) {
+        return;
+      }
+
+      const currentIndex = Math.max(0, visibleRows.findIndex((row) => row.id === activeRowId));
+      const key = event.key.toLowerCase();
+      if (event.key === "ArrowDown" || key === "j") {
+        event.preventDefault();
+        setActiveRowId(visibleRows[Math.min(visibleRows.length - 1, currentIndex + 1)].id);
+        return;
+      }
+      if (event.key === "ArrowUp" || key === "k") {
+        event.preventDefault();
+        setActiveRowId(visibleRows[Math.max(0, currentIndex - 1)].id);
+        return;
+      }
+
+      const activeRow = visibleRows[currentIndex];
+      if (!activeRow) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        setDetailRow(activeRow);
+        return;
+      }
+      if (key === "a" && activeRow.kind !== "headsUp") {
+        event.preventDefault();
+        decideRow.mutate({ row: activeRow, decision: "approve" });
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [activeRowId, decideRow, visibleRows]);
+
+  if (!selectedCompanyId) {
+    return <EmptyState icon={Hexagon} message="Select a company to view the review queue." />;
+  }
+
+  if (attentionQuery.isLoading || reviewCasesQuery.isLoading) {
+    return <PageSkeleton variant="list" />;
+  }
+
+  const selectedCount = selectedRows.length;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-normal text-foreground">Review queue</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Needs your attention ({formatNumber(visibleRows.length)})
+          </p>
+        </div>
+        <Button
+          type="button"
+          disabled={selectedCount === 0 || bulkApprove.isPending}
+          onClick={() => bulkApprove.mutate(selectedRows)}
+        >
+          {bulkApprove.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          Approve {formatNumber(selectedCount)} item{selectedCount === 1 ? "" : "s"}
+        </Button>
+      </div>
+
+      {attentionQuery.error || reviewCasesQuery.error ? (
+        <p className="text-sm text-amber-700 dark:text-amber-300">Some items need attention. Try again in a moment.</p>
+      ) : null}
+
+      {visibleRows.length === 0 ? (
+        <EmptyState icon={Check} message="Nothing needs you right now." />
+      ) : (
+        <div className="space-y-6">
+          {groupedRows.map((group) => (
+            <ReviewQueueSection
+              key={group.kind}
+              title={REVIEW_QUEUE_SECTION_LABELS[group.kind]}
+              rows={group.rows}
+              activeRowId={activeRowId}
+              failedRowIds={failedRowIds}
+              selectedRowIds={selectedRowIds}
+              pendingRowIds={pendingRowIds}
+              showSelection={actionableRows.length > 1}
+              onActivate={setActiveRowId}
+              onToggleSelected={(rowId) => {
+                setSelectedRowIds((current) => {
+                  const next = new Set(current);
+                  if (next.has(rowId)) next.delete(rowId);
+                  else next.add(rowId);
+                  return next;
+                });
+              }}
+              onApprove={(row) => decideRow.mutate({ row, decision: "approve" })}
+              onDecline={(row) => decideRow.mutate({ row, decision: "decline" })}
+              onRequestChanges={(row) => setDetailRow(row)}
+              onOpen={(row) => setDetailRow(row)}
+            />
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        Shortcuts: <span className="font-semibold">j</span>/<span className="font-semibold">k</span> or arrow keys move, <span className="font-semibold">Enter</span> opens, <span className="font-semibold">a</span> approves.
+      </p>
+
+      <ReviewQueueDetailDialog
+        row={detailRow}
+        open={Boolean(detailRow)}
+        pending={decideRow.isPending}
+        onOpenChange={(open) => {
+          if (!open) setDetailRow(null);
+        }}
+        onApprove={(note) => {
+          if (!detailRow) return;
+          decideRow.mutate({ row: detailRow, decision: "approve", note });
+          setDetailRow(null);
+        }}
+        onRequestChanges={(note) => {
+          if (!detailRow) return;
+          decideRow.mutate({
+            row: detailRow,
+            decision: detailRow.kind === "suggestion" ? "decline" : "request_changes",
+            note,
+          });
+          setDetailRow(null);
+        }}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Learnings
+// ---------------------------------------------------------------------------
+
+const LEARNINGS_PAGE_SIZE = 100;
+const LEARNING_EVENT_TYPES = "review_decided,transition_forced";
+
+export function Learnings() {
+  const { selectedCompanyId } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+  const [offset, setOffset] = useState(0);
+
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Learnings" }]);
+  }, [setBreadcrumbs]);
+
+  const learningsQuery = useQuery({
+    queryKey: selectedCompanyId
+      ? queryKeys.pipelines.learnings(selectedCompanyId, offset)
+      : ["pipelines", "learnings", "none"],
+    queryFn: () =>
+      pipelinesApi.listCompanyCaseEvents(selectedCompanyId!, {
+        types: LEARNING_EVENT_TYPES,
+        limit: LEARNINGS_PAGE_SIZE,
+        offset,
+      }),
+    enabled: !!selectedCompanyId,
+  });
+
+  if (!selectedCompanyId) {
+    return <EmptyState icon={BookOpenText} message="Select a company to view learnings." />;
+  }
+
+  if (learningsQuery.isLoading && !learningsQuery.data) {
+    return <PageSkeleton variant="list" />;
+  }
+
+  const events = learningsQuery.data?.items ?? [];
+  const pagination = learningsQuery.data?.pagination;
+  const groups = groupLearningEventsByDay(events);
+  const firstVisible = events.length === 0 ? 0 : offset + 1;
+  const lastVisible = offset + events.length;
+  const canGoPrevious = offset > 0;
+  const canGoNext = Boolean(pagination?.hasMore);
+
+  return (
+    <div className="space-y-6">
+      <div className="border-b border-border pb-5">
+        <h1 className="text-2xl font-semibold tracking-normal text-foreground">Learnings</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Patterns from review decisions and hand moves, in plain words.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-end">
+        <p className="text-sm text-muted-foreground">
+          {learningsQuery.isFetching
+            ? "Refreshing..."
+            : events.length > 0
+              ? `${formatNumber(firstVisible)}-${formatNumber(lastVisible)}`
+              : "No rows"}
+        </p>
+      </div>
+
+      {learningsQuery.error ? (
+        <p className="text-sm text-destructive">Could not load learnings.</p>
+      ) : groups.length === 0 ? (
+        <EmptyState icon={BookOpenText} message="No learnings yet." />
+      ) : (
+        <div className="space-y-6">
+          {groups.map((group) => (
+            <section key={group.key} className="space-y-2">
+              <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                {group.label}
+              </h2>
+              <div className="overflow-hidden rounded-md border border-border">
+                {group.events.map((event) => {
+                  const presentation = formatLearningEvent(event);
+                  const forcedMove = presentation.kind === "forced_move";
+                  return (
+                    <div
+                      key={event.id}
+                      className={cn(
+                        "grid min-h-11 grid-cols-[6rem_1fr] items-center gap-3 border-b border-border/70 px-3 py-2 text-sm last:border-b-0",
+                        forcedMove && "border-l-2 border-l-amber-400 bg-amber-50/50 dark:bg-amber-400/10",
+                      )}
+                    >
+                      <span className="text-xs text-muted-foreground" title={new Date(event.createdAt).toLocaleString()}>
+                        {relativeTime(event.createdAt)}
+                      </span>
+                      <div className="min-w-0">
+                        <Link
+                          to={`/pipelines/${event.pipeline.id}/items/${event.caseId}`}
+                          className="font-medium text-foreground hover:underline"
+                        >
+                          {presentation.sentence}
+                        </Link>
+                        <span className="ml-2 text-muted-foreground">{event.pipeline.name}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between border-t border-border pt-4">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!canGoPrevious}
+          onClick={() => setOffset((current) => Math.max(0, current - LEARNINGS_PAGE_SIZE))}
+        >
+          Previous
+        </Button>
+        <span className="text-sm text-muted-foreground">
+          {events.length > 0 ? `${formatNumber(firstVisible)}-${formatNumber(lastVisible)}` : "No rows"}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!canGoNext}
+          onClick={() => setOffset((current) => pagination?.nextOffset ?? current + LEARNINGS_PAGE_SIZE)}
+        >
+          Next
+        </Button>
+      </div>
+    </div>
   );
 }
