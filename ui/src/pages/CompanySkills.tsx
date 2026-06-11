@@ -77,6 +77,7 @@ import {
   Boxes,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Code2,
   Download,
@@ -3647,15 +3648,6 @@ export function CompanySkills() {
     });
   }
 
-  function setViewParam(view: "installed" | "catalog") {
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      if (view === "installed") next.delete("view");
-      else next.set("view", "catalog");
-      return next;
-    });
-  }
-
   function setSourceFilter(next: SourceFilter) {
     setSearchParams((current) => {
       const params = new URLSearchParams(current);
@@ -3688,16 +3680,15 @@ export function CompanySkills() {
     ]);
   }, [routeSkillToken, setBreadcrumbs]);
 
-  // The old split catalog view no longer exists — bundled/catalog skills live in
-  // the discovery grid and install dialog now. Strip legacy `view=catalog` /
-  // `catalog` params so stale deep links land on the new surface (PAP-10907).
+  // The old split catalog view no longer exists — catalog/bundled skills now open
+  // as a regular full page keyed by `?catalog=<ref>`. Strip the legacy `view`
+  // param so stale `?view=catalog` deep links land on the new surface (PAP-10907).
   useEffect(() => {
-    if (!searchParams.has("view") && !searchParams.has("catalog")) return;
+    if (!searchParams.has("view")) return;
     setSearchParams(
       (current) => {
         const next = new URLSearchParams(current);
         next.delete("view");
-        next.delete("catalog");
         return next;
       },
       { replace: true },
@@ -4027,14 +4018,14 @@ export function CompanySkills() {
   const catalogDetailQuery = useQuery({
     queryKey: queryKeys.companySkills.catalogDetail(selectedCatalogRef ?? ""),
     queryFn: () => companySkillsApi.catalogDetail(selectedCatalogRef!),
-    enabled: Boolean(selectedCompanyId && selectedCatalogRef && activeView === "catalog"),
+    enabled: Boolean(selectedCompanyId && selectedCatalogRef),
     staleTime: 60_000,
   });
 
   const catalogFileQuery = useQuery({
     queryKey: queryKeys.companySkills.catalogFile(selectedCatalogRef ?? "", catalogSelectedPath),
     queryFn: () => companySkillsApi.catalogFile(selectedCatalogRef!, catalogSelectedPath),
-    enabled: Boolean(selectedCompanyId && selectedCatalogRef && activeView === "catalog" && catalogSelectedPath),
+    enabled: Boolean(selectedCompanyId && selectedCatalogRef && catalogSelectedPath),
     staleTime: 60_000,
   });
 
@@ -4143,7 +4134,6 @@ export function CompanySkills() {
         pushToast({ tone: "warn", title: "Install warnings", body: result.warnings[0] });
       }
       if (result.action === "created") {
-        setViewParam("installed");
         navigate(routeForSkill(result.skill));
       }
     },
@@ -4293,19 +4283,16 @@ export function CompanySkills() {
     importSkill.mutate(trimmedSource);
   }
 
-  // Opening a card stays inside the new store: installed skills go to their
-  // detail route; catalog/bundled skills open the install dialog inline. The
-  // legacy split catalog view is gone (PAP-10907).
+  // Opening a card stays inside the new store and always lands on a regular full
+  // page: installed skills go to their detail route; catalog/bundled/optional
+  // skills open the standalone catalog page (no modal, no legacy split view).
   function openDiscoveryCard(card: DiscoveryCard) {
     if (card.skillId) {
       navigate(routeForSkillId(card.skillId));
       return;
     }
     if (card.catalogRef) {
-      const catalogSkill = (catalogListQuery.data ?? []).find(
-        (entry) => entry.id === card.catalogRef || entry.key === card.key,
-      );
-      if (catalogSkill) openInstallDialog(catalogSkill);
+      selectCatalog(card.catalogRef);
     }
   }
 
@@ -4568,257 +4555,70 @@ export function CompanySkills() {
           onDelete={openDeleteDialog}
           deletePending={deleteSkill.isPending}
         />
-      ) : (
-      <div className="flex min-h-[calc(100vh-12rem)] flex-col">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 pt-3 pb-[5px]">
-          <Tabs value={activeView} onValueChange={(value) => setViewParam(value === "catalog" ? "catalog" : "installed")}>
-            <TabsList variant="line" className="p-0">
-              <TabsTrigger value="installed" className="px-3">
-                <span>Installed</span>
-                <span className="ml-1.5 text-[11px] text-muted-foreground">{installedSkills.length}</span>
-              </TabsTrigger>
-              <TabsTrigger value="catalog" className="px-3">
-                <span>Catalog</span>
-                <span className="ml-1.5 text-[11px] text-muted-foreground">{catalogListQuery.data?.length ?? 0}</span>
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <div className="flex items-center gap-2">
-            {activeView === "installed" ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => scanProjects.mutate()}
-                disabled={scanProjects.isPending}
-                title="Scan project workspaces for skills"
-              >
-                <RefreshCw className={cn("h-4 w-4", scanProjects.isPending && "animate-spin")} />
-              </Button>
-            ) : null}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="default">
-                  <Plus className="mr-1 h-3.5 w-3.5" />
-                  Add skill
-                  <ChevronDown className="ml-1 h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => setViewParam("catalog")}>
-                  <Boxes className="mr-2 h-4 w-4" />
-                  Browse catalog
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    setViewParam("installed");
-                    setEmptySourceHelpOpen(true);
-                  }}
-                >
-                  <Globe className="mr-2 h-4 w-4" />
-                  Import from URL or path
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    setViewParam("installed");
-                    openCreateWizard();
-                  }}
-                >
-                  <Pencil className="mr-2 h-4 w-4" />
-                  Create blank skill
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+      ) : selectedCatalogRef ? (
+        // Catalog / optional / bundled skills open as a regular full page in the
+        // new store — no modal, no legacy split view (PAP-10907).
+        <div className="min-h-[calc(100vh-12rem)]">
+          <div className="border-b border-border px-4 py-3">
+            <Link
+              to="/skills"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground no-underline transition-colors hover:text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Back to store
+            </Link>
           </div>
-        </div>
-
-        {activeView === "installed" ? (
-          <div className="grid flex-1 gap-0 xl:grid-cols-[19rem_minmax(0,1fr)]">
-            <aside className="border-r border-border">
-              <div className="border-b border-border px-4 py-3">
-                <div className="flex items-center gap-2 border-b border-border pb-2">
-                  <Search className="h-4 w-4 text-muted-foreground" />
-                  <input
-                    value={skillFilter}
-                    onChange={(event) => setSkillFilter(event.target.value)}
-                    placeholder="Filter skills"
-                    className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                  />
-                  <SourceFilterMenu counts={sourceCounts} value={sourceFilter} onChange={setSourceFilter} />
-                </div>
-
-                <div className="mt-3 flex items-center gap-2 border-b border-border pb-2">
-                  <input
-                    value={source}
-                    onChange={(event) => setSource(event.target.value)}
-                    placeholder="Paste path, GitHub URL, or skills.sh command"
-                    className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                  />
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleAddSkillSource}
-                    disabled={importSkill.isPending}
-                  >
-                    {importSkill.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Add"}
-                  </Button>
-                </div>
-                {scanStatusMessage && (
-                  <p className="mt-3 text-xs text-muted-foreground">{scanStatusMessage}</p>
-                )}
-              </div>
-
-              {skillsQuery.isLoading ? (
-                <PageSkeleton variant="list" />
-              ) : skillsQuery.error ? (
-                <div className="px-4 py-6 text-sm text-destructive">{skillsQuery.error.message}</div>
-              ) : installedSkills.length === 0 ? (
-                <div className="px-4 py-8">
-                  <EmptyState
-                    icon={Boxes}
-                    message="No skills installed yet."
-                  />
-                  <div className="mt-3 flex flex-col items-center gap-2">
-                    <Button size="sm" onClick={() => setViewParam("catalog")}>
-                      <Boxes className="mr-1.5 h-3.5 w-3.5" /> Browse catalog
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setEmptySourceHelpOpen(true)}>
-                      Import from URL
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <SkillList
-                  skills={installedSkills}
-                  selectedSkillId={selectedSkillId}
-                  skillFilter={skillFilter}
-                  sourceFilter={sourceFilter}
-                  expandedSkillId={expandedSkillId}
-                  expandedDirs={expandedDirs}
-                  selectedPaths={selectedSkillId ? { [selectedSkillId]: selectedPath } : {}}
-                  onToggleSkill={(currentSkillId) =>
-                    setExpandedSkillId((current) => current === currentSkillId ? null : currentSkillId)
-                  }
-                  onToggleDir={(currentSkillId, path) => {
-                    setExpandedDirs((current) => {
-                      const next = new Set(current[currentSkillId] ?? []);
-                      if (next.has(path)) next.delete(path);
-                      else next.add(path);
-                      return { ...current, [currentSkillId]: next };
-                    });
-                  }}
-                  onSelectSkill={(currentSkillId) => setExpandedSkillId(currentSkillId)}
-                  onSelectPath={() => {}}
-                  onClearFilters={() => setSourceFilter("all")}
-                />
-              )}
-            </aside>
-
-            <div className="min-w-0 pl-6">
-              <SkillPane
-                loading={skillsQuery.isLoading || detailQuery.isLoading}
-                detail={activeDetail}
-                file={activeFile}
-                fileLoading={fileQuery.isLoading && !activeFile}
-                updateStatus={updateStatusQuery.data}
-                updateStatusLoading={updateStatusQuery.isLoading}
-                viewMode={viewMode}
-                editMode={editMode}
-                draft={draft}
-                setViewMode={setViewMode}
-                setEditMode={setEditMode}
-                setDraft={setDraft}
-                onCheckUpdates={() => {
-                  void updateStatusQuery.refetch();
-                }}
-                checkUpdatesPending={updateStatusQuery.isFetching}
-                onInstallUpdate={() => installUpdate.mutate()}
-                installUpdatePending={installUpdate.isPending}
-                onDelete={openDeleteDialog}
-                deletePending={deleteSkill.isPending}
-                onSave={() => saveFile.mutate()}
-                savePending={saveFile.isPending}
-                attachAgents={eligibleAgentsForAttach}
-                versions={versionsQuery.data ?? []}
-                onSubmitAttach={handleAttachSubmit}
-                attachPending={attachAgentsMutation.isPending}
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="grid flex-1 gap-0 xl:grid-cols-[19rem_minmax(0,1fr)]">
-            <aside className="border-r border-border">
-              <div className="border-b border-border px-4 py-3">
-                <div className="flex items-center gap-2 border-b border-border pb-2">
-                  <Search className="h-4 w-4 text-muted-foreground" />
-                  <input
-                    value={catalogFilter}
-                    onChange={(event) => setCatalogFilter(event.target.value)}
-                    placeholder="Search catalog"
-                    className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                  />
-                  <CatalogFilterMenu
-                    kindFilter={catalogKindFilter}
-                    categoryFilter={catalogCategoryFilter}
-                    categories={catalogCategories}
-                    onKindChange={setCatalogKindFilter}
-                    onCategoryChange={setCatalogCategoryFilter}
-                  />
-                </div>
-              </div>
-
-              {catalogListQuery.isLoading ? (
-                <PageSkeleton variant="list" />
-              ) : catalogListQuery.error ? (
-                <div className="px-4 py-6 text-sm text-destructive">{catalogListQuery.error.message}</div>
-              ) : (
-                <CatalogList
-                  skills={catalogListQuery.data ?? []}
-                  kindFilter={catalogKindFilter}
-                  categoryFilter={catalogCategoryFilter}
-                  catalogFilter={catalogFilter}
-                  installedByKey={installedByKey}
-                  selectedCatalogRef={selectedCatalogRef}
+          {catalogListQuery.isLoading || catalogDetailQuery.isLoading ? (
+            <PageSkeleton variant="detail" />
+          ) : !selectedCatalogSkill ? (
+            <EmptyState icon={Boxes} message="Catalog skill not found." />
+          ) : (
+            <div className="grid gap-0 xl:grid-cols-[14rem_minmax(0,1fr)]">
+              <aside className="border-b border-border px-3 py-4 xl:border-b-0 xl:border-r">
+                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Files</div>
+                <SkillTree
+                  nodes={buildTree(selectedCatalogSkill.files.map((file) => ({ path: file.path, kind: file.kind })))}
+                  skillId={selectedCatalogSkill.id}
                   selectedPath={catalogSelectedPath}
-                  expandedSkillId={expandedCatalogSkillId}
-                  expandedDirs={expandedCatalogDirs}
-                  onSelect={selectCatalog}
-                  onSelectPath={selectCatalog}
-                  onToggleSkill={(catalogRef) =>
-                    setExpandedCatalogSkillId((current) => current === catalogRef ? null : catalogRef)
-                  }
-                  onToggleDir={(catalogRef, path) => {
+                  expandedDirs={expandedCatalogDirs[selectedCatalogSkill.id] ?? new Set<string>()}
+                  onToggleDir={(path) =>
                     setExpandedCatalogDirs((current) => {
-                      const next = new Set(current[catalogRef] ?? []);
+                      const next = new Set(current[selectedCatalogSkill.id] ?? []);
                       if (next.has(path)) next.delete(path);
                       else next.add(path);
-                      return { ...current, [catalogRef]: next };
-                    });
-                  }}
+                      return { ...current, [selectedCatalogSkill.id]: next };
+                    })
+                  }
+                  onSelectPath={(path) => setCatalogSelectedPath(path)}
+                  fileHref={() => `/skills?catalog=${encodeURIComponent(selectedCatalogRef)}`}
                 />
-              )}
-            </aside>
-
-            <div className="min-w-0 pl-6">
-              <CatalogDetailPane
-                skill={selectedCatalogSkill}
-                packageName={selectedCatalogSkill?.packageName ?? (selectedCatalogSkill ? installedByKey.get(selectedCatalogSkill.key)?.packageName : null) ?? null}
-                packageVersion={selectedCatalogSkill?.packageVersion ?? (selectedCatalogSkill ? installedByKey.get(selectedCatalogSkill.key)?.packageVersion : null) ?? null}
-                installedSkill={selectedCatalogSkill ? installedByKey.get(selectedCatalogSkill.key) ?? null : null}
-                installedSkillId={(selectedCatalogSkill ? installedByKey.get(selectedCatalogSkill.key)?.id : null) ?? null}
-                fileQuery={catalogFileQuery}
-                selectedPath={catalogSelectedPath}
-                onInstall={() => selectedCatalogSkill && openInstallDialog(selectedCatalogSkill)}
-                onUpdate={() => selectedCatalogSkill && openInstallDialog(selectedCatalogSkill)}
-                onOpenInstalled={(skillId) => {
-                  setViewParam("installed");
-                  navigate(routeForSkillId(skillId));
-                }}
-                loadingPrimaryAction={installCatalog.isPending}
-              />
+              </aside>
+              <div className="min-w-0">
+                <CatalogDetailPane
+                  skill={selectedCatalogSkill}
+                  packageName={selectedCatalogSkill.packageName ?? installedByKey.get(selectedCatalogSkill.key)?.packageName ?? null}
+                  packageVersion={selectedCatalogSkill.packageVersion ?? installedByKey.get(selectedCatalogSkill.key)?.packageVersion ?? null}
+                  installedSkill={installedByKey.get(selectedCatalogSkill.key) ?? null}
+                  installedSkillId={installedByKey.get(selectedCatalogSkill.key)?.id ?? null}
+                  fileQuery={catalogFileQuery}
+                  selectedPath={catalogSelectedPath}
+                  onInstall={() => openInstallDialog(selectedCatalogSkill)}
+                  onUpdate={() => openInstallDialog(selectedCatalogSkill)}
+                  onOpenInstalled={(skillId) => navigate(routeForSkillId(skillId))}
+                  loadingPrimaryAction={installCatalog.isPending}
+                />
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      ) : (
+        <div className="min-h-[calc(100vh-12rem)]">
+          {skillsQuery.isLoading ? (
+            <PageSkeleton variant="detail" />
+          ) : (
+            <EmptyState icon={Boxes} message="Skill not found." />
+          )}
+        </div>
       )}
     </>
   );
