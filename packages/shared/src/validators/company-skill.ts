@@ -146,6 +146,17 @@ export const companySkillForkSchema = z.object({
   sharingScope: companySkillSharingScopeSchema.optional(),
 }).default({});
 
+export const companySkillUpdateSchema = z.object({
+  description: z.string().nullable().optional(),
+  iconUrl: z.string().nullable().optional(),
+  color: z.string().nullable().optional(),
+  tagline: z.string().max(120).nullable().optional(),
+  authorName: z.string().nullable().optional(),
+  homepageUrl: z.string().nullable().optional(),
+  categories: z.array(z.string().min(1)).optional(),
+  sharingScope: companySkillSharingScopeSchema.optional(),
+}).default({});
+
 export const companySkillUpdateStatusSchema = z.object({
   supported: z.boolean(),
   reason: z.string().nullable(),
@@ -248,6 +259,7 @@ export const companySkillCreateSchema = z.object({
   homepageUrl: z.string().nullable().optional(),
   categories: z.array(z.string().min(1)).optional(),
   sharingScope: companySkillSharingScopeSchema.optional(),
+  forkedFromSkillId: z.string().uuid().nullable().optional(),
 });
 
 export const companySkillFileDetailSchema = z.object({
@@ -347,6 +359,7 @@ export type CompanySkillVersionCreate = z.infer<typeof companySkillVersionCreate
 export type CompanySkillCommentCreate = z.infer<typeof companySkillCommentCreateSchema>;
 export type CompanySkillCommentUpdate = z.infer<typeof companySkillCommentUpdateSchema>;
 export type CompanySkillFork = z.infer<typeof companySkillForkSchema>;
+export type CompanySkillUpdate = z.infer<typeof companySkillUpdateSchema>;
 export type CatalogSkillListQuery = z.infer<typeof catalogSkillListQuerySchema>;
 export type CompanySkillInstallCatalog = z.infer<typeof companySkillInstallCatalogSchema>;
 export type CompanySkillInstallUpdate = z.infer<typeof companySkillInstallUpdateSchema>;

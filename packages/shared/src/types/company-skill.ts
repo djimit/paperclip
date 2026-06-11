@@ -182,6 +182,17 @@ export interface CompanySkillForkRequest {
   sharingScope?: CompanySkillSharingScope;
 }
 
+export interface CompanySkillUpdateRequest {
+  description?: string | null;
+  iconUrl?: string | null;
+  color?: string | null;
+  tagline?: string | null;
+  authorName?: string | null;
+  homepageUrl?: string | null;
+  categories?: string[];
+  sharingScope?: CompanySkillSharingScope;
+}
+
 export interface CompanySkillUpdateStatus {
   supported: boolean;
   reason: string | null;
@@ -294,6 +305,7 @@ export interface CompanySkillCreateRequest {
   homepageUrl?: string | null;
   categories?: string[];
   sharingScope?: CompanySkillSharingScope;
+  forkedFromSkillId?: string | null;
 }
 
 export interface CompanySkillFileDetail {

@@ -13,6 +13,7 @@ import {
   companySkillListQuerySchema,
   companySkillProjectScanRequestSchema,
   companySkillResetSchema,
+  companySkillUpdateSchema,
   companySkillVersionCreateSchema,
 } from "@paperclipai/shared";
 import { trackSkillImported } from "@paperclipai/shared/telemetry";
@@ -394,7 +395,7 @@ export function companySkillRoutes(db: Db) {
     async (req, res) => {
       const companyId = req.params.companyId as string;
       await assertCanMutateCompanySkills(req, companyId);
-      const result = await svc.createLocalSkill(companyId, req.body);
+      const result = await svc.createLocalSkill(companyId, req.body, skillActor(req));
 
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -413,6 +414,35 @@ export function companySkillRoutes(db: Db) {
       });
 
       res.status(201).json(result);
+    },
+  );
+
+  router.patch(
+    "/companies/:companyId/skills/:skillId",
+    validate(companySkillUpdateSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      await assertCanMutateCompanySkills(req, companyId);
+      const result = await svc.updateSkill(companyId, skillId, req.body);
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "company.skill_updated",
+        entityType: "company_skill",
+        entityId: result.id,
+        details: {
+          slug: result.slug,
+          sharingScope: result.sharingScope,
+        },
+      });
+
+      res.json(result);
     },
   );
 

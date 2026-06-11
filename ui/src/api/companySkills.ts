@@ -19,6 +19,7 @@ import type {
   CompanySkillProjectScanRequest,
   CompanySkillProjectScanResult,
   CompanySkillStarResult,
+  CompanySkillUpdateRequest,
   CompanySkillUpdateStatus,
   CompanySkillVersion,
   CompanySkillVersionCreateRequest,
@@ -108,6 +109,11 @@ export const companySkillsApi = {
   create: (companyId: string, payload: CompanySkillCreateRequest) =>
     api.post<CompanySkill>(
       `/companies/${encodeURIComponent(companyId)}/skills`,
+      payload,
+    ),
+  update: (companyId: string, skillId: string, payload: CompanySkillUpdateRequest) =>
+    api.patch<CompanySkill>(
+      `/companies/${encodeURIComponent(companyId)}/skills/${encodeURIComponent(skillId)}`,
       payload,
     ),
   importFromSource: (companyId: string, source: string) =>

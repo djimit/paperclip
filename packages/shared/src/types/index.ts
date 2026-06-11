@@ -77,6 +77,7 @@ export type {
   CompanySkillCommentCreateRequest,
   CompanySkillCommentUpdateRequest,
   CompanySkillForkRequest,
+  CompanySkillUpdateRequest,
   CompanySkillUpdateStatus,
   CompanySkillAuditSeverity,
   CompanySkillAuditVerdict,

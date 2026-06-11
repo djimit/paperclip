@@ -78,6 +78,7 @@ export {
   companySkillCommentCreateSchema,
   companySkillCommentUpdateSchema,
   companySkillForkSchema,
+  companySkillUpdateSchema,
   companySkillUpdateStatusSchema,
   companySkillAuditFindingSchema,
   companySkillAuditResultSchema,

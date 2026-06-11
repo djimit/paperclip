@@ -37,6 +37,7 @@ import type {
   CompanySkillSourceBadge,
   CompanySkillSourceType,
   CompanySkillTrustLevel,
+  CompanySkillUpdateRequest,
   CompanySkillUpdateStatus,
   CompanySkillUpdateHoldReason,
   CompanySkillUsageAgent,
@@ -207,6 +208,20 @@ function assertImportedSkillSourceAllowed(skill: ImportedSkill) {
       },
     );
   }
+}
+
+function assertImportedSkillKeyAllowed(skill: ImportedSkill) {
+  if (!skill.key.startsWith("paperclipai/paperclip/")) return;
+  const metadata = isPlainRecord(skill.metadata) ? skill.metadata : null;
+  const sourceKind = asString(metadata?.sourceKind);
+  if (sourceKind === "paperclip_bundled") return;
+  throw unprocessable(
+    `Reserved Paperclip skill key "${skill.key}" cannot be imported from unbundled sources.`,
+    {
+      skillKey: skill.key,
+      sourceKind: sourceKind ?? skill.sourceType,
+    },
+  );
 }
 
 type SkillSourceMeta = {
@@ -1424,6 +1439,15 @@ function toCompanySkillListRow(row: CompanySkillListDbRow): CompanySkillListRow 
 
 function normalizeSharingScope(value: unknown): CompanySkillSharingScope {
   return value === "private" || value === "public_link" || value === "company" ? value : "company";
+}
+
+function normalizeMutableSharingScope(value: unknown): CompanySkillSharingScope | null {
+  if (value === undefined || value === null) return null;
+  if (value === "private" || value === "company") return value;
+  if (value === "public_link") {
+    throw unprocessable("Public skill sharing is not available in this version.");
+  }
+  throw unprocessable("Invalid skill sharing scope.");
 }
 
 function normalizeCategorySlug(value: unknown) {
@@ -3026,17 +3050,95 @@ export function companySkillService(db: Db) {
     };
   }
 
-  async function createLocalSkill(companyId: string, input: CompanySkillCreateRequest): Promise<CompanySkill> {
+  async function updateSkill(
+    companyId: string,
+    skillId: string,
+    input: CompanySkillUpdateRequest = {},
+  ): Promise<CompanySkill> {
+    await ensureSkillInventoryCurrent(companyId);
+    const skill = await getById(companyId, skillId);
+    if (!skill) throw notFound("Skill not found");
+
+    const sharingScope = Object.prototype.hasOwnProperty.call(input, "sharingScope")
+      ? normalizeMutableSharingScope(input.sharingScope)
+      : null;
+    const values: Partial<typeof companySkills.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+
+    if (Object.prototype.hasOwnProperty.call(input, "description")) {
+      values.description = normalizeStoreText(input.description, 2000);
+    }
+    if (Object.prototype.hasOwnProperty.call(input, "iconUrl")) {
+      values.iconUrl = normalizeStoreText(input.iconUrl, 2000);
+    }
+    if (Object.prototype.hasOwnProperty.call(input, "color")) {
+      values.color = normalizeStoreText(input.color, 64);
+    }
+    if (Object.prototype.hasOwnProperty.call(input, "tagline")) {
+      values.tagline = normalizeStoreText(input.tagline, 120);
+    }
+    if (Object.prototype.hasOwnProperty.call(input, "authorName")) {
+      values.authorName = normalizeStoreText(input.authorName, 200);
+    }
+    if (Object.prototype.hasOwnProperty.call(input, "homepageUrl")) {
+      values.homepageUrl = normalizeStoreText(input.homepageUrl, 2000);
+    }
+    if (Object.prototype.hasOwnProperty.call(input, "categories")) {
+      values.categories = normalizeCategoryList(input.categories);
+    }
+    if (sharingScope) {
+      values.sharingScope = sharingScope;
+      values.publicShareToken = null;
+    }
+
+    const row = await db
+      .update(companySkills)
+      .set(values)
+      .where(and(eq(companySkills.id, skillId), eq(companySkills.companyId, companyId)))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+    if (!row) throw notFound("Skill not found");
+    return toCompanySkill(row);
+  }
+
+  async function createLocalSkill(
+    companyId: string,
+    input: CompanySkillCreateRequest,
+    actor: SkillActor | null = null,
+  ): Promise<CompanySkill> {
     const slug = normalizeSkillSlug(input.slug ?? input.name) ?? "skill";
+    const key = `company/${companyId}/${slug}`;
+    const existing = await getByKey(companyId, key);
+    if (existing) {
+      throw conflict(`A company skill with slug "${slug}" already exists.`);
+    }
+
+    const forkSource = input.forkedFromSkillId
+      ? await getById(companyId, input.forkedFromSkillId)
+      : null;
+    if (input.forkedFromSkillId && !forkSource) {
+      throw notFound("Fork source skill not found");
+    }
+    const sharingScope = normalizeMutableSharingScope(input.sharingScope) ?? "company";
     const managedRoot = resolveManagedSkillsRoot(companyId);
     const skillDir = path.resolve(managedRoot, slug);
     const skillFilePath = path.resolve(skillDir, "SKILL.md");
 
+    await fs.rm(skillDir, { recursive: true, force: true });
     await fs.mkdir(skillDir, { recursive: true });
 
-    const markdown = (input.markdown?.trim().length
-      ? input.markdown
-      : [
+    if (forkSource) {
+      for (const entry of forkSource.fileInventory) {
+        const detail = await readFile(companyId, forkSource.id, entry.path);
+        if (!detail) continue;
+        const targetPath = path.resolve(skillDir, detail.path);
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.writeFile(targetPath, detail.content, "utf8");
+      }
+    }
+
+    const fallbackMarkdown = [
         "---",
         `name: ${input.name}`,
         ...(input.description?.trim() ? [`description: ${input.description.trim()}`] : []),
@@ -3046,42 +3148,69 @@ export function companySkillService(db: Db) {
         "",
         input.description?.trim() ? input.description.trim() : "Describe what this skill does.",
         "",
-      ].join("\n"));
+      ].join("\n");
+    const markdown = input.markdown?.trim().length
+      ? input.markdown
+      : forkSource?.markdown ?? fallbackMarkdown;
 
     await fs.writeFile(skillFilePath, markdown, "utf8");
 
+    const inventory = forkSource
+      ? await collectLocalSkillInventory(skillDir)
+      : [{ path: "SKILL.md", kind: "skill" as const }];
     const parsed = parseFrontmatterMarkdown(markdown);
+    const metadata = {
+      sourceKind: "managed_local",
+      ...(forkSource ? {
+        forkedFromSkillId: forkSource.id,
+        forkedFromCompanyId: forkSource.companyId,
+        forkedByAgentId: actor?.type === "agent" ? actor.agentId ?? null : null,
+        forkedByUserId: actor?.type === "user" ? actor.userId ?? null : null,
+      } : {}),
+    };
     const imported = await upsertImportedSkills(companyId, [{
-      key: `company/${companyId}/${slug}`,
+      key,
       slug,
       name: asString(parsed.frontmatter.name) ?? input.name,
-      description: asString(parsed.frontmatter.description) ?? input.description?.trim() ?? null,
+      description: asString(parsed.frontmatter.description) ?? input.description?.trim() ?? forkSource?.description ?? null,
       markdown,
       sourceType: "local_path",
       sourceLocator: skillDir,
       sourceRef: null,
-      trustLevel: "markdown_only",
-      compatibility: "compatible",
-      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
-      metadata: { sourceKind: "managed_local" },
+      trustLevel: deriveTrustLevel(inventory),
+      compatibility: forkSource?.compatibility ?? "compatible",
+      fileInventory: inventory,
+      metadata,
     }]);
 
     const created = imported[0]!;
     const row = await db
       .update(companySkills)
       .set({
-        iconUrl: normalizeStoreText(input.iconUrl, 2000) ?? created.iconUrl,
-        color: normalizeStoreText(input.color, 64) ?? created.color,
-        tagline: normalizeStoreText(input.tagline, 120) ?? created.tagline,
-        authorName: normalizeStoreText(input.authorName, 200) ?? created.authorName,
-        homepageUrl: normalizeStoreText(input.homepageUrl, 2000) ?? created.homepageUrl,
-        categories: input.categories ? normalizeCategoryList(input.categories) : created.categories,
-        sharingScope: input.sharingScope ?? created.sharingScope,
+        iconUrl: normalizeStoreText(input.iconUrl, 2000) ?? forkSource?.iconUrl ?? created.iconUrl,
+        color: normalizeStoreText(input.color, 64) ?? forkSource?.color ?? created.color,
+        tagline: normalizeStoreText(input.tagline, 120) ?? forkSource?.tagline ?? created.tagline,
+        authorName: normalizeStoreText(input.authorName, 200) ?? forkSource?.authorName ?? created.authorName,
+        homepageUrl: normalizeStoreText(input.homepageUrl, 2000) ?? forkSource?.homepageUrl ?? created.homepageUrl,
+        categories: input.categories ? normalizeCategoryList(input.categories) : forkSource?.categories ?? created.categories,
+        sharingScope,
+        forkedFromSkillId: forkSource?.id ?? null,
+        forkedFromCompanyId: forkSource?.companyId ?? null,
         updatedAt: new Date(),
       })
       .where(and(eq(companySkills.id, created.id), eq(companySkills.companyId, companyId)))
       .returning()
       .then((rows) => rows[0] ?? null);
+    if (forkSource) {
+      await db
+        .update(companySkills)
+        .set({
+          forkCount: sql`${companySkills.forkCount} + 1`,
+          installCount: sql`${companySkills.installCount} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(companySkills.id, forkSource.id), eq(companySkills.companyId, companyId)));
+    }
     return row ? toCompanySkill(row) : created;
   }
 
@@ -4139,6 +4268,7 @@ export function companySkillService(db: Db) {
   async function upsertImportedSkills(companyId: string, imported: ImportedSkill[]): Promise<CompanySkill[]> {
     const out: CompanySkill[] = [];
     for (const skill of imported) {
+      assertImportedSkillKeyAllowed(skill);
       assertImportedSkillSourceAllowed(skill);
       const existing = await getByKey(companyId, skill.key);
       const existingMeta = existing ? getSkillMeta(existing) : {};
@@ -4311,6 +4441,7 @@ export function companySkillService(db: Db) {
     forkSkill,
     updateStatus,
     readFile,
+    updateSkill,
     updateFile,
     createLocalSkill,
     deleteSkill,

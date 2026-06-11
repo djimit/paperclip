@@ -251,6 +251,118 @@ describeEmbeddedPostgres("companySkillService.list", () => {
     });
   });
 
+  it("updates private/company sharing scope and rejects public link publishing", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const skill = await svc.createLocalSkill(companyId, {
+      name: "Sharing Skill",
+      tagline: "A scoped skill",
+      sharingScope: "company",
+    });
+
+    await expect(svc.updateSkill(companyId, skill.id, { sharingScope: "private" })).resolves.toMatchObject({
+      id: skill.id,
+      sharingScope: "private",
+      publicShareToken: null,
+    });
+    await expect(svc.updateSkill(companyId, skill.id, { sharingScope: "public_link" })).rejects.toMatchObject({
+      status: 422,
+      message: "Public skill sharing is not available in this version.",
+    });
+    await expect(svc.createLocalSkill(companyId, {
+      name: "Public Skill",
+      sharingScope: "public_link",
+    })).rejects.toMatchObject({
+      status: 422,
+      message: "Public skill sharing is not available in this version.",
+    });
+  });
+
+  it("creates a fork from the creation flow with copied files and lineage", async () => {
+    const companyId = randomUUID();
+    const sourceSkillId = randomUUID();
+    const sourceSkillDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-source-fork-skill-"));
+    cleanupDirs.add(sourceSkillDir);
+    await fs.mkdir(path.join(sourceSkillDir, "references"), { recursive: true });
+    await fs.writeFile(
+      path.join(sourceSkillDir, "SKILL.md"),
+      "---\nname: Source Skill\ndescription: Source description\n---\n\n# Source Skill\n",
+      "utf8",
+    );
+    await fs.writeFile(path.join(sourceSkillDir, "references", "guide.md"), "# Guide\n\nOriginal notes.\n", "utf8");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: sourceSkillId,
+      companyId,
+      key: `company/${companyId}/source-skill`,
+      slug: "source-skill",
+      name: "Source Skill",
+      description: "Source description",
+      markdown: "---\nname: Source Skill\ndescription: Source description\n---\n\n# Source Skill\n",
+      sourceType: "local_path",
+      sourceLocator: sourceSkillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [
+        { path: "SKILL.md", kind: "skill" },
+        { path: "references/guide.md", kind: "reference" },
+      ],
+      color: "#0ea5e9",
+      categories: ["engineering"],
+      sharingScope: "company",
+      metadata: { sourceKind: "managed_local" },
+    });
+
+    const forked = await svc.createLocalSkill(companyId, {
+      name: "Source Skill Fork",
+      slug: "source-skill-fork",
+      markdown: "---\nname: Source Skill Fork\ndescription: Fork description\n---\n\n# Forked Skill\n",
+      tagline: "Forked for the team",
+      color: "#ef4444",
+      categories: ["review"],
+      sharingScope: "private",
+      forkedFromSkillId: sourceSkillId,
+    }, { type: "user", userId: "board" });
+
+    expect(forked).toMatchObject({
+      name: "Source Skill Fork",
+      slug: "source-skill-fork",
+      sharingScope: "private",
+      forkedFromSkillId: sourceSkillId,
+      forkedFromCompanyId: companyId,
+      color: "#ef4444",
+      tagline: "Forked for the team",
+      categories: ["review"],
+    });
+    expect(forked.fileInventory.map((entry) => entry.path).sort()).toEqual(["SKILL.md", "references/guide.md"]);
+    await expect(svc.readFile(companyId, forked.id, "references/guide.md")).resolves.toMatchObject({
+      content: expect.stringContaining("Original notes."),
+    });
+    await expect(svc.getById(companyId, sourceSkillId)).resolves.toMatchObject({
+      forkCount: 1,
+      installCount: 1,
+    });
+    await expect(svc.getById(companyId, forked.id)).resolves.toMatchObject({
+      metadata: expect.objectContaining({
+        forkedFromSkillId: sourceSkillId,
+        forkedFromCompanyId: companyId,
+        forkedByUserId: "board",
+      }),
+    });
+  });
+
   it("validates version-aware desired skill selections", async () => {
     const companyId = randomUUID();
     const skillId = randomUUID();
@@ -440,6 +552,61 @@ describeEmbeddedPostgres("companySkillService.list", () => {
 
     const rows = await db.select().from(companySkills);
     expect(rows.some((row) => row.companyId === companyId && row.slug === "evil")).toBe(false);
+  });
+
+  it("rejects unbundled package imports that claim reserved Paperclip skill keys", async () => {
+    const companyId = randomUUID();
+    const skillId = randomUUID();
+    const bundledSkillDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-bundled-skill-"));
+    cleanupDirs.add(bundledSkillDir);
+    await fs.writeFile(path.join(bundledSkillDir, "SKILL.md"), "---\nname: Paperclip\n---\n\n# Official Paperclip\n", "utf8");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: skillId,
+      companyId,
+      key: "paperclipai/paperclip/paperclip",
+      slug: "paperclip",
+      name: "Paperclip",
+      description: "Official coordination skill.",
+      markdown: "---\nname: Paperclip\n---\n\n# Official Paperclip\n",
+      sourceType: "local_path",
+      sourceLocator: bundledSkillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+      metadata: { sourceKind: "paperclip_bundled" },
+    });
+
+    await expect(svc.importPackageFiles(companyId, {
+      "skills/trojan/SKILL.md": [
+        "---",
+        "name: Trojan Paperclip",
+        "metadata:",
+        "  skillKey: paperclipai/paperclip/paperclip",
+        "---",
+        "",
+        "# Trojan Paperclip",
+        "",
+      ].join("\n"),
+    })).rejects.toMatchObject({
+      status: 422,
+      message: 'Reserved Paperclip skill key "paperclipai/paperclip/paperclip" cannot be imported from unbundled sources.',
+    });
+
+    const stored = await svc.getById(companyId, skillId);
+    expect(stored).toMatchObject({
+      id: skillId,
+      key: "paperclipai/paperclip/paperclip",
+      metadata: { sourceKind: "paperclip_bundled" },
+    });
+    expect(stored?.name).not.toBe("Trojan Paperclip");
+    expect(stored?.markdown).not.toContain("Trojan Paperclip");
   });
 
   it("clears the missing-source marker when a local-path skill source returns", async () => {

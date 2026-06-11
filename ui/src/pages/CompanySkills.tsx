@@ -14,6 +14,7 @@ import type {
   CompanySkillFileInventoryEntry,
   CompanySkillListItem,
   CompanySkillProjectScanResult,
+  CompanySkillSharingScope,
   CompanySkillSourceBadge,
   CompanySkillTrustLevel,
   CompanySkillUpdateStatus,
@@ -633,6 +634,48 @@ function uniqueCategories(values: (string | null | undefined)[]): string[] {
   return out;
 }
 
+function normalizeSkillDraftSlug(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function splitCategoryDraft(value: string) {
+  return value
+    .split(",")
+    .map((entry) => normalizeSkillDraftSlug(entry))
+    .filter(Boolean);
+}
+
+function defaultSkillMarkdown(name: string, tagline: string) {
+  const title = name.trim() || "New Skill";
+  const summary = tagline.trim() || "Describe when agents should use this skill.";
+  return [
+    "---",
+    `name: ${title}`,
+    `description: ${summary}`,
+    "---",
+    "",
+    `# ${title}`,
+    "",
+    summary,
+    "",
+    "## When To Use",
+    "",
+    "- Use this skill when the task needs its specialized workflow.",
+    "",
+    "## Workflow",
+    "",
+    "1. Inspect the task context.",
+    "2. Apply the workflow carefully.",
+    "3. Report what changed and how it was verified.",
+    "",
+  ].join("\n");
+}
+
 // Merge installed company skills and the install catalog into one card model.
 // Installed skills win on dedup (they carry the richer social-proof metadata);
 // catalog-only skills fill in the rest of the discoverable surface.
@@ -1122,51 +1165,301 @@ export function DiscoveryGrid({
   );
 }
 
-function NewSkillForm({
+type SkillCreateDraft = {
+  name: string;
+  slug: string;
+  tagline: string;
+  description: string;
+  color: string;
+  categories: string[];
+  markdown: string;
+  sharingScope: Exclude<CompanySkillSharingScope, "public_link">;
+  forkedFromSkillId: string | null;
+  forkedFromName: string | null;
+};
+
+function buildBlankSkillDraft(): SkillCreateDraft {
+  return {
+    name: "",
+    slug: "",
+    tagline: "",
+    description: "",
+    color: DISCOVERY_ACCENTS[0]!,
+    categories: [],
+    markdown: defaultSkillMarkdown("", ""),
+    sharingScope: "company",
+    forkedFromSkillId: null,
+    forkedFromName: null,
+  };
+}
+
+function buildForkSkillDraft(skill: CompanySkillDetail): SkillCreateDraft {
+  const name = `${skill.name} Fork`;
+  const slug = normalizeSkillDraftSlug(`${skill.slug}-fork`);
+  return {
+    name,
+    slug,
+    tagline: skill.tagline ?? "",
+    description: skill.description ?? "",
+    color: skill.color ?? skillAccentColor(skill.key, null),
+    categories: skill.categories,
+    markdown: skill.markdown.replace(/^name:\s*.*$/m, `name: ${name}`),
+    sharingScope: "company",
+    forkedFromSkillId: skill.id,
+    forkedFromName: skill.name,
+  };
+}
+
+function NewSkillWizard({
+  initialDraft,
   onCreate,
   isPending,
+  error,
   onCancel,
 }: {
+  initialDraft: SkillCreateDraft;
   onCreate: (payload: CompanySkillCreateRequest) => void;
   isPending: boolean;
+  error: string | null;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [description, setDescription] = useState("");
+  const [step, setStep] = useState(0);
+  const [draft, setDraft] = useState<SkillCreateDraft>(initialDraft);
+  const categoryDraft = draft.categories.join(", ");
+  const steps = ["Basics", "Design", "Content", "Review"];
+
+  useEffect(() => {
+    setStep(0);
+    setDraft(initialDraft);
+  }, [initialDraft]);
+
+  function patchDraft(patch: Partial<SkillCreateDraft>) {
+    setDraft((current) => ({ ...current, ...patch }));
+  }
+
+  const nameValid = draft.name.trim().length > 0;
+  const effectiveSlug = draft.slug.trim() || normalizeSkillDraftSlug(draft.name);
+  const effectiveMarkdown = draft.markdown.trim().length > 0
+    ? draft.markdown
+    : defaultSkillMarkdown(draft.name, draft.tagline);
+
+  function submit() {
+    onCreate({
+      name: draft.name.trim(),
+      slug: effectiveSlug || null,
+      description: draft.description.trim() || draft.tagline.trim() || null,
+      markdown: effectiveMarkdown,
+      color: draft.color,
+      tagline: draft.tagline.trim() || null,
+      categories: draft.categories,
+      sharingScope: draft.sharingScope,
+      forkedFromSkillId: draft.forkedFromSkillId,
+    });
+  }
 
   return (
-    <div className="border-b border-border px-4 py-4">
-      <div className="space-y-3">
-        <Input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Skill name"
-          className="h-9 rounded-none border-0 border-b border-border px-0 shadow-none focus-visible:ring-0"
-        />
-        <Input
-          value={slug}
-          onChange={(event) => setSlug(event.target.value)}
-          placeholder="optional-shortname"
-          className="h-9 rounded-none border-0 border-b border-border px-0 shadow-none focus-visible:ring-0"
-        />
-        <Textarea
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          placeholder="Short description"
-          className="min-h-20 rounded-none border-0 border-b border-border px-0 shadow-none focus-visible:ring-0"
-        />
-        <div className="flex items-center justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => onCreate({ name, slug: slug || null, description: description || null })}
-            disabled={isPending || name.trim().length === 0}
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 border-b border-border pb-3">
+        {steps.map((label, index) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => setStep(index)}
+            className={cn(
+              "rounded-md px-2 py-1 text-xs",
+              step === index ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
           >
-            {isPending ? "Creating..." : "Create skill"}
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {draft.forkedFromName ? (
+        <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          <GitFork className="h-3.5 w-3.5" />
+          Forking {draft.forkedFromName}
+        </div>
+      ) : null}
+
+      {step === 0 ? (
+        <div className="space-y-3">
+          <Input
+            value={draft.name}
+            onChange={(event) => {
+              const nextName = event.target.value;
+              patchDraft({
+                name: nextName,
+                slug: draft.slug ? draft.slug : normalizeSkillDraftSlug(nextName),
+                markdown: draft.markdown === defaultSkillMarkdown(draft.name, draft.tagline)
+                  ? defaultSkillMarkdown(nextName, draft.tagline)
+                  : draft.markdown,
+              });
+            }}
+            placeholder="Skill name"
+            className="h-9"
+          />
+          <Input
+            value={draft.slug}
+            onChange={(event) => patchDraft({ slug: normalizeSkillDraftSlug(event.target.value) })}
+            placeholder="skill-shortname"
+            className="h-9 font-mono"
+          />
+          <Textarea
+            value={draft.tagline}
+            onChange={(event) => {
+              const nextTagline = event.target.value;
+              patchDraft({
+                tagline: nextTagline,
+                description: draft.description ? draft.description : nextTagline,
+                markdown: draft.markdown === defaultSkillMarkdown(draft.name, draft.tagline)
+                  ? defaultSkillMarkdown(draft.name, nextTagline)
+                  : draft.markdown,
+              });
+            }}
+            placeholder="One-line promise for the skill"
+            className="min-h-20"
+          />
+        </div>
+      ) : step === 1 ? (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <SkillCardIcon
+              size={48}
+              card={{
+                key: effectiveSlug || draft.name || "new-skill",
+                skillId: null,
+                catalogRef: null,
+                name: draft.name || "New Skill",
+                slug: effectiveSlug || "skill",
+                author: "you",
+                version: null,
+                description: draft.tagline,
+                categories: draft.categories,
+                iconUrl: null,
+                color: draft.color,
+                starCount: 0,
+                agentCount: 0,
+                forkCount: 0,
+                installed: false,
+                required: false,
+                forkedFrom: Boolean(draft.forkedFromSkillId),
+                updatedAt: Date.now(),
+              }}
+            />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{draft.name || "New Skill"}</div>
+              <div className="truncate text-xs text-muted-foreground">{draft.tagline || "No tagline yet."}</div>
+            </div>
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Color</label>
+            <div className="flex flex-wrap gap-2">
+              {DISCOVERY_ACCENTS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  onClick={() => patchDraft({ color })}
+                  className={cn(
+                    "h-7 w-7 rounded-md border",
+                    draft.color === color ? "border-foreground" : "border-border",
+                  )}
+                  style={{ backgroundColor: color }}
+                  aria-label={`Use ${color}`}
+                />
+              ))}
+              <Input
+                value={draft.color}
+                onChange={(event) => patchDraft({ color: event.target.value })}
+                className="h-7 w-28 font-mono text-xs"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Categories</label>
+            <Input
+              value={categoryDraft}
+              onChange={(event) => patchDraft({ categories: splitCategoryDraft(event.target.value) })}
+              placeholder="engineering, review, memory"
+              className="h-9"
+            />
+          </div>
+        </div>
+      ) : step === 2 ? (
+        <div className="space-y-2">
+          <Textarea
+            value={draft.markdown}
+            onChange={(event) => patchDraft({ markdown: event.target.value })}
+            className="min-h-[22rem] font-mono text-xs"
+          />
+        </div>
+      ) : (
+        <div className="space-y-4 text-sm">
+          <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-y-2">
+            <span className="text-muted-foreground">Name</span>
+            <span>{draft.name || "Untitled"}</span>
+            <span className="text-muted-foreground">Slug</span>
+            <span className="font-mono">{effectiveSlug || "skill"}</span>
+            <span className="text-muted-foreground">Scope</span>
+            <span>{draft.sharingScope === "private" ? "Private" : "Company"}</span>
+            <span className="text-muted-foreground">Categories</span>
+            <span>{draft.categories.length ? draft.categories.join(", ") : "none"}</span>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">Sharing</label>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {(["company", "private"] as const).map((scope) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => patchDraft({ sharingScope: scope })}
+                  className={cn(
+                    "rounded-md border px-3 py-2 text-left text-sm",
+                    draft.sharingScope === scope ? "border-foreground bg-accent/50" : "border-border",
+                  )}
+                >
+                  <span className="block font-medium">{scope === "company" ? "Company" : "Private"}</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    {scope === "company" ? "Visible inside this company." : "Only visible in your library."}
+                  </span>
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled
+                className="rounded-md border border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground"
+              >
+                <span className="block font-medium">Public link</span>
+                <span className="mt-1 block text-xs">Coming later.</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={isPending}>
+          Cancel
+        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setStep((value) => Math.max(0, value - 1))} disabled={isPending || step === 0}>
+            Back
           </Button>
+          {step < steps.length - 1 ? (
+            <Button size="sm" onClick={() => setStep((value) => Math.min(steps.length - 1, value + 1))} disabled={!nameValid}>
+              Next
+            </Button>
+          ) : (
+            <Button size="sm" onClick={submit} disabled={isPending || !nameValid}>
+              {isPending ? "Creating..." : draft.forkedFromSkillId ? "Create fork" : "Create skill"}
+            </Button>
+          )}
         </div>
       </div>
     </div>
@@ -2154,6 +2447,74 @@ function SkillVersionDiffDialog({
   );
 }
 
+function SkillCommentRow({
+  comment,
+  onUpdate,
+  updatePending,
+  onDelete,
+  deletePending,
+}: {
+  comment: CompanySkillComment;
+  onUpdate: (body: string) => void;
+  updatePending: boolean;
+  onDelete: () => void;
+  deletePending: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(comment.body);
+  const deleted = Boolean(comment.deletedAt);
+
+  useEffect(() => {
+    if (!editing) setDraft(comment.body);
+  }, [comment.body, editing]);
+
+  return (
+    <article className="border-b border-border py-3 last:border-b-0">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs text-muted-foreground">
+          {comment.authorAgentId ? "Agent" : comment.authorUserId ? "Board" : "System"} · {relativeTime(comment.createdAt)}
+        </div>
+        {!deleted ? (
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={() => setEditing((value) => !value)} disabled={updatePending || deletePending}>
+              <Pencil className="mr-1 h-3 w-3" />
+              {editing ? "Cancel" : "Edit"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onDelete} disabled={deletePending || updatePending}>
+              <Trash2 className="mr-1 h-3 w-3" />
+              Delete
+            </Button>
+          </div>
+        ) : null}
+      </div>
+      {deleted ? (
+        <MarkdownBody className="prose-sm" softBreaks>_Deleted comment_</MarkdownBody>
+      ) : editing ? (
+        <div className="space-y-2">
+          <Textarea value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-24" />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={updatePending}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                onUpdate(draft.trim());
+                setEditing(false);
+              }}
+              disabled={updatePending || draft.trim().length === 0}
+            >
+              {updatePending ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <MarkdownBody className="prose-sm" softBreaks>{comment.body}</MarkdownBody>
+      )}
+    </article>
+  );
+}
+
 function SkillDetailPage({
   detail,
   loading,
@@ -2178,6 +2539,10 @@ function SkillDetailPage({
   setCommentDraft,
   onCreateComment,
   createCommentPending,
+  onUpdateComment,
+  updateCommentPending,
+  onDeleteComment,
+  deleteCommentPending,
   relatedSkills,
   attachAgents,
   attachPopoverOpen,
@@ -2193,6 +2558,11 @@ function SkillDetailPage({
   checkUpdatesPending,
   onInstallUpdate,
   installUpdatePending,
+  onToggleStar,
+  starPending,
+  onFork,
+  onUpdateSharingScope,
+  updateSharingPending,
   onDelete,
   deletePending,
 }: {
@@ -2219,6 +2589,10 @@ function SkillDetailPage({
   setCommentDraft: (value: string) => void;
   onCreateComment: () => void;
   createCommentPending: boolean;
+  onUpdateComment: (commentId: string, body: string) => void;
+  updateCommentPending: boolean;
+  onDeleteComment: (commentId: string) => void;
+  deleteCommentPending: boolean;
   relatedSkills: CompanySkillListItem[];
   attachAgents: Array<{ id: string; name: string; adapterType: string; supportsSkills: boolean; required: boolean }>;
   attachPopoverOpen: boolean;
@@ -2234,6 +2608,11 @@ function SkillDetailPage({
   checkUpdatesPending: boolean;
   onInstallUpdate: () => void;
   installUpdatePending: boolean;
+  onToggleStar: () => void;
+  starPending: boolean;
+  onFork: () => void;
+  onUpdateSharingScope: (scope: Exclude<CompanySkillSharingScope, "public_link">) => void;
+  updateSharingPending: boolean;
   onDelete: () => void;
   deletePending: boolean;
 }) {
@@ -2452,12 +2831,14 @@ function SkillDetailPage({
             <div className="py-6 text-sm text-muted-foreground">No comments yet.</div>
           ) : (
             comments.map((comment) => (
-              <article key={comment.id} className="border-b border-border py-3 last:border-b-0">
-                <div className="mb-1 text-xs text-muted-foreground">
-                  {comment.authorAgentId ? "Agent" : comment.authorUserId ? "Board" : "System"} · {relativeTime(comment.createdAt)}
-                </div>
-                <MarkdownBody className="prose-sm" softBreaks>{comment.deletedAt ? "_Deleted comment_" : comment.body}</MarkdownBody>
-              </article>
+              <SkillCommentRow
+                key={comment.id}
+                comment={comment}
+                updatePending={updateCommentPending}
+                deletePending={deleteCommentPending}
+                onUpdate={(body) => onUpdateComment(comment.id, body)}
+                onDelete={() => onDeleteComment(comment.id)}
+              />
             ))
           )}
         </div>
@@ -2568,6 +2949,16 @@ function SkillDetailPage({
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={onToggleStar} disabled={starPending}>
+              <Star className={cn("mr-1.5 h-3.5 w-3.5", detail.starredByCurrentActor && "fill-current text-yellow-400")} />
+              {detail.starredByCurrentActor ? "Starred" : "Star"}
+              <span className="ml-1 text-xs text-muted-foreground">{detail.starCount}</span>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onFork}>
+              <GitFork className="mr-1.5 h-3.5 w-3.5" />
+              Fork
+              <span className="ml-1 text-xs text-muted-foreground">{detail.forkCount}</span>
+            </Button>
             {detail.sourceType === "github" ? (
               <>
                 <Button variant="ghost" size="sm" onClick={onCheckUpdates} disabled={checkUpdatesPending || updateStatusLoading}>
@@ -2610,6 +3001,43 @@ function SkillDetailPage({
         </main>
 
         <aside className="min-w-0 space-y-6 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+          <section>
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Sharing</div>
+            <div className="space-y-2">
+              {(["company", "private"] as const).map((scope) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => onUpdateSharingScope(scope)}
+                  disabled={updateSharingPending || detail.sharingScope === scope}
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                    detail.sharingScope === scope ? "border-foreground/50 bg-accent/40" : "border-border hover:bg-accent/30",
+                  )}
+                >
+                  {scope === "company" ? <Users className="mt-0.5 h-3.5 w-3.5" /> : <Lock className="mt-0.5 h-3.5 w-3.5" />}
+                  <span className="min-w-0">
+                    <span className="block font-medium">{scope === "company" ? "Company" : "Private"}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {scope === "company" ? "Visible inside this company." : "Only visible in your library."}
+                    </span>
+                  </span>
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled
+                className="flex w-full items-start gap-2 rounded-md border border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground"
+              >
+                <Globe className="mt-0.5 h-3.5 w-3.5" />
+                <span>
+                  <span className="block font-medium">Public link</span>
+                  <span className="mt-0.5 block text-xs">Coming later.</span>
+                </span>
+              </button>
+            </div>
+          </section>
+
           <section>
             <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Attach to agent</div>
             <div className="space-y-2">
@@ -2984,7 +3412,6 @@ export function CompanySkills() {
   const adapterCaps = useAdapterCapabilities();
   const [skillFilter, setSkillFilter] = useState("");
   const [source, setSource] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
   const [emptySourceHelpOpen, setEmptySourceHelpOpen] = useState(false);
   const [expandedSkillId, setExpandedSkillId] = useState<string | null>(null);
   const [expandedDirs, setExpandedDirs] = useState<Record<string, Set<string>>>({});
@@ -3017,6 +3444,8 @@ export function CompanySkills() {
   const [discoverySearch, setDiscoverySearch] = useState("");
   const [discoverySort, setDiscoverySort] = useState<DiscoverySort>("agents");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createDraft, setCreateDraft] = useState<SkillCreateDraft>(() => buildBlankSkillDraft());
+  const [createError, setCreateError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const parsedRoute = useMemo(() => parseSkillRoute(routePath), [routePath]);
   const routeSkillId = parsedRoute.skillId;
@@ -3096,6 +3525,12 @@ export function CompanySkills() {
       return params;
     });
     setCatalogSelectedPath(path);
+  }
+
+  function openCreateWizard(initialDraft: SkillCreateDraft = buildBlankSkillDraft()) {
+    setCreateDraft(initialDraft);
+    setCreateError(null);
+    setCreateDialogOpen(true);
   }
 
   useEffect(() => {
@@ -3240,18 +3675,22 @@ export function CompanySkills() {
     onSuccess: async (skill) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId!) });
       navigate(skillRoute(skill.id));
-      setCreateOpen(false);
+      setCreateDialogOpen(false);
+      setCreateError(null);
+      setCreateDraft(buildBlankSkillDraft());
       pushToast({
         tone: "success",
-        title: "Skill created",
+        title: skill.forkedFromSkillId ? "Skill fork created" : "Skill created",
         body: `${skill.name} is now editable in the Paperclip workspace.`,
       });
     },
     onError: (error) => {
+      const message = error instanceof Error ? error.message : "Failed to create skill.";
+      setCreateError(message);
       pushToast({
         tone: "error",
         title: "Skill creation failed",
-        body: error instanceof Error ? error.message : "Failed to create skill.",
+        body: message,
       });
     },
   });
@@ -3339,6 +3778,83 @@ export function CompanySkills() {
         tone: "error",
         title: "Comment failed",
         body: error instanceof Error ? error.message : "Failed to post comment.",
+      });
+    },
+  });
+
+  const updateComment = useMutation({
+    mutationFn: (input: { commentId: string; body: string }) =>
+      companySkillsApi.updateComment(selectedCompanyId!, selectedSkillId!, input.commentId, { body: input.body }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.companySkills.comments(selectedCompanyId!, selectedSkillId!),
+      });
+      pushToast({ tone: "success", title: "Comment updated" });
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Comment update failed",
+        body: error instanceof Error ? error.message : "Failed to update comment.",
+      });
+    },
+  });
+
+  const deleteComment = useMutation({
+    mutationFn: (commentId: string) => companySkillsApi.deleteComment(selectedCompanyId!, selectedSkillId!, commentId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.companySkills.comments(selectedCompanyId!, selectedSkillId!),
+      });
+      pushToast({ tone: "success", title: "Comment deleted" });
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Comment delete failed",
+        body: error instanceof Error ? error.message : "Failed to delete comment.",
+      });
+    },
+  });
+
+  const toggleStar = useMutation({
+    mutationFn: () => {
+      if (!activeDetail) throw new Error("Select a skill first.");
+      return activeDetail.starredByCurrentActor
+        ? companySkillsApi.unstar(selectedCompanyId!, activeDetail.id)
+        : companySkillsApi.star(selectedCompanyId!, activeDetail.id);
+    },
+    onSuccess: async () => {
+      if (!activeDetail) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId!) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.detail(selectedCompanyId!, activeDetail.id) }),
+      ]);
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Star failed",
+        body: error instanceof Error ? error.message : "Failed to update star.",
+      });
+    },
+  });
+
+  const updateSkillSettings = useMutation({
+    mutationFn: (payload: { skillId: string; sharingScope: Exclude<CompanySkillSharingScope, "public_link"> }) =>
+      companySkillsApi.update(selectedCompanyId!, payload.skillId, { sharingScope: payload.sharingScope }),
+    onSuccess: async (skill) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId!) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.detail(selectedCompanyId!, skill.id) }),
+      ]);
+      pushToast({ tone: "success", title: "Sharing updated", body: skill.sharingScope === "private" ? "Private" : "Company" });
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Sharing update failed",
+        body: error instanceof Error ? error.message : "Failed to update sharing scope.",
       });
     },
   });
@@ -3783,16 +4299,20 @@ export function CompanySkills() {
       />
 
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Create a new skill</DialogTitle>
+            <DialogTitle>{createDraft.forkedFromSkillId ? "Fork skill" : "Create a new skill"}</DialogTitle>
             <DialogDescription>
-              Start a blank skill in the Paperclip workspace. You can add files, categories, and metadata afterwards.
+              {createDraft.forkedFromSkillId
+                ? "Review the fork metadata and create an editable company copy."
+                : "Create an editable company skill in the Paperclip workspace."}
             </DialogDescription>
           </DialogHeader>
-          <NewSkillForm
+          <NewSkillWizard
+            initialDraft={createDraft}
             onCreate={(payload) => createSkill.mutate(payload)}
             isPending={createSkill.isPending}
+            error={createError}
             onCancel={() => setCreateDialogOpen(false)}
           />
         </DialogContent>
@@ -3864,7 +4384,7 @@ export function CompanySkills() {
           loading={skillsQuery.isLoading || catalogListQuery.isLoading}
           error={skillsQuery.error?.message ?? catalogListQuery.error?.message ?? null}
           totalCount={discoveryCards.length}
-          onCreate={() => setCreateDialogOpen(true)}
+          onCreate={() => openCreateWizard()}
           onImport={() => setImportDialogOpen(true)}
           onBrowseCatalog={() => setDiscoveryTab("catalog")}
           onScan={() => scanProjects.mutate()}
@@ -3896,6 +4416,10 @@ export function CompanySkills() {
           setCommentDraft={setCommentDraft}
           onCreateComment={() => createComment.mutate()}
           createCommentPending={createComment.isPending}
+          onUpdateComment={(commentId, body) => updateComment.mutate({ commentId, body })}
+          updateCommentPending={updateComment.isPending}
+          onDeleteComment={(commentId) => deleteComment.mutate(commentId)}
+          deleteCommentPending={deleteComment.isPending}
           relatedSkills={relatedSkills}
           attachAgents={eligibleAgentsForAttach}
           attachPopoverOpen={attachPopoverOpen}
@@ -3923,6 +4447,11 @@ export function CompanySkills() {
           checkUpdatesPending={updateStatusQuery.isFetching}
           onInstallUpdate={() => installUpdate.mutate()}
           installUpdatePending={installUpdate.isPending}
+          onToggleStar={() => toggleStar.mutate()}
+          starPending={toggleStar.isPending}
+          onFork={() => activeDetail && openCreateWizard(buildForkSkillDraft(activeDetail))}
+          onUpdateSharingScope={(sharingScope) => activeDetail && updateSkillSettings.mutate({ skillId: activeDetail.id, sharingScope })}
+          updateSharingPending={updateSkillSettings.isPending}
           onDelete={openDeleteDialog}
           deletePending={deleteSkill.isPending}
         />
@@ -3978,7 +4507,7 @@ export function CompanySkills() {
                 <DropdownMenuItem
                   onSelect={() => {
                     setViewParam("installed");
-                    setCreateOpen(true);
+                    openCreateWizard();
                   }}
                 >
                   <Pencil className="mr-2 h-4 w-4" />
@@ -4024,14 +4553,6 @@ export function CompanySkills() {
                   <p className="mt-3 text-xs text-muted-foreground">{scanStatusMessage}</p>
                 )}
               </div>
-
-              {createOpen && (
-                <NewSkillForm
-                  onCreate={(payload) => createSkill.mutate(payload)}
-                  isPending={createSkill.isPending}
-                  onCancel={() => setCreateOpen(false)}
-                />
-              )}
 
               {skillsQuery.isLoading ? (
                 <PageSkeleton variant="list" />
