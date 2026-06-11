@@ -372,6 +372,28 @@ describeEmbeddedPostgres("companySkillService.list", () => {
       label: "Initial version",
       authorUserId: "board",
     });
+
+    const dedicatedFork = await svc.forkSkill(
+      companyId,
+      sourceSkillId,
+      { name: "Dedicated Fork", slug: "dedicated-fork", sharingScope: "private" },
+      { type: "user", userId: "board" },
+    );
+    expect(dedicatedFork).toMatchObject({
+      name: "Source Skill",
+      slug: "dedicated-fork",
+      sharingScope: "private",
+      forkedFromSkillId: sourceSkillId,
+      forkedFromCompanyId: companyId,
+      currentVersionId: expect.any(String),
+    });
+    const dedicatedVersions = await svc.listVersions(companyId, dedicatedFork.id);
+    expect(dedicatedVersions).toHaveLength(1);
+    expect(dedicatedVersions[0]).toMatchObject({
+      revisionNumber: 1,
+      label: "Initial version",
+      authorUserId: "board",
+    });
   });
 
   it("validates version-aware desired skill selections", async () => {

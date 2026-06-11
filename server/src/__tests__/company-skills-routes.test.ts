@@ -663,6 +663,17 @@ describe("company skill mutation permissions", () => {
     }));
   });
 
+  it("does not synthesize a shared board user id for board actors without user ids", async () => {
+    const app = await createApp({ type: "board", source: "local_implicit" });
+
+    await request(app).post("/api/companies/company-1/skills/skill-1/star").send({}).expect(200);
+
+    expect(mockCompanySkillService.starSkill).toHaveBeenCalledWith("company-1", "skill-1", {
+      type: "user",
+      userId: null,
+    });
+  });
+
   it("allows agents with canCreateAgents to mutate company skills", async () => {
     mockAgentService.getById.mockResolvedValue({
       id: "agent-1",

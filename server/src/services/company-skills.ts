@@ -2920,6 +2920,7 @@ export function companySkillService(db: Db) {
         updatedAt: new Date(),
       })
       .where(and(eq(companySkills.id, source.id), eq(companySkills.companyId, companyId)));
+    await createVersion(companyId, forked.id, { label: "Initial version" }, actor);
     return getById(companyId, forked.id).then((skill) => {
       if (!skill) throw notFound("Forked skill not found");
       return skill;
