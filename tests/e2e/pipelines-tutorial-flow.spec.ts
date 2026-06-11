@@ -1,4 +1,5 @@
-import { expect, request as pwRequest, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import { expect, request as pwRequest, test, type APIRequestContext, type APIResponse, type Locator, type Page } from "@playwright/test";
 
 /**
  * E2E: Pipelines tutorial flow (ported from the Line B spec onto the
@@ -31,12 +32,34 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 type Stage = { id: string; key: string; name: string; kind: string; position: number };
 type PipelineDetail = { id: string; name: string; stages: Stage[]; transitions: Array<{ fromStageId: string; toStageId: string }> };
-type CaseRow = { case: { id: string; title: string; version: number; stageId: string } };
+type CaseSummary = {
+  id: string;
+  caseKey: string;
+  title: string;
+  version: number;
+  stageId: string;
+  parentCaseVersion?: number | null;
+  requestKey?: string | null;
+  childCount?: number;
+  terminalChildCount?: number;
+};
+type CaseRow = { case: CaseSummary; stage?: Stage };
+type CaseDetail = CaseRow & { pipeline: { id: string; key: string; name: string }; blockers?: Array<{ caseId: string; blockedByCaseId: string }> };
 
 async function expectOk(response: Awaited<ReturnType<APIRequestContext["get"]>>, label: string) {
   if (!response.ok()) {
     throw new Error(`${label} failed: ${response.status()} ${await response.text()}`);
   }
+}
+
+async function expectError(response: APIResponse, label: string, status: number, code: string, message?: RegExp) {
+  const body = await response.json() as { code?: string; error?: string; message?: string; child?: { title?: string } };
+  expect(response.status(), `${label} status: ${JSON.stringify(body)}`).toBe(status);
+  expect(body.code, `${label} code: ${JSON.stringify(body)}`).toBe(code);
+  if (message) {
+    expect(body.error ?? body.message ?? "", `${label} message`).toMatch(message);
+  }
+  return body;
 }
 
 async function createCompany(board: APIRequestContext) {
@@ -65,6 +88,72 @@ async function createPipeline(board: APIRequestContext, companyId: string) {
   return response.json() as Promise<{ id: string; name: string }>;
 }
 
+async function createPrimitivePipeline(board: APIRequestContext, companyId: string) {
+  const response = await board.post(`/api/companies/${companyId}/pipelines`, {
+    data: {
+      key: `primitive-gates-${Date.now()}`,
+      name: "Primitive gates",
+      stages: [
+        { key: "intake", name: "Intake", kind: "open", position: 0 },
+        {
+          key: "fanout",
+          name: "Fan out",
+          kind: "working",
+          position: 100,
+          config: { requireChildrenTerminal: true },
+        },
+        {
+          key: "dependent_work",
+          name: "Dependent Work",
+          kind: "working",
+          position: 200,
+          config: { requireNoUnresolvedDrift: true },
+        },
+        {
+          key: "review",
+          name: "Review",
+          kind: "review",
+          position: 300,
+          config: {
+            approveToStageKey: "approved",
+            rejectToStageKey: "cancelled",
+            requestChangesToStageKey: "dependent_work",
+            requireRejectReason: true,
+            reviewerKind: "human",
+          },
+        },
+        { key: "approved", name: "Approved", kind: "working", position: 400 },
+        { key: "done", name: "Done", kind: "done", position: 900 },
+        { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
+      ],
+    },
+  });
+  await expectOk(response, "create primitive pipeline");
+  return response.json() as Promise<{ id: string; name: string }>;
+}
+
+async function createSmokeAgent(board: APIRequestContext, companyId: string) {
+  const response = await board.post(`/api/companies/${companyId}/agents`, {
+    data: {
+      name: "Pipeline Fanout Agent",
+      role: "engineer",
+      capabilities: "Creates pipeline child work during e2e coverage.",
+      adapterType: "process",
+      adapterConfig: { command: "echo", args: ["pipeline fanout e2e"] },
+    },
+  });
+  await expectOk(response, "create smoke agent");
+  return response.json() as Promise<{ id: string }>;
+}
+
+async function createAgentKey(board: APIRequestContext, agentId: string) {
+  const response = await board.post(`/api/agents/${agentId}/keys`, {
+    data: { name: "pipelines-e2e-fanout" },
+  });
+  await expectOk(response, "create smoke agent key");
+  return response.json() as Promise<{ token: string }>;
+}
+
 async function getPipeline(board: APIRequestContext, pipelineId: string): Promise<PipelineDetail> {
   const response = await board.get(`/api/pipelines/${pipelineId}`);
   await expectOk(response, "get pipeline");
@@ -80,25 +169,40 @@ async function listItems(board: APIRequestContext, pipelineId: string): Promise<
 async function createItem(
   board: APIRequestContext,
   pipelineId: string,
-  data: { title: string; stageKey?: string; parentCaseId?: string; fields?: Record<string, unknown> },
+  data: {
+    title: string;
+    caseKey?: string;
+    stageKey?: string;
+    parentCaseId?: string;
+    requestKey?: string;
+    blockedByCaseIds?: string[];
+    fields?: Record<string, unknown>;
+  },
 ) {
   const response = await board.post(`/api/pipelines/${pipelineId}/cases`, {
     data: {
+      caseKey: data.caseKey,
       title: data.title,
       stageKey: data.stageKey,
       parentCaseId: data.parentCaseId,
+      requestKey: data.requestKey,
+      blockedByCaseIds: data.blockedByCaseIds,
       fields: data.fields ?? {},
     },
   });
   await expectOk(response, `create item ${data.title}`);
-  const body = await response.json() as { case: { id: string; version: number } };
+  const body = await response.json() as { case: CaseSummary; created?: boolean };
   return body.case;
 }
 
-async function getItemVersion(board: APIRequestContext, caseId: string) {
+async function getItem(board: APIRequestContext, caseId: string): Promise<CaseDetail> {
   const response = await board.get(`/api/cases/${caseId}`);
   await expectOk(response, "get item detail");
-  const detail = await response.json() as { case: { version: number } };
+  return response.json() as Promise<CaseDetail>;
+}
+
+async function getItemVersion(board: APIRequestContext, caseId: string) {
+  const detail = await getItem(board, caseId);
   return detail.case.version;
 }
 
@@ -170,6 +274,166 @@ function reviewQueueRow(page: Page, title: string): Locator {
 test.describe("Pipelines tutorial UI flow", () => {
   test.setTimeout(240_000);
 
+  test("covers agent fan-out, drift acknowledgement gates, child-terminal gates, and stale approvals", async () => {
+    const board = await pwRequest.newContext({ baseURL: BASE_URL });
+    const company = await createCompany(board);
+    const pipeline = await createPrimitivePipeline(board, company.id);
+    const agent = await createSmokeAgent(board, company.id);
+    const key = await createAgentKey(board, agent.id);
+    const agentApi = await pwRequest.newContext({
+      baseURL: BASE_URL,
+      extraHTTPHeaders: {
+        Authorization: `Bearer ${key.token}`,
+        "X-Paperclip-Run-Id": randomUUID(),
+      },
+    });
+
+    const parent = await createItem(board, pipeline.id, {
+      caseKey: "fanout-parent",
+      title: "Fan-out parent",
+      stageKey: "fanout",
+      fields: { expectedChildren: 2, release: "v1" },
+    });
+
+    const childA = await createItem(agentApi, pipeline.id, {
+      caseKey: "asset-a",
+      title: "Asset A",
+      stageKey: "dependent_work",
+      parentCaseId: parent.id,
+      requestKey: "fanout:asset-a",
+      fields: { asset: "hero", briefedFromVersion: parent.version },
+    });
+    expect(childA.parentCaseVersion).toBe(parent.version);
+    expect(childA.requestKey).toBe("fanout:asset-a");
+
+    const retryResponse = await agentApi.post(`/api/pipelines/${pipeline.id}/cases`, {
+      data: {
+        caseKey: "asset-a-retry",
+        title: "Duplicate Asset A",
+        stageKey: "dependent_work",
+        parentCaseId: parent.id,
+        requestKey: "fanout:asset-a",
+        fields: { asset: "changed" },
+      },
+    });
+    await expectOk(retryResponse, "retry request-key child create");
+    const retry = await retryResponse.json() as { case: CaseSummary; created: boolean };
+    expect(retry.created).toBe(false);
+    expect(retry.case.id).toBe(childA.id);
+    expect(retry.case.title).toBe("Asset A");
+
+    const childB = await createItem(agentApi, pipeline.id, {
+      caseKey: "asset-b",
+      title: "Asset B",
+      stageKey: "dependent_work",
+      parentCaseId: parent.id,
+      requestKey: "fanout:asset-b",
+      blockedByCaseIds: [childA.id],
+      fields: { asset: "social", briefedFromVersion: parent.version },
+    });
+    const blockedDetail = await getItem(board, childB.id);
+    expect(blockedDetail.blockers?.map((blocker) => blocker.blockedByCaseId)).toContain(childA.id);
+
+    await expectError(
+      await board.post(`/api/cases/${parent.id}/transition`, {
+        data: { toStageKey: "done", expectedVersion: parent.version },
+      }),
+      "parent children-terminal gate",
+      409,
+      "children_not_terminal",
+      /Asset A/,
+    );
+
+    await expectError(
+      await agentApi.post(`/api/cases/${childB.id}/transition`, {
+        data: { toStageKey: "approved", expectedVersion: childB.version },
+      }),
+      "blocked sibling sequencing",
+      409,
+      "blocked",
+    );
+
+    const changedA = await board.patch(`/api/cases/${childA.id}`, {
+      data: {
+        expectedVersion: childA.version,
+        fields: { asset: "hero", briefedFromVersion: parent.version, materialChange: "new art direction" },
+      },
+    });
+    await expectOk(changedA, "materially edit upstream child");
+    const editedA = await changedA.json() as CaseSummary;
+
+    await moveItem(agentApi, childA.id, "done");
+    await expectError(
+      await agentApi.post(`/api/cases/${childB.id}/transition`, {
+        data: { toStageKey: "review", expectedVersion: childB.version },
+      }),
+      "unacknowledged drift gate",
+      409,
+      "unresolved_drift",
+      /not acknowledged/,
+    );
+
+    const ackResponse = await board.post(`/api/cases/${childB.id}/acknowledge-drift`, {
+      data: { expectedVersion: childB.version },
+    });
+    await expectOk(ackResponse, "acknowledge drift");
+    const ack = await ackResponse.json() as { acknowledged: boolean };
+    expect(ack.acknowledged).toBe(true);
+    await moveItem(agentApi, childB.id, "done");
+
+    const refreshedParent = await getItem(board, parent.id);
+    expect(refreshedParent.case.childCount).toBe(2);
+    expect(refreshedParent.case.terminalChildCount).toBe(2);
+    await moveItem(board, parent.id, "done");
+
+    const reviewCase = await createItem(board, pipeline.id, {
+      caseKey: "review-pinned",
+      title: "Revision-pinned review",
+      stageKey: "review",
+      fields: { revision: "first" },
+    });
+    const approval = await board.post(`/api/cases/${reviewCase.id}/review`, {
+      data: { decision: "approve", expectedVersion: reviewCase.version },
+    });
+    await expectOk(approval, "approve review case");
+    const approved = await approval.json() as { case: CaseSummary };
+
+    const changedAfterApproval = await board.patch(`/api/cases/${reviewCase.id}`, {
+      data: { expectedVersion: approved.case.version, fields: { revision: "materially changed" } },
+    });
+    await expectOk(changedAfterApproval, "edit after review approval");
+    const changedReview = await changedAfterApproval.json() as CaseSummary;
+
+    await expectError(
+      await board.post(`/api/cases/${reviewCase.id}/transition`, {
+        data: { toStageKey: "done", expectedVersion: changedReview.version },
+      }),
+      "stale approval publish gate",
+      409,
+      "review_outdated",
+      /changed since review approval/,
+    );
+    await moveItem(board, reviewCase.id, "review");
+    const rereviewVersion = await getItemVersion(board, reviewCase.id);
+    const rereview = await board.post(`/api/cases/${reviewCase.id}/review`, {
+      data: { decision: "approve", expectedVersion: rereviewVersion },
+    });
+    await expectOk(rereview, "approve rereviewed case");
+    const rereviewed = await rereview.json() as { case: CaseSummary };
+    await moveItem(board, reviewCase.id, "done");
+
+    const finalEvents = await board.get(`/api/cases/${childB.id}/events`);
+    await expectOk(finalEvents, "child drift events");
+    const eventTypes = ((await finalEvents.json()) as { items: Array<{ type: string }> }).items.map((event) => event.type);
+    expect(eventTypes).toContain("upstream_drift");
+    expect(eventTypes).toContain("drift_acknowledged");
+    expect(editedA.version).toBeGreaterThan(childA.version);
+    expect(rereviewed.case.version).toBeGreaterThan(changedReview.version);
+
+    await agentApi.dispose();
+    await board.dispose();
+  });
+
   test("walks setup, intake, board moves, item detail, review queue, and learnings", async ({ page }) => {
     const board = await pwRequest.newContext({ baseURL: BASE_URL });
     const company = await createCompany(board);
@@ -186,7 +450,7 @@ test.describe("Pipelines tutorial UI flow", () => {
     // stage between Drafting and Published.
     // -----------------------------------------------------------------------
     await page.goto(`${companyPath}/pipelines/${pipeline.id}/settings`);
-    await expect(page.getByRole("heading", { name: "Content production settings" }).first()).toBeVisible();
+    await expect(page.getByLabel("Pipeline name")).toHaveValue("Content production");
 
     await page.getByRole("button", { name: "Add variable" }).click();
     await page.getByLabel("Variable key").fill("content_type");

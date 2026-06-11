@@ -16,8 +16,12 @@ RELEASE_PIPELINE="release-coverage-${RUN_KEY}"
 FEATURE_PIPELINE="feature-content-${RUN_KEY}"
 CONTENT_PIPELINE="content-production-${RUN_KEY}"
 TMP_DIR="$(mktemp -d)"
+TEMP_AGENT_KEY_ID=""
 
 cleanup() {
+  if [[ -n "$TEMP_AGENT_KEY_ID" && -n "${agent_id:-}" ]]; then
+    pc_json token agent revoke "$TEMP_AGENT_KEY_ID" --agent "$agent_id" >/dev/null 2>&1 || true
+  fi
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
@@ -43,6 +47,26 @@ api_json() {
   fi
 }
 
+api_json_as() {
+  local token="$1"
+  local method="$2"
+  local path="$3"
+  local body="${4:-}"
+  local run_id="${5:-}"
+  local headers=(
+    -H "Authorization: Bearer $token"
+    -H "Content-Type: application/json"
+  )
+  if [[ -n "$run_id" ]]; then
+    headers+=(-H "X-Paperclip-Run-Id: $run_id")
+  fi
+  if [[ -n "$body" ]]; then
+    curl -sS -X "$method" "${headers[@]}" --data "$body" "${PAPERCLIP_API_URL%/}$path"
+  else
+    curl -sS -X "$method" "${headers[@]}" "${PAPERCLIP_API_URL%/}$path"
+  fi
+}
+
 pick_agent_id() {
   if [[ -n "${DRAFTING_AGENT_ID:-}" ]]; then
     echo "$DRAFTING_AGENT_ID"
@@ -55,6 +79,34 @@ pick_agent_id() {
     return
   fi
   echo ""
+}
+
+ensure_agent_id() {
+  local existing
+  existing="$(pick_agent_id)"
+  if [[ -n "$existing" ]]; then
+    echo "$existing"
+    return
+  fi
+  local payload created
+  payload="$(jq -cn '{
+    name: "Pipeline Smoke Agent",
+    role: "engineer",
+    capabilities: "Creates child pipeline cases for the tutorial smoke.",
+    adapterType: "process",
+    adapterConfig: { command: "echo", args: ["pipeline smoke"] }
+  }')"
+  created="$(pc_json agent create --payload-json "$payload")"
+  jq -r '.id' <<<"$created"
+}
+
+create_agent_token() {
+  local agent="$1"
+  local key
+  key="$(pc_json token agent create --agent "$agent" --name "pipeline-smoke-$RUN_KEY")"
+  require_json "$key" '.key.id and .key.token' "Failed to create temporary agent API key."
+  TEMP_AGENT_KEY_ID="$(jq -r '.key.id' <<<"$key")"
+  jq -r '.key.token' <<<"$key"
 }
 
 require_json() {
@@ -131,7 +183,7 @@ cat >"$TMP_DIR/content-stages.json" <<'JSON'
     "name": "Drafting",
     "kind": "working",
     "position": 100,
-    "config": { "autonomy": "suggest" }
+    "config": { "autonomy": "suggest", "requireNoUnresolvedDrift": true }
   },
   {
     "key": "assets",
@@ -145,6 +197,13 @@ cat >"$TMP_DIR/content-stages.json" <<'JSON'
     "kind": "working",
     "position": 300,
     "config": { "autoAdvanceOnChildrenTerminal": "final_review" }
+  },
+  {
+    "key": "fanout_gate",
+    "name": "Fanout Gate",
+    "kind": "working",
+    "position": 350,
+    "config": { "requireChildrenTerminal": true }
   },
   {
     "key": "final_review",
@@ -187,7 +246,8 @@ Final Review has three exits:
 Convention: asset cases store `briefedFromVersion` in `fields` so assembly review can compare a pinned brief against the current upstream case `version`.
 MD
 
-agent_id="$(pick_agent_id)"
+agent_id="$(ensure_agent_id)"
+agent_token="$(create_agent_token "$agent_id")"
 routine_payload="$(jq -cn --arg agentId "$agent_id" '{
   title: "Pipeline tutorial drafting routine",
   description: "Template convention: draft the content case from the Pipeline Case Context, keep typed work references in case fields, and suggest Drafting -> Assets when ready.",
@@ -204,11 +264,94 @@ feature_pipeline="$(pc_json pipelines create --key "$FEATURE_PIPELINE" --name "S
 content_pipeline="$(pc_json pipelines create --key "$CONTENT_PIPELINE" --name "Smoke Content Production $RUN_KEY" --stages-file "$TMP_DIR/content-stages.json")"
 require_json "$release_pipeline" '.id and (.stages | length == 3)' "Release Coverage pipeline creation failed."
 require_json "$feature_pipeline" '.id and (.stages | length == 5)' "Feature Content pipeline creation failed."
-require_json "$content_pipeline" '.id and (.stages | length == 7)' "Content Production pipeline creation failed."
+require_json "$content_pipeline" '.id and (.stages | length == 8)' "Content Production pipeline creation failed."
+content_pipeline_id="$(jq -r '.id' <<<"$content_pipeline")"
 
 pc_json pipelines set-transitions "$RELEASE_PIPELINE" --file "$TMP_DIR/release-transitions.json" >/dev/null
 pc_json pipelines guidance put "$CONTENT_PIPELINE" --file "$TMP_DIR/content-guidance.md" >/dev/null
 pc_json pipelines set-automation "$CONTENT_PIPELINE" --stage drafting --routine "$routine_id" --note "Template-versioned with the routine prompt." >/dev/null
+
+fanout_parent="$(pc_json pipelines ingest "$CONTENT_PIPELINE" \
+  --case-key "agent-fanout-parent-${RUN_KEY}" \
+  --stage fanout_gate \
+  --title "Agent fan-out parent $RUN_KEY" \
+  --summary "Isolated primitive coverage parent for agent-authenticated child creation." \
+  --fields-json '{"expectedChildren":2,"release":"v0.pipeline-smoke"}')"
+fanout_parent_id="$(jq -r '.case.id' <<<"$fanout_parent")"
+fanout_parent_version="$(jq -r '.case.version' <<<"$fanout_parent")"
+agent_run_id="$(cat /proc/sys/kernel/random/uuid)"
+
+fanout_child_a="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
+  --arg parent "$fanout_parent_id" \
+  --argjson parentVersion "$fanout_parent_version" '{
+    caseKey: "agent-child-a",
+    title: "Agent child A",
+    parentCaseId: $parent,
+    requestKey: "fanout:agent-child-a",
+    stageKey: "assets",
+    fields: { assetType: "hero", briefedFromVersion: $parentVersion }
+  }')" "$agent_run_id")"
+require_json "$fanout_child_a" '.created == true and .case.parentCaseVersion == 1 and .case.requestKey == "fanout:agent-child-a"' "Agent fan-out child A did not record parent version and request key."
+fanout_child_a_id="$(jq -r '.case.id' <<<"$fanout_child_a")"
+
+fanout_retry="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
+  --arg parent "$fanout_parent_id" '{
+    caseKey: "agent-child-a-retry",
+    title: "Duplicate agent child A",
+    parentCaseId: $parent,
+    requestKey: "fanout:agent-child-a",
+    stageKey: "assets",
+    fields: { assetType: "changed" }
+  }')" "$agent_run_id")"
+if ! jq -e --arg id "$fanout_child_a_id" '.created == false and .case.id == $id and .case.title == "Agent child A"' >/dev/null <<<"$fanout_retry"; then
+  echo "Agent fan-out requestKey retry did not converge on the original child." >&2
+  echo "$fanout_retry" | jq . >&2
+  exit 1
+fi
+
+fanout_child_b="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
+  --arg parent "$fanout_parent_id" \
+  --arg blocker "$fanout_child_a_id" \
+  --argjson parentVersion "$fanout_parent_version" '{
+    caseKey: "agent-child-b",
+    title: "Agent child B",
+    parentCaseId: $parent,
+    requestKey: "fanout:agent-child-b",
+    stageKey: "assets",
+    blockedByCaseIds: [$blocker],
+    fields: { assetType: "social", briefedFromVersion: $parentVersion }
+  }')" "$agent_run_id")"
+require_json "$fanout_child_b" '.created == true and .case.requestKey == "fanout:agent-child-b"' "Agent fan-out child B did not create."
+fanout_child_b_id="$(jq -r '.case.id' <<<"$fanout_child_b")"
+fanout_child_b_detail="$(pc_json pipelines case get "$fanout_child_b_id")"
+if ! jq -e --arg blocker "$fanout_child_a_id" '.blockers | map(.blockedByCaseId) | index($blocker)' >/dev/null <<<"$fanout_child_b_detail"; then
+  echo "Agent child B did not retain blockedByCaseIds sibling sequencing." >&2
+  echo "$fanout_child_b_detail" | jq . >&2
+  exit 1
+fi
+
+set +e
+fanout_blocked_output="$(pc_json pipelines case transition "$fanout_child_b_id" --to published --expected-version 1 --reason "Try before sibling is terminal." 2>&1)"
+fanout_blocked_status=$?
+set -e
+if [[ "$fanout_blocked_status" -eq 0 || "$fanout_blocked_output" != *"code=blocked"* ]]; then
+  echo "Expected blockedByCaseIds sibling sequencing to fail with code=blocked." >&2
+  echo "$fanout_blocked_output" >&2
+  exit 1
+fi
+
+pc_json pipelines case transition "$fanout_child_a_id" --to published --expected-version 1 --reason "First fan-out child complete." >/dev/null
+set +e
+fanout_children_output="$(pc_json pipelines case transition "$fanout_parent_id" --to final_review --expected-version "$fanout_parent_version" --reason "Try before all fan-out children finish." 2>&1)"
+fanout_children_status=$?
+set -e
+if [[ "$fanout_children_status" -eq 0 || "$fanout_children_output" != *"code=children_not_terminal"* || "$fanout_children_output" != *"Agent child B"* ]]; then
+  echo "Expected requireChildrenTerminal to name the open child." >&2
+  echo "$fanout_children_output" >&2
+  exit 1
+fi
+pc_json pipelines case transition "$fanout_child_b_id" --to dropped --expected-version 1 --reason "Second fan-out child intentionally cancelled." >/dev/null
+pc_json pipelines case transition "$fanout_parent_id" --to final_review --expected-version "$fanout_parent_version" --reason "All fan-out children are terminal." >/dev/null
 
 release="$(pc_json pipelines ingest "$RELEASE_PIPELINE" \
   --case-key "release-${RUN_KEY}" \
@@ -393,7 +536,25 @@ require_json "$(pc_json pipelines case get "$blog_case")" '.stage.key == "final_
 
 blog_review_version="$(case_version "$blog_case")"
 pc_json pipelines case review "$blog_case" --approve --expected-version "$blog_review_version" >/dev/null
-pc_json pipelines case transition "$blog_case" --to published --expected-version "$((blog_review_version + 1))" --reason "Approved package published." >/dev/null
+blog_publishing_version="$(case_version "$blog_case")"
+pc_json pipelines case edit "$blog_case" \
+  --expected-version "$blog_publishing_version" \
+  --fields-json '{"contentType":"blog","typedWorkRefs":{"draftPath":"workspaces/release/blog.md"},"briefedFromVersion":null,"materialChange":"new-positioning","postApprovalChange":true}' >/dev/null
+blog_changed_after_review_version="$(case_version "$blog_case")"
+set +e
+stale_publish_output="$(pc_json pipelines case transition "$blog_case" --to published --expected-version "$blog_changed_after_review_version" --reason "Try to publish after material post-approval edit." 2>&1)"
+stale_publish_status=$?
+set -e
+if [[ "$stale_publish_status" -eq 0 || "$stale_publish_output" != *"code=review_outdated"* ]]; then
+  echo "Expected material post-approval edit to fail terminal publish with code=review_outdated." >&2
+  echo "$stale_publish_output" >&2
+  exit 1
+fi
+pc_json pipelines case transition "$blog_case" --to final_review --expected-version "$blog_changed_after_review_version" --reason "Send changed package back through review." >/dev/null
+blog_rereview_version="$(case_version "$blog_case")"
+pc_json pipelines case review "$blog_case" --approve --expected-version "$blog_rereview_version" >/dev/null
+blog_reapproved_version="$(case_version "$blog_case")"
+pc_json pipelines case transition "$blog_case" --to published --expected-version "$blog_reapproved_version" --reason "Re-reviewed package published." >/dev/null
 
 pc_json pipelines case transition "$changelog_case" --to final_review --expected-version 1 --reason "Draft ready for final review." >/dev/null
 pc_json pipelines case review "$changelog_case" --request-changes --reason "Tighten the framing before publishing." --expected-version 2 >/dev/null
@@ -406,7 +567,18 @@ pc_json pipelines case transition "$changelog_case" --to final_review --expected
 pc_json pipelines case review "$changelog_case" --approve --expected-version 5 >/dev/null
 pc_json pipelines case transition "$changelog_case" --to published --expected-version 6 --reason "Published after request-changes loop." >/dev/null
 
-pc_json pipelines case transition "$tweet_case" --to final_review --expected-version 1 --reason "Blog blocker is now done." >/dev/null
+set +e
+tweet_drift_output="$(pc_json pipelines case transition "$tweet_case" --to final_review --expected-version 1 --reason "Try before acknowledging upstream blog drift." 2>&1)"
+tweet_drift_status=$?
+set -e
+if [[ "$tweet_drift_status" -eq 0 || "$tweet_drift_output" != *"code=unresolved_drift"* ]]; then
+  echo "Expected tweet transition to fail with code=unresolved_drift before acknowledgement." >&2
+  echo "$tweet_drift_output" >&2
+  exit 1
+fi
+tweet_ack="$(api_json POST "/api/cases/$tweet_case/acknowledge-drift" '{"expectedVersion":1}')"
+require_json "$tweet_ack" '.acknowledged == true' "Tweet drift acknowledgement did not record an acknowledgement event."
+pc_json pipelines case transition "$tweet_case" --to final_review --expected-version 1 --reason "Blog blocker is done and upstream drift is acknowledged." >/dev/null
 pc_json pipelines case review "$tweet_case" --reject --reason "Drop this tweet; blog already covers the announcement." --expected-version 2 >/dev/null
 
 require_json "$(pc_json pipelines case get "$feature_main")" '.stage.key == "covered" and .case.terminalKind == "done"' "Feature case should be covered after content children are terminal."
