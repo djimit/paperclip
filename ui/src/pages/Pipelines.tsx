@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, GitBranch, Hexagon, Info, Loader2, MessageSquare, MoreHorizontal, Plus, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowUpDown, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, GitBranch, Hexagon, Info, List, ListTree, Loader2, MessageSquare, MoreHorizontal, Plus, Search, Trash2, X } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -30,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Link, useLocation, useNavigate, useParams } from "@/lib/router";
@@ -222,6 +223,46 @@ function pipelineActivityTime(pipeline: PipelineListItem) {
   return pipeline.lastActivityAt ?? pipeline.updatedAt ?? pipeline.createdAt ?? null;
 }
 
+type PipelineSortField = "name" | "activity" | "review" | "inMotion" | "openItems";
+type PipelineSortDir = "asc" | "desc";
+
+const PIPELINE_SORT_OPTIONS: ReadonlyArray<readonly [PipelineSortField, string]> = [
+  ["name", "Name"],
+  ["activity", "Last activity"],
+  ["review", "Most to review"],
+  ["inMotion", "Most in motion"],
+  ["openItems", "Most open items"],
+];
+
+function comparePipelinesBySort(field: PipelineSortField, dir: PipelineSortDir) {
+  const factor = dir === "asc" ? 1 : -1;
+  return (left: PipelineListItem, right: PipelineListItem) => {
+    let cmp = 0;
+    switch (field) {
+      case "name":
+        cmp = left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+        break;
+      case "activity": {
+        const leftTime = new Date(pipelineActivityTime(left) ?? 0).getTime() || 0;
+        const rightTime = new Date(pipelineActivityTime(right) ?? 0).getTime() || 0;
+        cmp = leftTime - rightTime;
+        break;
+      }
+      case "review":
+        cmp = pipelineAttentionCount(left) - pipelineAttentionCount(right);
+        break;
+      case "inMotion":
+        cmp = pipelineInMotionCount(left) - pipelineInMotionCount(right);
+        break;
+      case "openItems":
+        cmp = pipelineOpenItemCount(left) - pipelineOpenItemCount(right);
+        break;
+    }
+    if (cmp === 0) cmp = left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+    return cmp * factor;
+  };
+}
+
 function compareByInputOrder(order: Map<string, number>) {
   return (left: PipelineListItem, right: PipelineListItem) =>
     (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.id) ?? Number.MAX_SAFE_INTEGER);
@@ -374,20 +415,35 @@ export function PipelinesIndexTable({
   onSearchChange,
 }: PipelinesIndexTableProps) {
   const [collapsedPipelineIds, setCollapsedPipelineIds] = useState<Set<string>>(() => new Set());
+  const [sortField, setSortField] = useState<PipelineSortField>("name");
+  const [sortDir, setSortDir] = useState<PipelineSortDir>("asc");
   const filteredPipelines = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return pipelines;
     return pipelines.filter((pipeline) => pipeline.name.toLowerCase().includes(q));
   }, [pipelines, search]);
+  const sortedPipelines = useMemo(
+    () => [...filteredPipelines].sort(comparePipelinesBySort(sortField, sortDir)),
+    [filteredPipelines, sortField, sortDir],
+  );
   const effectiveViewMode = connectionsAvailable ? viewMode : "flat";
   const rows = useMemo(
     () =>
-      buildPipelineTableRows(filteredPipelines, {
+      buildPipelineTableRows(sortedPipelines, {
         viewMode: effectiveViewMode,
         collapsedPipelineIds,
       }),
-    [collapsedPipelineIds, effectiveViewMode, filteredPipelines],
+    [collapsedPipelineIds, effectiveViewMode, sortedPipelines],
   );
+
+  const selectSort = (field: PipelineSortField) => {
+    if (sortField === field) {
+      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDir(field === "name" ? "asc" : "desc");
+    }
+  };
 
   const togglePipeline = (pipelineId: string) => {
     setCollapsedPipelineIds((current) => {
@@ -411,35 +467,64 @@ export function PipelinesIndexTable({
             className="h-10 pl-9"
           />
         </label>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>View</span>
-          <div className="inline-flex overflow-hidden rounded-md border border-border bg-background">
+        <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center overflow-hidden rounded-md border border-border">
             <button
               type="button"
               className={cn(
-                "min-w-20 px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                "p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                 effectiveViewMode === "nested" && connectionsAvailable
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:bg-accent/50",
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
               )}
               disabled={!connectionsAvailable}
               onClick={() => onViewModeChange("nested")}
+              title="Nested view"
             >
-              Nested
+              <ListTree className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
               className={cn(
-                "min-w-20 border-l border-border px-4 py-2 text-sm font-semibold transition-colors",
+                "p-1.5 transition-colors",
                 effectiveViewMode === "flat"
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:bg-accent/50",
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
               )}
               onClick={() => onViewModeChange("flat")}
+              title="Flat list"
             >
-              Flat list
+              <List className="h-3.5 w-3.5" />
             </button>
           </div>
+
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Sort">
+                <ArrowUpDown className="h-3.5 w-3.5" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-48 p-0">
+              <div className="space-y-0.5 p-2">
+                {PIPELINE_SORT_OPTIONS.map(([field, label]) => (
+                  <button
+                    key={field}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm",
+                      sortField === field ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/50",
+                    )}
+                    onClick={() => selectSort(field)}
+                  >
+                    <span>{label}</span>
+                    {sortField === field && (
+                      <span className="text-xs text-muted-foreground">{sortDir === "asc" ? "↑" : "↓"}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
@@ -654,7 +739,7 @@ function PipelinesIndex() {
   const connectionsAvailable = pipelinesHaveConnectionData(pipelines);
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
+    <div className="ml-auto max-w-6xl px-6 py-8">
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Work</p>
@@ -1187,7 +1272,7 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
   const activeCase = activeCaseId ? boardColumns.caseById.get(activeCaseId) ?? null : null;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 px-6 py-8">
+    <div className="w-full space-y-4 px-6 py-8">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Pipeline</p>

@@ -871,27 +871,6 @@ export function PipelineSettings() {
                 </div>
               </Section>
 
-              <Section title="Advanced identifiers">
-                <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                  <div>
-                    <dt className="text-muted-foreground">Pipeline ID</dt>
-                    <dd className="font-mono text-xs">{pipeline.id}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">Stage ID</dt>
-                    <dd className="font-mono text-xs">{selectedStage.id}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">Position</dt>
-                    <dd>{selectedStage.position}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">Kind</dt>
-                    <dd>{selectedStage.kind}</dd>
-                  </div>
-                </dl>
-              </Section>
-
               {saveStage.error ? <p className="text-sm text-destructive">{saveStage.error.message}</p> : null}
               <Button type="submit" disabled={saveStage.isPending || !stageName.trim() || reviewTargetsMissing}>
                 {saveStage.isPending ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
