@@ -45,6 +45,7 @@ vi.mock("@/lib/router", () => ({
   ),
   useNavigate: () => vi.fn(),
   useParams: () => ({ pipelineId: "pipeline-1" }),
+  useSearchParams: () => [new URLSearchParams(), vi.fn()],
 }));
 
 vi.mock("../context/CompanyContext", () => ({
