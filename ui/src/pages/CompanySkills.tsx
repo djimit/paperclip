@@ -2609,7 +2609,7 @@ function SkillDetailPage({
           {tabBody}
         </main>
 
-        <aside className="space-y-6 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+        <aside className="min-w-0 space-y-6 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
           <section>
             <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Attach to agent</div>
             <div className="space-y-2">
@@ -2640,10 +2640,10 @@ function SkillDetailPage({
                   <Link
                     key={skill.id}
                     to={skillRoute(skill.id)}
-                    className="block rounded-md px-2 py-1.5 text-sm text-muted-foreground no-underline hover:bg-accent/40 hover:text-foreground"
+                    className="block min-w-0 rounded-md px-2 py-1.5 text-sm text-muted-foreground no-underline hover:bg-accent/40 hover:text-foreground"
                   >
-                    <span className="block truncate font-medium">{skill.name}</span>
-                    <span className="block truncate text-xs">{skill.tagline ?? skill.description ?? skill.sourceLabel}</span>
+                    <span className="block line-clamp-1 break-words font-medium">{skill.name}</span>
+                    <span className="block line-clamp-2 break-words text-xs leading-snug">{skill.tagline ?? skill.description ?? skill.sourceLabel}</span>
                   </Link>
                 ))}
               </div>
