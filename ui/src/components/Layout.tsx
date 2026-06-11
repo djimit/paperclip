@@ -78,6 +78,9 @@ export function Layout() {
   const location = useLocation();
   const navigationType = useNavigationType();
   const isCompanySettingsRoute = location.pathname.includes("/company/settings");
+  // The Skills Store renders its own secondary (category) sidebar, so the main
+  // app nav collapses to its rail throughout the /skills section (PAP-10879).
+  const isSkillsRoute = /(^|\/)skills(\/|$)/.test(location.pathname);
   const onboardingTriggered = useRef(false);
   const lastMainScrollTop = useRef(0);
   const previousPathname = useRef<string | null>(null);
@@ -148,10 +151,11 @@ export function Layout() {
   // is active, but does NOT mutate the persisted preference. Clearing the force
   // on cleanup restores the user's expanded/collapsed choice when navigating
   // off the takeover route (PAP-10694).
+  const forceRailCollapsed = hasSecondarySidebar || isSkillsRoute;
   useLayoutEffect(() => {
-    setForceCollapsed(hasSecondarySidebar);
+    setForceCollapsed(forceRailCollapsed);
     return () => setForceCollapsed(false);
-  }, [hasSecondarySidebar, setForceCollapsed]);
+  }, [forceRailCollapsed, setForceCollapsed]);
 
   useEffect(() => {
     if (companiesLoading || onboardingTriggered.current) return;
