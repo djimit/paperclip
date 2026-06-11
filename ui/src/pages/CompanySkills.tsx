@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type SVGProps } from "react";
+import { useEffect, useMemo, useRef, useState, type SVGProps } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
@@ -97,6 +97,7 @@ import {
   Paperclip,
   Pause,
   Pencil,
+  Pin,
   Plus,
   Copy,
   RefreshCw,
@@ -1191,7 +1192,7 @@ export function DiscoveryGrid({
                 {sourceFilteredCards.length} {sourceFilteredCards.length === 1 ? "skill" : "skills"}
                 {activeCategory ? <span className="capitalize"> · {activeCategory}</span> : null}
               </p>
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]">
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
                 {sourceFilteredCards.map((card) => (
                   <SkillCard key={card.key} card={card} onOpen={onOpenCard} />
                 ))}
@@ -1435,7 +1436,7 @@ function NewSkillWizard({
           <Textarea
             value={draft.markdown}
             onChange={(event) => patchDraft({ markdown: event.target.value })}
-            className="min-h-[22rem] font-mono text-xs"
+            className="h-[clamp(14rem,45vh,28rem)] resize-y font-mono text-xs"
           />
         </div>
       ) : (
@@ -2604,6 +2605,19 @@ export function SkillDetailPage({
 }) {
   const [diffOpen, setDiffOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Top-level description is clamped to four lines; "View all" expands it. We
+  // only surface the toggle when the text actually overflows the clamp.
+  const descriptionRef = useRef<HTMLParagraphElement | null>(null);
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [descClamped, setDescClamped] = useState(false);
+  useEffect(() => {
+    const el = descriptionRef.current;
+    if (!el || descExpanded) return;
+    setDescClamped(el.scrollHeight - el.clientHeight > 1);
+  }, [detail?.description, detail?.tagline, detail?.id, descExpanded]);
+  useEffect(() => {
+    setDescExpanded(false);
+  }, [detail?.id]);
   const sortedVersions = [...versions].sort((a, b) => b.revisionNumber - a.revisionNumber);
   const [leftVersionId, setLeftVersionId] = useState<string | null>(null);
   const [rightVersionId, setRightVersionId] = useState<string | null>(null);
@@ -2638,6 +2652,17 @@ export function SkillDetailPage({
     : source.label;
   // Look up the richer agent record (icon, paused) for agents using this skill.
   const attachAgentMetaById = new Map(attachAgents.map((agent) => [agent.id, agent]));
+
+  // Sidebar provenance: where this skill came from (org / path), linked when the
+  // locator resolves to a URL (PAP-10907).
+  const sourceLocatorText = skill.sourcePath || skill.sourceLocator || null;
+  const sourceHref =
+    skill.homepageUrl
+    ?? (sourceLocatorText && /^(https?:\/\/|[\w.-]+\.[a-z]{2,}\/)/i.test(sourceLocatorText)
+      ? sourceLocatorText.startsWith("http")
+        ? sourceLocatorText
+        : `https://${sourceLocatorText}`
+      : null);
 
   function renderFilesBody() {
     return (
@@ -2886,7 +2911,7 @@ export function SkillDetailPage({
       <div className="border-b border-border px-4 py-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 items-start gap-3">
               <SkillCardIcon
                 card={{
                   key: detail.key,
@@ -2927,8 +2952,33 @@ export function SkillDetailPage({
                     <TooltipContent>Installed from {source.label}</TooltipContent>
                   </Tooltip>
                 </div>
+                {/* GitHub-style "by" attribution sits directly under the title. */}
+                {detail.authorName ? (
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    by <span className="text-foreground">{detail.authorName}</span>
+                  </p>
+                ) : null}
                 {subtitleText ? (
-                  <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{subtitleText}</p>
+                  <div className="mt-1 max-w-2xl">
+                    <p
+                      ref={descriptionRef}
+                      className={cn(
+                        "text-sm text-muted-foreground",
+                        !descExpanded && "line-clamp-4",
+                      )}
+                    >
+                      {subtitleText}
+                    </p>
+                    {descClamped ? (
+                      <button
+                        type="button"
+                        onClick={() => setDescExpanded((value) => !value)}
+                        className="mt-0.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        {descExpanded ? "Show less" : "View all"}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             </div>
@@ -2936,17 +2986,6 @@ export function SkillDetailPage({
               {detail.categories.slice(0, 4).map((category) => (
                 <SkillCategoryChip key={category} label={category} />
               ))}
-              {detail.sourceType === "github" ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <Github className="h-3 w-3" aria-hidden="true" />
-                      {currentPin ?? "untracked"}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>{currentPin ? `Source pin ${currentPin}` : "No source pin tracked"}</TooltipContent>
-                </Tooltip>
-              ) : null}
             </div>
           </div>
           {/* GitHub-style social proof, top-right: installs · stars · fork.
@@ -3055,6 +3094,36 @@ export function SkillDetailPage({
             </div>
           </section>
 
+          {/* Provenance: where this skill came from, with org/path linked when
+              available. Bundled/catalog skills surface their source label too
+              (PAP-10907). */}
+          <section>
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Source</div>
+            <div className="flex items-start gap-2 text-sm">
+              <SourceIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <div className="min-w-0">
+                <div className="text-foreground">{source.label}</div>
+                {sourceLocatorText ? (
+                  sourceHref ? (
+                    <a
+                      href={sourceHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-0.5 inline-flex max-w-full items-center gap-1 break-all text-xs text-muted-foreground no-underline transition-colors hover:text-foreground"
+                    >
+                      <span className="truncate">{sourceLocatorText}</span>
+                      <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+                    </a>
+                  ) : (
+                    <div className="mt-0.5 break-all text-xs text-muted-foreground">{sourceLocatorText}</div>
+                  )
+                ) : (
+                  <div className="mt-0.5 text-xs text-muted-foreground">{source.managedLabel}</div>
+                )}
+              </div>
+            </div>
+          </section>
+
           {/* Revision / update controls sit under Agents, above the config gear
               (PAP-10907 F). Only GitHub-sourced skills can pull updates. */}
           {detail.sourceType === "github" ? (
@@ -3062,7 +3131,12 @@ export function SkillDetailPage({
               <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Updates</div>
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="shrink-0 uppercase tracking-wide">Pin</span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Pin className="h-3.5 w-3.5 shrink-0" aria-label="Pinned source revision" />
+                    </TooltipTrigger>
+                    <TooltipContent>Pinned source revision</TooltipContent>
+                  </Tooltip>
                   <span className="truncate font-mono text-foreground">{currentPin ?? "untracked"}</span>
                 </div>
                 <Button variant="outline" size="sm" className="w-full" onClick={onCheckUpdates} disabled={checkUpdatesPending || updateStatusLoading}>
@@ -3613,6 +3687,22 @@ export function CompanySkills() {
       ...(routeSkillToken ? [{ label: "Detail" }] : []),
     ]);
   }, [routeSkillToken, setBreadcrumbs]);
+
+  // The old split catalog view no longer exists — bundled/catalog skills live in
+  // the discovery grid and install dialog now. Strip legacy `view=catalog` /
+  // `catalog` params so stale deep links land on the new surface (PAP-10907).
+  useEffect(() => {
+    if (!searchParams.has("view") && !searchParams.has("catalog")) return;
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("view");
+        next.delete("catalog");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [searchParams, setSearchParams]);
 
   const skillsQuery = useQuery({
     queryKey: queryKeys.companySkills.list(selectedCompanyId ?? ""),
@@ -4203,16 +4293,19 @@ export function CompanySkills() {
     importSkill.mutate(trimmedSource);
   }
 
-  // Opening a card drops out of the discovery grid: installed skills go to their
-  // detail route, catalog-only skills open the catalog detail surface.
+  // Opening a card stays inside the new store: installed skills go to their
+  // detail route; catalog/bundled skills open the install dialog inline. The
+  // legacy split catalog view is gone (PAP-10907).
   function openDiscoveryCard(card: DiscoveryCard) {
     if (card.skillId) {
       navigate(routeForSkillId(card.skillId));
       return;
     }
     if (card.catalogRef) {
-      setViewParam("catalog");
-      selectCatalog(card.catalogRef);
+      const catalogSkill = (catalogListQuery.data ?? []).find(
+        (entry) => entry.id === card.catalogRef || entry.key === card.key,
+      );
+      if (catalogSkill) openInstallDialog(catalogSkill);
     }
   }
 
@@ -4331,7 +4424,7 @@ export function CompanySkills() {
       />
 
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>{createDraft.forkedFromSkillId ? "Fork skill" : "Create a new skill"}</DialogTitle>
             <DialogDescription>
