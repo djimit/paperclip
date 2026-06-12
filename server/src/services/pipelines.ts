@@ -35,7 +35,7 @@ export const PIPELINE_CASE_EVENTS_MAX_LIMIT = 100;
 export const PIPELINE_CONTEXT_PACK_EVENT_LIMIT = 20;
 
 const DEFAULT_STAGES = [
-  { key: "intake", name: "Intake", kind: "open", position: 100 },
+  { key: "intake", name: "Intake", kind: "working", position: 100 },
   { key: "in_progress", name: "In progress", kind: "working", position: 200 },
   {
     key: "review",
@@ -60,6 +60,7 @@ export type PipelineActor =
   | { type: "system" };
 
 export type PipelineStageKind = "open" | "working" | "review" | "done" | "cancelled";
+type CanonicalPipelineStageKind = Exclude<PipelineStageKind, "open">;
 
 export type PipelineStageConfig = Record<string, unknown> & {
   autonomy?: "manual" | "suggest" | "auto";
@@ -109,6 +110,28 @@ type PipelineDb = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 function nowDate() {
   return new Date();
+}
+
+function normalizeStageKind(kind: PipelineStageKind | string): CanonicalPipelineStageKind {
+  if (kind === "open") return "working";
+  if (kind === "working" || kind === "review" || kind === "done" || kind === "cancelled") return kind;
+  throw unprocessable("Pipeline stage kind must be working, review, done, or cancelled", { code: "validation" });
+}
+
+function withDefaultWorkingChildrenGateConfig(
+  stage: { kind: PipelineStageKind | string; config?: PipelineStageConfig | null },
+  nextStageKey?: string | null,
+): PipelineStageConfig {
+  const kind = normalizeStageKind(stage.kind);
+  const config = normalizeStageConfig(kind, stage.config);
+  if (kind !== "working") return config;
+  return {
+    ...config,
+    requireChildrenTerminal: config.requireChildrenTerminal ?? true,
+    ...(config.autoAdvanceOnChildrenTerminal === undefined && nextStageKey
+      ? { autoAdvanceOnChildrenTerminal: nextStageKey }
+      : {}),
+  };
 }
 
 function routineActorPatch(actor: PipelineActor) {
@@ -1975,16 +1998,20 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       actor: PipelineActor;
     }) {
       return db.transaction(async (tx) => {
-        const stageInputs = input.stages?.length
+        const stageInputsBase = input.stages?.length
           ? input.stages.map((stage, index) => ({
             ...stage,
+            kind: normalizeStageKind(stage.kind),
             position: stage.position ?? (index + 1) * 100,
-            config: normalizeStageConfig(stage.kind, stage.config),
           }))
           : DEFAULT_STAGES.map((stage) => ({
             ...stage,
-            config: normalizeStageConfig(stage.kind, "config" in stage ? stage.config : {}),
+            kind: normalizeStageKind(stage.kind),
           }));
+        const stageInputs = stageInputsBase.map((stage) => ({
+          ...stage,
+          config: normalizeStageConfig(stage.kind, "config" in stage ? stage.config : {}),
+        }));
         const stageKeys = new Set(stageInputs.map((stage) => stage.key));
         for (const stage of stageInputs) {
           assertReviewTargetsInSet(stage.kind, stage.config, stageKeys);
@@ -2069,9 +2096,19 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
     }) {
       await getPipelineOrThrow(db, input.companyId, input.pipelineId);
       const config = normalizeStageConfig(input.kind, input.config);
+      const kind = normalizeStageKind(input.kind);
       await validateStageTargets(input.companyId, input.pipelineId, input.kind, config);
       await validateStageAutomationConfig(input.companyId, config);
       return db.transaction(async (tx) => {
+        const [nextStage] = await tx
+          .select({ key: pipelineStages.key })
+          .from(pipelineStages)
+          .where(and(eq(pipelineStages.pipelineId, input.pipelineId), sql`${pipelineStages.position} >= ${input.position}`))
+          .orderBy(asc(pipelineStages.position), asc(pipelineStages.createdAt))
+          .limit(1);
+        const nextConfig = input.kind === "open"
+          ? config
+          : withDefaultWorkingChildrenGateConfig({ kind, config }, nextStage?.key ?? null);
         await tx
           .update(pipelineStages)
           .set({
@@ -2088,12 +2125,12 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
             pipelineId: input.pipelineId,
             key: input.key,
             name: input.name,
-            kind: input.kind,
+            kind,
             position: input.position,
-            config,
+            config: nextConfig,
           })
           .returning();
-        const routineId = stageAutomationRoutineIdFromConfig(config);
+        const routineId = stageAutomationRoutineIdFromConfig(nextConfig);
         if (routineId) {
           await stampPipelineAutomationRoutine(tx, {
             companyId: input.companyId,
@@ -2121,7 +2158,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
     }) {
       await getPipelineOrThrow(db, input.companyId, input.pipelineId);
       const existing = await getStageOrThrow(db, input.pipelineId, input.stageId);
-      const kind = input.patch.kind ?? existing.kind;
+      const kind = normalizeStageKind(input.patch.kind ?? existing.kind);
       const previousRoutineId = stageAutomationRoutineIdFromConfig(stageConfig(existing));
       const automationRequest = input.patch.config !== undefined
         ? readStageAutomationRequest(input.patch.config)

@@ -118,6 +118,43 @@ describeEmbeddedPostgres("pipelineService", () => {
     }, {});
   }
 
+  it("creates working stages for default and legacy-open inputs, and defaults child gates on new working stages", async () => {
+    const { company, pipeline, byKey } = await seedPipeline();
+    const intake = byKey.get("intake")!;
+    const inProgress = byKey.get("in_progress")!;
+    expect(intake.kind).toBe("working");
+    expect(inProgress.kind).toBe("working");
+
+    const legacyAlias = await svc.createStage({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      key: "legacy_alias",
+      name: "Legacy alias",
+      kind: "open",
+      position: 250,
+      actor: userActor,
+    });
+    expect(legacyAlias.kind).toBe("working");
+    expect(legacyAlias.config).not.toMatchObject({
+      requireChildrenTerminal: true,
+      autoAdvanceOnChildrenTerminal: "review",
+    });
+
+    const workingStage = await svc.createStage({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      key: "new_working",
+      name: "New working",
+      kind: "working",
+      position: 260,
+      actor: userActor,
+    });
+    expect(workingStage.config).toMatchObject({
+      requireChildrenTerminal: true,
+      autoAdvanceOnChildrenTerminal: "review",
+    });
+  });
+
   async function eventCount(caseId: string) {
     const [{ count }] = await db
       .select({ count: sql<number>`count(*)::int` })

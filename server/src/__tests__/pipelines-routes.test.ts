@@ -137,6 +137,7 @@ describeEmbeddedPostgres("pipeline routes", () => {
       .expect(201);
     const pipelineId = createdPipeline.body.id;
     const stageId = createdPipeline.body.stages[0].id;
+    expect(createdPipeline.body.stages[0].kind).toBe("working");
 
     await http.get(`/api/companies/${company.id}/pipelines`).expect(200);
     await http.get(`/api/pipelines/${pipelineId}`).expect(200);
@@ -146,6 +147,11 @@ describeEmbeddedPostgres("pipeline routes", () => {
       .send({ key: "qa", name: "QA", kind: "working", position: 300 })
       .expect(201);
     await http.patch(`/api/pipelines/${pipelineId}/stages/${qaStage.body.id}`).send({ name: "QA pass" }).expect(200);
+    const legacyAliasStage = await http
+      .post(`/api/pipelines/${pipelineId}/stages`)
+      .send({ key: "legacy_alias", name: "Legacy alias", kind: "open", position: 350 })
+      .expect(201);
+    expect(legacyAliasStage.body.kind).toBe("working");
     await http
       .put(`/api/pipelines/${pipelineId}/transitions`)
       .send({ enforceTransitions: false, transitions: [{ fromStageKey: "intake", toStageKey: "review" }] })

@@ -902,7 +902,7 @@ export function createUnassignedStage(pipelineId: string): PipelineStage {
     pipelineId,
     key: "__unassigned",
     name: UNASSIGNED_STAGE_NAME,
-    kind: "open",
+    kind: "working",
     position: Number.MAX_SAFE_INTEGER,
     config: {},
   };

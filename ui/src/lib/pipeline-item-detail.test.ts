@@ -12,7 +12,7 @@ import {
 } from "./pipeline-item-detail";
 
 const stages: PipelineStage[] = [
-  { id: "stage-intake", pipelineId: "pipeline-1", key: "intake", name: "Intake", kind: "open", position: 100 },
+  { id: "stage-intake", pipelineId: "pipeline-1", key: "intake", name: "Intake", kind: "working", position: 100 },
   { id: "stage-review", pipelineId: "pipeline-1", key: "review", name: "Review", kind: "review", position: 200 },
   { id: "stage-done", pipelineId: "pipeline-1", key: "done", name: "Done", kind: "done", position: 900 },
 ];

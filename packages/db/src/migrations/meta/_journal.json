@@ -743,6 +743,13 @@
       "when": 1781222100000,
       "tag": "0105_pipeline_drift_acknowledged_event",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1781281200000,
+      "tag": "0106_pipeline_stage_working_primitives",
+      "breakpoints": true
     }
   ]
 }

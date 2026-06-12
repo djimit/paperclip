@@ -2,7 +2,8 @@ import { z } from "zod";
 
 const routineVariableLikeNameSchema = z.string().trim().regex(/^[A-Za-z][A-Za-z0-9_]*$/);
 
-export const pipelineStageKindSchema = z.enum(["open", "working", "review", "done", "cancelled"]);
+export const pipelineStageKindSchema = z.enum(["working", "review", "done", "cancelled"]);
+export const legacyPipelineStageKindSchema = z.enum(["open", "working", "review", "done", "cancelled"]);
 
 export const pipelineStageApproverSchema = z.object({
   kind: z.enum(["any_human", "user", "agent"]).optional().default("any_human"),

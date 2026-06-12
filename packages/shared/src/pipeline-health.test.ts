@@ -34,7 +34,7 @@ function stage(partial: Partial<PipelineHealthStageInput>): PipelineHealthStageI
     id: "stage-1",
     key: "intake",
     name: "Intake",
-    kind: "open",
+    kind: "working",
     config: {},
     instructionsBody: "",
     ...partial,

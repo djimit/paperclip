@@ -83,7 +83,7 @@ function makePipeline(): PipelineDetail {
         pipelineId: "pipeline-1",
         key: "intake",
         name: "Intake",
-        kind: "open",
+        kind: "working",
         position: 100,
         config: {
           variables: [
@@ -277,13 +277,9 @@ describe("PipelineSettings", () => {
     expect(container.textContent).not.toContain("Require approval");
     expect(container.textContent).not.toContain("Any human");
 
-    const kindSelect = Array.from(container.querySelectorAll("select")).find((select) =>
-      Array.from(select.options).some((option) => option.value === "review"),
-    )!;
-
+    const reviewKind = container.querySelector<HTMLInputElement>('input[name="stage-kind"][value="review"]')!;
     flushSync(() => {
-      kindSelect.value = "review";
-      kindSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      reviewKind.click();
     });
 
     expect(container.querySelector('[aria-label="Approval picker"]')).toBeNull();

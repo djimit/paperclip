@@ -22,6 +22,7 @@ import {
   Play,
   Plus,
   Save,
+  SlidersHorizontal,
   Trash2,
 } from "lucide-react";
 import { agentsApi } from "../api/agents";
@@ -65,8 +66,9 @@ import { cn, relativeTime } from "../lib/utils";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/router";
 import { StageHealthWarnings } from "../components/PipelineHealthWarnings";
 
-type StageSectionKey = "overview" | "instructions" | "secrets" | "runs" | "activity" | "history";
+type StageSectionKey = "overview" | "instructions" | "advanced" | "secrets" | "runs" | "activity" | "history";
 type ApproverKind = "any_human" | "user" | "agent";
+type EditableStageKind = "working" | "review" | "done" | "cancelled";
 
 type StageConfig = {
   // Stage instruction variables are stored in the routine variable shape
@@ -91,6 +93,8 @@ type StageConfig = {
   rejectToStageKey?: string;
   requestChangesToStageKey?: string;
   requireRejectReason?: boolean;
+  requireChildrenTerminal?: boolean;
+  autoAdvanceOnChildrenTerminal?: string;
   [key: string]: unknown;
 };
 
@@ -104,6 +108,7 @@ const STAGE_NAV_GROUPS: Array<{
       { id: "overview", label: "Overview", icon: Circle },
       { id: "instructions", label: "Automation", icon: LayoutGrid },
       { id: "secrets", label: "Secrets", icon: KeyRound },
+      { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
     ],
   },
   {
@@ -123,7 +128,31 @@ const STAGE_SECTION_TITLES: Record<StageSectionKey, string> = {
   runs: "Runs",
   activity: "Activity",
   history: "History",
+  advanced: "Advanced",
 };
+
+const STAGE_KIND_OPTIONS: Array<{ value: EditableStageKind; label: string; description: string }> = [
+  {
+    value: "working",
+    label: "Working",
+    description: "Items wait here while work happens. An agent or a person moves them forward.",
+  },
+  {
+    value: "review",
+    label: "Review",
+    description: "Someone has to approve before items leave. Use this when a person or an agent has to say yes or no.",
+  },
+  {
+    value: "done",
+    label: "Done",
+    description: "The final step. Items that reach here are finished.",
+  },
+  {
+    value: "cancelled",
+    label: "Cancelled",
+    description: "The dead end. Items that reach here are dropped or rejected.",
+  },
+];
 
 /** Per-stage instructions document key — keyed by stage id so it survives renames. */
 function stageInstructionsKey(stageId: string) {
@@ -225,6 +254,8 @@ type StageFormValues = {
   rejectTarget: string;
   requestChangesTarget: string;
   requireRejectReason: boolean;
+  requireChildrenTerminal: boolean;
+  autoAdvanceOnChildrenTerminal: string;
   transitionTargetIds: string[];
 };
 
@@ -238,7 +269,7 @@ function computeStageForm(
   const automation = stageAutomation(stage);
   return {
     name: stage.name,
-    kind: stage.kind,
+    kind: canonicalStageKind(stage.kind),
     newEntriesDisabled: stageNewEntriesDisabled(stage),
     disableReason: config.disabledReason ?? "",
     assigneeAgentId: automation.assigneeAgentId,
@@ -248,6 +279,9 @@ function computeStageForm(
     rejectTarget: config.rejectToStageKey ?? "",
     requestChangesTarget: config.requestChangesToStageKey ?? "",
     requireRejectReason: config.requireRejectReason ?? true,
+    requireChildrenTerminal: config.requireChildrenTerminal === true,
+    autoAdvanceOnChildrenTerminal:
+      typeof config.autoAdvanceOnChildrenTerminal === "string" ? config.autoAdvanceOnChildrenTerminal : "",
     transitionTargetIds: transitions
       .filter((transition) => transition.fromStageId === stage.id)
       .map((transition) => transition.toStageId)
@@ -297,6 +331,28 @@ function sortedStages(pipeline: PipelineDetail | null | undefined) {
   return [...(pipeline?.stages ?? [])].sort((left, right) => left.position - right.position);
 }
 
+function canonicalStageKind(kind: string | null | undefined): EditableStageKind {
+  if (kind === "review" || kind === "done" || kind === "cancelled") return kind;
+  return "working";
+}
+
+function nextStageByPosition(stages: PipelineStage[], stage: PipelineStage | null | undefined) {
+  if (!stage) return null;
+  return stages.find((candidate) => candidate.id !== stage.id && candidate.position > stage.position) ?? null;
+}
+
+function nextStageForInsert(stages: PipelineStage[], position: number) {
+  return stages.find((stage) => stage.position >= position) ?? null;
+}
+
+function stageNavGroups(kind: string): typeof STAGE_NAV_GROUPS {
+  if (!isPipelineTerminalStageKind(kind)) return STAGE_NAV_GROUPS;
+  return STAGE_NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => item.id !== "instructions" && item.id !== "advanced"),
+  })).filter((group) => group.items.length > 0);
+}
+
 function defaultReviewTarget(stages: PipelineStage[], selectedStageId: string | null, kind: string) {
   const match = stages.find((stage) => stage.kind === kind && stage.id !== selectedStageId);
   if (match) return match.key;
@@ -344,11 +400,14 @@ function FieldRow({
 
 function StageSubSidebar({
   activeSection,
+  stageKind,
   onSectionChange,
 }: {
   activeSection: StageSectionKey;
+  stageKind: string;
   onSectionChange: (section: StageSectionKey) => void;
 }) {
+  const groups = stageNavGroups(stageKind);
   return (
     <>
       <div className="md:hidden">
@@ -359,7 +418,7 @@ function StageSubSidebar({
           onChange={(event) => onSectionChange(event.target.value as StageSectionKey)}
           className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
         >
-          {STAGE_NAV_GROUPS.map((group) => (
+          {groups.map((group) => (
             <optgroup key={group.label} label={group.label}>
               {group.items.map((item) => (
                 <option key={item.id} value={item.id}>{item.label}</option>
@@ -372,7 +431,7 @@ function StageSubSidebar({
         aria-label="Stage sections"
         className="sticky top-14 hidden max-h-[calc(100dvh-3.5rem)] w-52 shrink-0 flex-col gap-4 self-start overflow-y-auto border-r border-border bg-sidebar/30 px-3 py-4 md:flex"
       >
-        {STAGE_NAV_GROUPS.map((group) => (
+        {groups.map((group) => (
           <div key={group.label} className="flex flex-col gap-0.5">
             <p className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
               {group.label}
@@ -467,6 +526,8 @@ export function PipelineSettings() {
   const [rejectTarget, setRejectTarget] = useState("");
   const [requestChangesTarget, setRequestChangesTarget] = useState("");
   const [requireRejectReason, setRequireRejectReason] = useState(true);
+  const [requireChildrenTerminal, setRequireChildrenTerminal] = useState(false);
+  const [autoAdvanceOnChildrenTerminal, setAutoAdvanceOnChildrenTerminal] = useState("");
   const [transitionTargets, setTransitionTargets] = useState<Set<string>>(() => new Set());
   const [deleteStageDialogOpen, setDeleteStageDialogOpen] = useState(false);
   const [deleteMoveTargetStageId, setDeleteMoveTargetStageId] = useState("");
@@ -637,6 +698,8 @@ export function PipelineSettings() {
     setRejectTarget(form.rejectTarget);
     setRequestChangesTarget(form.requestChangesTarget);
     setRequireRejectReason(form.requireRejectReason);
+    setRequireChildrenTerminal(form.requireChildrenTerminal);
+    setAutoAdvanceOnChildrenTerminal(form.autoAdvanceOnChildrenTerminal);
     setTransitionTargets(new Set(form.transitionTargetIds));
   }, [pipeline?.transitions, selectedStage]);
 
@@ -683,7 +746,13 @@ export function PipelineSettings() {
         approver: nextRequiresApproval && parsedApproval.kind !== "any_human"
           ? { kind: parsedApproval.kind, id: parsedApproval.id }
           : { kind: "any_human" },
+        requireChildrenTerminal,
       };
+      if (autoAdvanceOnChildrenTerminal) {
+        config.autoAdvanceOnChildrenTerminal = autoAdvanceOnChildrenTerminal;
+      } else {
+        delete config.autoAdvanceOnChildrenTerminal;
+      }
       // The approval model replaces the legacy reviewerKind input.
       delete config.reviewerKind;
       if (stageKind === "review") {
@@ -771,12 +840,17 @@ export function PipelineSettings() {
         ? stages.find((stage) => stage.position > afterStage.position) ?? null
         : null;
       const existingKeys = new Set(stages.map((stage) => stage.key));
+      const autoAdvanceTarget = nextStageForInsert(stages, insertPosition);
       const created = await pipelinesApi.createStage(pipelineId, {
         key: nextStageKey("New stage", existingKeys),
         name: "New stage",
         kind: "working",
         position: insertPosition,
-        config: { variables: [] },
+        config: {
+          variables: [],
+          requireChildrenTerminal: true,
+          ...(autoAdvanceTarget ? { autoAdvanceOnChildrenTerminal: autoAdvanceTarget.key } : {}),
+        },
       });
       if (afterStage) {
         const keyById = new Map(stages.map((stage) => [stage.id, stage.key]));
@@ -868,6 +942,9 @@ export function PipelineSettings() {
 
   const setStageKindWithDefaults = (kind: string) => {
     setStageKind(kind);
+    if (isPipelineTerminalStageKind(kind) && (activeStageSection === "instructions" || activeStageSection === "advanced")) {
+      setActiveStageSection("overview");
+    }
     if (kind === "review") {
       setApproveTarget((current) => current || defaultReviewTarget(stages, selectedStage?.id ?? null, "done"));
       setRejectTarget((current) => current || defaultReviewTarget(stages, selectedStage?.id ?? null, "cancelled"));
@@ -900,6 +977,7 @@ export function PipelineSettings() {
   const reviewTargetsMissing = stageKind === "review" && (!approveTarget || !rejectTarget);
   const otherStages = stages.filter((stage) => stage.id !== selectedStage?.id);
   const isReviewStage = stageKind === "review";
+  const defaultAutoAdvanceStage = nextStageByPosition(stages, selectedStage) ?? otherStages[0] ?? null;
 
   const savedStageForm = selectedStage
     ? computeStageForm(selectedStage, pipeline.transitions ?? [])
@@ -917,6 +995,8 @@ export function PipelineSettings() {
         rejectTarget,
         requestChangesTarget,
         requireRejectReason,
+        requireChildrenTerminal,
+        autoAdvanceOnChildrenTerminal,
         transitionTargetIds: [...transitionTargets].sort(),
       }
     : null;
@@ -1080,7 +1160,11 @@ export function PipelineSettings() {
               }}
             >
               <div className="flex flex-col gap-5 md:flex-row md:gap-0">
-                <StageSubSidebar activeSection={activeStageSection} onSectionChange={setActiveStageSection} />
+                <StageSubSidebar
+                  activeSection={activeStageSection}
+                  stageKind={stageKind}
+                  onSectionChange={setActiveStageSection}
+                />
                 <div className="min-w-0 flex-1 md:px-8">
                   <div className="mb-4 flex items-center justify-between gap-3">
                     <h2 className="text-lg font-semibold text-foreground">
@@ -1129,18 +1213,31 @@ export function PipelineSettings() {
                         <FieldRow label="Name">
                           <Input value={stageName} onChange={(event) => setStageName(event.target.value)} required />
                         </FieldRow>
-                        <FieldRow label="Kind">
-                          <select
-                            value={stageKind}
-                            onChange={(event) => setStageKindWithDefaults(event.target.value)}
-                            className="h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 text-sm"
-                          >
-                            <option value="open">Open</option>
-                            <option value="working">Working</option>
-                            <option value="review">Review</option>
-                            <option value="done">Done</option>
-                            <option value="cancelled">Cancelled</option>
-                          </select>
+                        <FieldRow label="Step type">
+                          <div className="space-y-2">
+                            {STAGE_KIND_OPTIONS.map((option) => (
+                              <label
+                                key={option.value}
+                                className={cn(
+                                  "flex gap-3 rounded-md border border-border px-3 py-2.5 text-sm transition-colors",
+                                  stageKind === option.value && "border-foreground bg-accent/40",
+                                )}
+                              >
+                                <input
+                                  type="radio"
+                                  name="stage-kind"
+                                  value={option.value}
+                                  checked={stageKind === option.value}
+                                  onChange={() => setStageKindWithDefaults(option.value)}
+                                  className="mt-1"
+                                />
+                                <span className="min-w-0">
+                                  <span className="block font-medium text-foreground">{option.label}</span>
+                                  <span className="mt-0.5 block text-muted-foreground">{option.description}</span>
+                                </span>
+                              </label>
+                            ))}
+                          </div>
                         </FieldRow>
 
                         {stageKind === "review" ? (
@@ -1219,7 +1316,7 @@ export function PipelineSettings() {
                           </FieldRow>
                         ) : null}
 
-                        {isReviewStage ? null : (
+                        {isReviewStage || isPipelineTerminalStageKind(stageKind) ? null : (
                           <FieldRow label="Allowed next steps">
                             <div className="space-y-2">
                               {otherStages.map((stage) => {
@@ -1348,6 +1445,65 @@ export function PipelineSettings() {
                   {activeStageSection === "secrets" ? (
                     <div className="w-full max-w-3xl">
                       <EmptyState icon={KeyRound} message="No stage secrets configured." />
+                    </div>
+                  ) : null}
+
+                  {activeStageSection === "advanced" && !isPipelineTerminalStageKind(stageKind) ? (
+                    <div className="w-full max-w-3xl">
+                      <div className="divide-y divide-border border-b border-border">
+                        <div className="py-3">
+                          <h3 className="text-sm font-semibold text-foreground">Children</h3>
+                        </div>
+                        <FieldRow label="Block children">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-3">
+                              <ToggleSwitch
+                                checked={requireChildrenTerminal}
+                                onCheckedChange={setRequireChildrenTerminal}
+                              />
+                              <span className="text-sm font-medium text-foreground">
+                                Block until all child items are done or cancelled
+                              </span>
+                            </div>
+                            <p className="max-w-2xl text-sm text-muted-foreground">
+                              When on, this step can't move forward while any child item is still open. When off, items can move through even with open children.
+                            </p>
+                          </div>
+                        </FieldRow>
+                        <FieldRow label="Advance children">
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-3">
+                              <ToggleSwitch
+                                checked={Boolean(autoAdvanceOnChildrenTerminal)}
+                                onCheckedChange={(checked) => {
+                                  setAutoAdvanceOnChildrenTerminal(checked ? autoAdvanceOnChildrenTerminal || defaultAutoAdvanceStage?.key || "" : "");
+                                }}
+                              />
+                              <span className="text-sm font-medium text-foreground">
+                                Advance when the last child is done
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[5rem_240px]">
+                              <span className="text-sm font-medium text-muted-foreground">Move to</span>
+                              <select
+                                aria-label="Move to stage when children finish"
+                                value={autoAdvanceOnChildrenTerminal}
+                                onChange={(event) => setAutoAdvanceOnChildrenTerminal(event.target.value)}
+                                disabled={!autoAdvanceOnChildrenTerminal}
+                                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+                              >
+                                <option value="">Choose a stage</option>
+                                {otherStages.map((stage) => (
+                                  <option key={stage.id} value={stage.key}>{stage.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <p className="max-w-2xl text-sm text-muted-foreground">
+                              When on and every child is done, this step moves the item forward automatically. When off, someone has to move it.
+                            </p>
+                          </div>
+                        </FieldRow>
+                      </div>
                     </div>
                   ) : null}
 

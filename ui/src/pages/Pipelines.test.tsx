@@ -239,7 +239,7 @@ const pipeline = {
   createdAt: "2026-06-10T12:00:00.000Z",
   updatedAt: "2026-06-10T12:00:00.000Z",
   stages: [
-    { id: "stage-intake", pipelineId: "pipeline-1", key: "intake", name: "Intake", kind: "open", position: 100 },
+    { id: "stage-intake", pipelineId: "pipeline-1", key: "intake", name: "Intake", kind: "working", position: 100 },
     { id: "stage-review", pipelineId: "pipeline-1", key: "review", name: "Review", kind: "review", position: 200 },
     { id: "stage-cancelled", pipelineId: "pipeline-1", key: "cancelled", name: "Removed", kind: "cancelled", position: 1000 },
   ],
@@ -428,7 +428,7 @@ describe("PipelineItemDetailView", () => {
           id: "item-1",
           title: "Release v0.42",
           pipeline: { id: "pipeline-1", key: "release", name: "Release" },
-          stage: { id: "stage-intake", key: "intake", name: "Intake", kind: "open" },
+          stage: { id: "stage-intake", key: "intake", name: "Intake", kind: "working" },
           childGroups: [
             {
               pipeline: { id: "pipeline-features", key: "feature", name: "Feature Content" },
