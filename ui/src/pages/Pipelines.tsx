@@ -1849,7 +1849,7 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
         </section>
       ) : null}
 
-      {childrenGate && waitingChildren.length > 0 ? (
+      {(childrenGate || (breakdown?.waitForPieces ?? false)) && waitingChildren.length > 0 ? (
         <section className="mb-5 border-y border-border bg-muted/20 py-4">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
