@@ -16,18 +16,14 @@ RELEASE_PIPELINE="release-coverage-${RUN_KEY}"
 FEATURE_PIPELINE="feature-content-${RUN_KEY}"
 CONTENT_PIPELINE="content-production-${RUN_KEY}"
 TMP_DIR="$(mktemp -d)"
-TEMP_AGENT_KEY_ID=""
 
 cleanup() {
-  if [[ -n "$TEMP_AGENT_KEY_ID" && -n "${agent_id:-}" ]]; then
-    pc_json token agent revoke "$TEMP_AGENT_KEY_ID" --agent "$agent_id" >/dev/null 2>&1 || true
-  fi
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
 
 pc_json() {
-  "${PC_CMD[@]}" "$@" --json -C "$PAPERCLIP_COMPANY_ID"
+  env -u PAPERCLIP_RUN_ID "${PC_CMD[@]}" "$@" --json -C "$PAPERCLIP_COMPANY_ID"
 }
 
 api_json() {
@@ -47,33 +43,13 @@ api_json() {
   fi
 }
 
-api_json_as() {
-  local token="$1"
-  local method="$2"
-  local path="$3"
-  local body="${4:-}"
-  local run_id="${5:-}"
-  local headers=(
-    -H "Authorization: Bearer $token"
-    -H "Content-Type: application/json"
-  )
-  if [[ -n "$run_id" ]]; then
-    headers+=(-H "X-Paperclip-Run-Id: $run_id")
-  fi
-  if [[ -n "$body" ]]; then
-    curl -sS -X "$method" "${headers[@]}" --data "$body" "${PAPERCLIP_API_URL%/}$path"
-  else
-    curl -sS -X "$method" "${headers[@]}" "${PAPERCLIP_API_URL%/}$path"
-  fi
-}
-
 pick_agent_id() {
   if [[ -n "${DRAFTING_AGENT_ID:-}" ]]; then
     echo "$DRAFTING_AGENT_ID"
     return
   fi
   local company_agent_id
-  company_agent_id="$(pc_json agent list 2>/dev/null | jq -r 'map(select(.status != "terminated"))[0].id // empty')"
+  company_agent_id="$(pc_json agent list 2>/dev/null | jq -r 'map(select(.status == "active" or .status == "idle" or .status == "running"))[0].id // empty')"
   if [[ -n "$company_agent_id" ]]; then
     echo "$company_agent_id"
     return
@@ -98,15 +74,6 @@ ensure_agent_id() {
   }')"
   created="$(pc_json agent create --payload-json "$payload")"
   jq -r '.id' <<<"$created"
-}
-
-create_agent_token() {
-  local agent="$1"
-  local key
-  key="$(pc_json token agent create --agent "$agent" --name "pipeline-smoke-$RUN_KEY")"
-  require_json "$key" '.key.id and .key.token' "Failed to create temporary agent API key."
-  TEMP_AGENT_KEY_ID="$(jq -r '.key.id' <<<"$key")"
-  jq -r '.key.token' <<<"$key"
 }
 
 require_json() {
@@ -134,26 +101,12 @@ case_stage() {
   pc_json pipelines case get "$1" | jq -r '.stage.key'
 }
 
-cat >"$TMP_DIR/release-stages.json" <<'JSON'
-[
-  {
-    "key": "intake",
-    "name": "Intake",
-    "kind": "open",
-    "position": 100,
-    "config": { "autoAdvanceOnChildrenTerminal": "covered" }
-  },
-  { "key": "covered", "name": "Covered", "kind": "done", "position": 900 },
-  { "key": "cancelled", "name": "Cancelled", "kind": "cancelled", "position": 1000 }
-]
-JSON
-
 cat >"$TMP_DIR/feature-stages.json" <<'JSON'
 [
   { "key": "suggesting", "name": "Suggesting", "kind": "open", "position": 100 },
   {
-    "key": "suggestion_review",
-    "name": "Suggestion Review",
+    "key": "feature_review",
+    "name": "Feature Review",
     "kind": "review",
     "position": 200,
     "config": {
@@ -228,8 +181,10 @@ cat >"$TMP_DIR/release-transitions.json" <<'JSON'
 {
   "enforceTransitions": true,
   "transitions": [
-    { "fromStageKey": "intake", "toStageKey": "covered", "label": "all features terminal" },
-    { "fromStageKey": "intake", "toStageKey": "cancelled", "label": "cancel release coverage" }
+    { "fromStageKey": "planning", "toStageKey": "producing", "label": "features selected" },
+    { "fromStageKey": "producing", "toStageKey": "covered", "label": "all features terminal" },
+    { "fromStageKey": "planning", "toStageKey": "cancelled", "label": "cancel release coverage" },
+    { "fromStageKey": "producing", "toStageKey": "cancelled", "label": "cancel release coverage" }
   ]
 }
 JSON
@@ -247,7 +202,6 @@ Convention: asset cases store `briefedFromVersion` in `fields` so assembly revie
 MD
 
 agent_id="$(ensure_agent_id)"
-agent_token="$(create_agent_token "$agent_id")"
 routine_payload="$(jq -cn --arg agentId "$agent_id" '{
   title: "Pipeline tutorial drafting routine",
   description: "Template convention: draft the content case from the Pipeline Case Context, keep typed work references in case fields, and suggest Drafting -> Assets when ready.",
@@ -259,13 +213,45 @@ routine_payload="$(jq -cn --arg agentId "$agent_id" '{
 routine="$(pc_json routine create --payload-json "$routine_payload")"
 routine_id="$(jq -r '.id' <<<"$routine")"
 
-release_pipeline="$(pc_json pipelines create --key "$RELEASE_PIPELINE" --name "Smoke Release Coverage $RUN_KEY" --stages-file "$TMP_DIR/release-stages.json")"
 feature_pipeline="$(pc_json pipelines create --key "$FEATURE_PIPELINE" --name "Smoke Feature Content $RUN_KEY" --stages-file "$TMP_DIR/feature-stages.json")"
 content_pipeline="$(pc_json pipelines create --key "$CONTENT_PIPELINE" --name "Smoke Content Production $RUN_KEY" --stages-file "$TMP_DIR/content-stages.json")"
-require_json "$release_pipeline" '.id and (.stages | length == 3)' "Release Coverage pipeline creation failed."
 require_json "$feature_pipeline" '.id and (.stages | length == 5)' "Feature Content pipeline creation failed."
 require_json "$content_pipeline" '.id and (.stages | length == 8)' "Content Production pipeline creation failed."
+feature_pipeline_id="$(jq -r '.id' <<<"$feature_pipeline")"
 content_pipeline_id="$(jq -r '.id' <<<"$content_pipeline")"
+
+jq -n --arg targetPipelineId "$feature_pipeline_id" '[
+  {
+    key: "planning",
+    name: "Planning",
+    kind: "working",
+    position: 100,
+    config: {
+      whatHappensHere: "Pick the features in this release worth covering; give each an angle and explain it in the case summary.",
+      breakdown: {
+        targetPipelineId: $targetPipelineId,
+        targetStageKey: "feature_review",
+        pieceNoun: "feature",
+        inheritFields: ["releaseTag"],
+        advanceTo: "producing",
+        waitForPieces: true,
+        whenFinishedMoveTo: "covered"
+      }
+    }
+  },
+  {
+    key: "producing",
+    name: "Producing",
+    kind: "working",
+    position: 300,
+    config: { requireChildrenTerminal: true, autoAdvanceOnChildrenTerminal: "covered" }
+  },
+  { key: "covered", name: "Covered", kind: "done", position: 900 },
+  { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 }
+]' >"$TMP_DIR/release-stages.json"
+
+release_pipeline="$(pc_json pipelines create --key "$RELEASE_PIPELINE" --name "Smoke Release Coverage $RUN_KEY" --stages-file "$TMP_DIR/release-stages.json")"
+require_json "$release_pipeline" '.id and (.stages | length == 4)' "Release Coverage pipeline creation failed."
 
 pc_json pipelines set-transitions "$RELEASE_PIPELINE" --file "$TMP_DIR/release-transitions.json" >/dev/null
 pc_json pipelines guidance put "$CONTENT_PIPELINE" --file "$TMP_DIR/content-guidance.md" >/dev/null
@@ -279,9 +265,8 @@ fanout_parent="$(pc_json pipelines ingest "$CONTENT_PIPELINE" \
   --fields-json '{"expectedChildren":2,"release":"v0.pipeline-smoke"}')"
 fanout_parent_id="$(jq -r '.case.id' <<<"$fanout_parent")"
 fanout_parent_version="$(jq -r '.case.version' <<<"$fanout_parent")"
-agent_run_id="$(cat /proc/sys/kernel/random/uuid)"
 
-fanout_child_a="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
+fanout_child_a="$(api_json POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
   --arg parent "$fanout_parent_id" \
   --argjson parentVersion "$fanout_parent_version" '{
     caseKey: "agent-child-a",
@@ -290,11 +275,11 @@ fanout_child_a="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipel
     requestKey: "fanout:agent-child-a",
     stageKey: "assets",
     fields: { assetType: "hero", briefedFromVersion: $parentVersion }
-  }')" "$agent_run_id")"
+  }')")"
 require_json "$fanout_child_a" '.created == true and .case.parentCaseVersion == 1 and .case.requestKey == "fanout:agent-child-a"' "Agent fan-out child A did not record parent version and request key."
 fanout_child_a_id="$(jq -r '.case.id' <<<"$fanout_child_a")"
 
-fanout_retry="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
+fanout_retry="$(api_json POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
   --arg parent "$fanout_parent_id" '{
     caseKey: "agent-child-a-retry",
     title: "Duplicate agent child A",
@@ -302,14 +287,14 @@ fanout_retry="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipelin
     requestKey: "fanout:agent-child-a",
     stageKey: "assets",
     fields: { assetType: "changed" }
-  }')" "$agent_run_id")"
+  }')")"
 if ! jq -e --arg id "$fanout_child_a_id" '.created == false and .case.id == $id and .case.title == "Agent child A"' >/dev/null <<<"$fanout_retry"; then
   echo "Agent fan-out requestKey retry did not converge on the original child." >&2
   echo "$fanout_retry" | jq . >&2
   exit 1
 fi
 
-fanout_child_b="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
+fanout_child_b="$(api_json POST "/api/pipelines/$content_pipeline_id/cases" "$(jq -cn \
   --arg parent "$fanout_parent_id" \
   --arg blocker "$fanout_child_a_id" \
   --argjson parentVersion "$fanout_parent_version" '{
@@ -320,7 +305,7 @@ fanout_child_b="$(api_json_as "$agent_token" POST "/api/pipelines/$content_pipel
     stageKey: "assets",
     blockedByCaseIds: [$blocker],
     fields: { assetType: "social", briefedFromVersion: $parentVersion }
-  }')" "$agent_run_id")"
+  }')")"
 require_json "$fanout_child_b" '.created == true and .case.requestKey == "fanout:agent-child-b"' "Agent fan-out child B did not create."
 fanout_child_b_id="$(jq -r '.case.id' <<<"$fanout_child_b")"
 fanout_child_b_detail="$(pc_json pipelines case get "$fanout_child_b_id")"
@@ -355,37 +340,36 @@ pc_json pipelines case transition "$fanout_parent_id" --to final_review --expect
 
 release="$(pc_json pipelines ingest "$RELEASE_PIPELINE" \
   --case-key "release-${RUN_KEY}" \
-  --stage intake \
+  --stage planning \
   --title "Release $RUN_KEY: Pipeline primitives" \
   --summary "Rollup root for the tutorial smoke." \
-  --fields-json '{"release":"v0.pipeline-smoke","templateVersionConvention":"routine-prompt"}')"
+  --fields-json '{"releaseTag":"v0.pipeline-smoke","templateVersionConvention":"routine-prompt"}')"
 release_case_id="$(jq -r '.case.id' <<<"$release")"
 
-jq -n --arg parent "$release_case_id" '{
+jq -n '{
   items: [
     {
-      caseKey: "feature-pipelines-ui",
+      key: "pipelines-ui",
       title: "Feature: Pipelines UI",
       summary: "Worth a content package.",
-      parentCaseId: $parent,
-      stageKey: "suggestion_review",
-      fields: { releaseTag: "v0.pipeline-smoke", source: "release-notes" }
+      fields: { source: "release-notes" }
     },
     {
-      caseKey: "feature-routine-webhooks",
+      key: "routine-webhooks",
       title: "Feature: Routine webhooks",
       summary: "Rejected by the gate for this release.",
-      parentCaseId: $parent,
-      stageKey: "suggestion_review",
-      fields: { releaseTag: "v0.pipeline-smoke", source: "release-notes" }
+      fields: { source: "release-notes" }
     }
   ]
 }' >"$TMP_DIR/feature-cases.json"
 
-features="$(pc_json pipelines ingest-batch "$FEATURE_PIPELINE" --file "$TMP_DIR/feature-cases.json")"
-require_json "$features" 'length == 2 and all(.ok == true)' "Feature batch ingest did not create two cases."
-feature_main="$(case_id "$features" feature-pipelines-ui)"
-feature_dropped="$(case_id "$features" feature-routine-webhooks)"
+features="$(api_json POST "/api/cases/$release_case_id/breakdown" "$(cat "$TMP_DIR/feature-cases.json")")"
+require_json "$features" '.parentCase.stageId and .targetPipeline.key and (.items | length == 2 and all(.ok == true))' "Feature breakdown did not create two cases."
+feature_main="$(jq -r '.items[] | select(.case.requestKey == "feature:pipelines-ui") | .case.id' <<<"$features")"
+feature_dropped="$(jq -r '.items[] | select(.case.requestKey == "feature:routine-webhooks") | .case.id' <<<"$features")"
+require_json "$features" '.parentCase.version == 2' "Release parent did not advance after feature breakdown."
+require_json "$(pc_json pipelines case get "$release_case_id")" '.stage.key == "producing" and .case.version == 2' "Release should enter Producing after feature breakdown."
+require_json "$(pc_json pipelines case get "$feature_main")" '.stage.key == "feature_review" and .case.parentCaseId == "'"$release_case_id"'" and .case.fields.releaseTag == "v0.pipeline-smoke"' "Feature breakdown did not inherit releaseTag into Feature Review."
 
 jq -n --arg main "$feature_main" --arg dropped "$feature_dropped" '{
   items: [
