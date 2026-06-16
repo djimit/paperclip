@@ -1949,7 +1949,6 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          {reviewPanel}
         </div>
       </div>
 
@@ -2064,6 +2063,8 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
         </main>
 
         <aside className="min-w-0 space-y-8">
+          {reviewPanel}
+
           <DetailSection title="Linked work">
             <PipelineWorkReferences references={workReferences} />
           </DetailSection>
