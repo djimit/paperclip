@@ -56,6 +56,7 @@ import {
 import { issuesApi } from "../api/issues";
 import { EmptyState } from "../components/EmptyState";
 import { IssueChatThread } from "../components/IssueChatThread";
+import { MarkdownBody } from "../components/MarkdownBody";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { PipelineHealthBar } from "../components/PipelineHealthWarnings";
 import { PipelineWorkReferences } from "../components/PipelineWorkReferences";
@@ -1802,7 +1803,11 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
               </DropdownMenu>
             </div>
           </div>
-          {detail.case.summary ? <p className="mt-2 max-w-3xl text-sm text-muted-foreground">{detail.case.summary}</p> : null}
+          {detail.case.summary ? (
+            <MarkdownBody className="mt-2 max-w-3xl text-[15px] leading-7 text-foreground">
+              {detail.case.summary}
+            </MarkdownBody>
+          ) : null}
           {detail.parentCase ? (
             <p className="mt-2 text-sm text-muted-foreground">
               Built for{" "}

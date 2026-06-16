@@ -76,10 +76,15 @@ vi.mock("@/lib/router", () => ({
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({ selectedCompanyId: "company-1" }),
+  useOptionalCompany: () => ({ companies: [{ issuePrefix: "PAP" }] }),
 }));
 
 vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({ setBreadcrumbs: mockSetBreadcrumbs }),
+}));
+
+vi.mock("../context/ThemeContext", () => ({
+  useTheme: () => ({ theme: "light", setTheme: vi.fn(), toggleTheme: vi.fn() }),
 }));
 
 vi.mock("../context/ToastContext", () => ({
@@ -389,6 +394,31 @@ describe("PipelineItemDetailView", () => {
       issueId: "issue-1",
       variant: "embedded",
     }));
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("renders the item description as full markdown", async () => {
+    const { container, root } = await renderItemPage(itemDetail({
+      summary: [
+        "### Acceptance",
+        "",
+        "- Render bullets",
+        "- Keep uploaded images visible",
+        "",
+        "![](/api/assets/asset-1/content)",
+      ].join("\n"),
+    }), [], { children: [], events: [] });
+
+    expect(container.querySelector(".paperclip-markdown")).not.toBeNull();
+    expect(container.querySelector("h3")?.textContent).toBe("Acceptance");
+    expect(Array.from(container.querySelectorAll("li")).map((item) => item.textContent)).toEqual([
+      "Render bullets",
+      "Keep uploaded images visible",
+    ]);
+    expect(container.querySelector('img[src="/api/assets/asset-1/content"]')).not.toBeNull();
 
     act(() => {
       root.unmount();
