@@ -326,6 +326,33 @@ describe("PipelineSettings", () => {
     queryClient.clear();
   });
 
+  it("keeps the active detail tab when switching stages", async () => {
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    flushSync(() => {
+      findButton(container, "Automation")!.click();
+    });
+
+    expect(Array.from(container.querySelectorAll("h2")).map((heading) => heading.textContent ?? "")).toContain("Automation");
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Stage instructions"]')?.value).toBe("Collect requests.");
+
+    const reviewStageButton = container.querySelector<HTMLButtonElement>('button[aria-label="Review"]')!;
+    expect(reviewStageButton).toBeTruthy();
+    flushSync(() => {
+      reviewStageButton.click();
+    });
+    await flushQueries();
+
+    expect(Array.from(container.querySelectorAll("h2")).map((heading) => heading.textContent ?? "")).toContain("Automation");
+    expect(container.textContent).toContain("Nothing runs here automatically");
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
   it("renders break-into-pieces settings in Automation instead of Advanced", async () => {
     const { container, root, queryClient } = renderSettings();
     await flushQueries();

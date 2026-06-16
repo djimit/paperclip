@@ -757,7 +757,6 @@ export function PipelineSettings() {
 
   useEffect(() => {
     if (!selectedStage) return;
-    setActiveStageSection("overview");
     const form = computeStageForm(selectedStage, pipeline?.transitions ?? []);
     setStageName(form.name);
     setStageKind(form.kind);
@@ -781,6 +780,16 @@ export function PipelineSettings() {
     setBreakdownWhenFinishedMoveTo(form.breakdownWhenFinishedMoveTo);
     setTransitionTargets(new Set(form.transitionTargetIds));
   }, [pipeline?.transitions, selectedStage]);
+
+  useEffect(() => {
+    if (!selectedStage) return;
+    const sectionAvailable = stageNavGroups(selectedStage.kind).some((group) =>
+      group.items.some((item) => item.id === activeStageSection),
+    );
+    if (!sectionAvailable) {
+      setActiveStageSection("overview");
+    }
+  }, [activeStageSection, selectedStage]);
 
   // Instructions body + variables hydrate from the per-stage document (or the
   // legacy field). Resetting on the saved value clears dirty after save/reload.
