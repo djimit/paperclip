@@ -62,6 +62,7 @@ const mockPipelinesApi = vi.hoisted(() => ({
 }));
 const mockIssuesApi = vi.hoisted(() => ({
   listComments: vi.fn(),
+  listAttachments: vi.fn(),
   addComment: vi.fn(),
 }));
 
@@ -316,6 +317,7 @@ async function renderItemPage(
   options: {
     children?: unknown;
     events?: unknown[];
+    attachmentsByIssueId?: Record<string, unknown[]>;
   } = {},
 ) {
   const container = document.createElement("div");
@@ -360,6 +362,9 @@ async function renderItemPage(
   });
   mockPipelinesApi.getCaseIssueLinks.mockResolvedValue(links);
   mockIssuesApi.listComments.mockResolvedValue([]);
+  mockIssuesApi.listAttachments.mockImplementation((issueId: string) =>
+    Promise.resolve(options.attachmentsByIssueId?.[issueId] ?? []),
+  );
 
   await act(async () => {
     root.render(
@@ -368,7 +373,7 @@ async function renderItemPage(
       </QueryClientProvider>,
     );
   });
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < 5; index += 1) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -448,6 +453,62 @@ describe("PipelineItemDetailView", () => {
     const sidebarValue = Array.from(container.querySelectorAll("dd"))
       .find((element) => element.textContent === "ingested,updated,automation_executed,transitioned,review_decided");
     expect(sidebarValue?.className).toContain("[overflow-wrap:anywhere]");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("shows image assets from linked issues below the item description", async () => {
+    const { container, root } = await renderItemPage(itemDetail(), [
+      {
+        link: {
+          id: "link-1",
+          companyId: "company-1",
+          caseId: "item-1",
+          issueId: "issue-1",
+          role: "work",
+          createdAt: "2026-06-10T12:00:00.000Z",
+          updatedAt: "2026-06-10T12:00:00.000Z",
+        },
+        issue: linkedIssue,
+      },
+    ], {
+      children: [],
+      events: [],
+      attachmentsByIssueId: {
+        "issue-1": [
+          {
+            id: "attachment-1",
+            companyId: "company-1",
+            issueId: "issue-1",
+            issueCommentId: null,
+            assetId: "asset-1",
+            provider: "local_disk",
+            objectKey: "att-1",
+            contentType: "image/png",
+            byteSize: 2048,
+            sha256: "sha",
+            originalFilename: "mockup.png",
+            createdByAgentId: null,
+            createdByUserId: "user-1",
+            createdAt: "2026-06-10T12:00:00.000Z",
+            updatedAt: "2026-06-10T12:00:00.000Z",
+            contentPath: "/api/attachments/attachment-1/content",
+          },
+        ],
+      },
+    });
+
+    expect(mockIssuesApi.listAttachments).toHaveBeenCalledWith("issue-1");
+    const mainHeadings = Array.from(container.querySelectorAll("main h2")).map((heading) => heading.textContent);
+    expect(mainHeadings).toEqual(["Linked assets", "Conversation"]);
+    expect(container.textContent).toContain("PAP-1");
+    expect(container.textContent).toContain("1 asset");
+    expect(container.querySelector('img[src="/api/attachments/attachment-1/content"]')).not.toBeNull();
+    expect(container.querySelector('a[aria-label="Download mockup.png"]')?.getAttribute("href")).toBe(
+      "/api/attachments/attachment-1/content?download=1",
+    );
 
     act(() => {
       root.unmount();

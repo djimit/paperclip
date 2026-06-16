@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { groupWarningsByStage } from "@paperclipai/shared";
-import { AlertTriangle, ArrowUpDown, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, GitBranch, Hexagon, Info, List, ListTree, Loader2, MessageSquare, MoreHorizontal, Plus, Search, Settings, Trash2, X } from "lucide-react";
+import type { IssueAttachment } from "@paperclipai/shared";
+import { AlertTriangle, ArrowUpDown, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, Download, ExternalLink, FileText, GitBranch, Hexagon, Image as ImageIcon, Info, List, ListTree, Loader2, MessageSquare, MoreHorizontal, Plus, Search, Settings, Trash2, X } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -80,6 +81,8 @@ import { hasBlockingShortcutDialog, isKeyboardShortcutTextInputTarget } from "..
 import { formatLearningEvent, groupLearningEventsByDay } from "../lib/pipeline-learnings";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, formatNumber, relativeTime } from "../lib/utils";
+import { attachmentDownloadPath, attachmentFilename, attachmentOpenPath, isImageAttachment } from "../lib/issue-attachments";
+import { formatBytes } from "../lib/issue-output";
 
 interface DraftRow {
   id: string;
@@ -1667,6 +1670,26 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
       ?? links.find((link) => link.link.role === "work")
       ?? null;
   }, [issueLinks.data]);
+  const linkedIssues = useMemo(() => {
+    const byIssueId = new Map<string, PipelineCaseIssueLinkWithIssue["issue"]>();
+    for (const link of issueLinks.data ?? []) {
+      byIssueId.set(link.issue.id, link.issue);
+    }
+    return [...byIssueId.values()];
+  }, [issueLinks.data]);
+  const linkedIssueAssets = useQuery({
+    queryKey: ["pipelines", "item", caseId, "linked-issue-assets", linkedIssues.map((issue) => issue.id)],
+    queryFn: async () => {
+      const groups = await Promise.all(
+        linkedIssues.map(async (issue) => ({
+          issue,
+          attachments: await issuesApi.listAttachments(issue.id),
+        })),
+      );
+      return groups.filter((group) => group.attachments.length > 0);
+    },
+    enabled: issueLinks.isSuccess && linkedIssues.length > 0,
+  });
   const conversationIssueId = conversationLink?.issue.id ?? null;
   const comments = useQuery({
     queryKey: conversationIssueId ? queryKeys.issues.comments(conversationIssueId) : ["pipeline-item", caseId, "missing-conversation"],
@@ -2029,6 +2052,12 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
               </MarkdownBody>
             </FoldCurtain>
           ) : null}
+
+          <LinkedIssueAssetsSection
+            groups={linkedIssueAssets.data ?? []}
+            loading={linkedIssueAssets.isLoading}
+            error={linkedIssueAssets.isError}
+          />
 
           <DetailSection title="Conversation">
             {conversationLink ? (
@@ -2439,6 +2468,121 @@ function DetailSection({ title, children }: { title: string; children: ReactNode
       <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{title}</h2>
       <div className="border-y border-border">{children}</div>
     </section>
+  );
+}
+
+interface LinkedIssueAssetGroup {
+  issue: PipelineCaseIssueLinkWithIssue["issue"];
+  attachments: IssueAttachment[];
+}
+
+function LinkedIssueAssetsSection({
+  groups,
+  loading,
+  error,
+}: {
+  groups: LinkedIssueAssetGroup[];
+  loading: boolean;
+  error: boolean;
+}) {
+  if (!loading && !error && groups.length === 0) return null;
+
+  return (
+    <DetailSection title="Linked assets">
+      {loading ? (
+        <p className="py-3 text-sm text-muted-foreground">Loading linked assets...</p>
+      ) : error ? (
+        <p className="py-3 text-sm text-destructive">Could not load linked issue assets.</p>
+      ) : (
+        <div className="divide-y divide-border">
+          {groups.map((group) => (
+            <LinkedIssueAssetGroup key={group.issue.id} group={group} />
+          ))}
+        </div>
+      )}
+    </DetailSection>
+  );
+}
+
+function LinkedIssueAssetGroup({ group }: { group: LinkedIssueAssetGroup }) {
+  const issueLabel = group.issue.identifier ?? group.issue.title;
+  return (
+    <div className="py-3">
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
+        <Link
+          to={`/issues/${group.issue.id}`}
+          className="min-w-0 truncate text-sm font-medium text-foreground hover:underline"
+          title={group.issue.title}
+        >
+          {issueLabel}
+        </Link>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {group.attachments.length} {group.attachments.length === 1 ? "asset" : "assets"}
+        </span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {group.attachments.map((attachment) => (
+          <LinkedIssueAsset key={attachment.id} attachment={attachment} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LinkedIssueAsset({ attachment }: { attachment: IssueAttachment }) {
+  const filename = attachmentFilename(attachment);
+  const isImage = isImageAttachment(attachment);
+  return (
+    <div id={`linked-attachment-${attachment.id}`} className="min-w-0 overflow-hidden rounded-md border border-border bg-card">
+      {isImage ? (
+        <a
+          href={attachmentOpenPath(attachment)}
+          target="_blank"
+          rel="noreferrer"
+          className="group relative block aspect-video bg-accent/10"
+          aria-label={`Open ${filename}`}
+        >
+          <img
+            src={attachment.contentPath}
+            alt={filename}
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
+          <span className="absolute right-2 top-2 rounded bg-black/55 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </span>
+        </a>
+      ) : null}
+      <div className="flex items-center gap-2 p-2">
+        {isImage ? (
+          <ImageIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
+        <div className="min-w-0 flex-1">
+          <a
+            href={attachmentOpenPath(attachment)}
+            target="_blank"
+            rel="noreferrer"
+            className="block truncate text-sm font-medium text-foreground hover:underline"
+            title={filename}
+          >
+            {filename}
+          </a>
+          <p className="truncate text-[11px] text-muted-foreground">
+            {attachment.contentType} · {formatBytes(attachment.byteSize)}
+          </p>
+        </div>
+        <a
+          href={attachmentDownloadPath(attachment)}
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label={`Download ${filename}`}
+          title="Download"
+        >
+          <Download className="h-4 w-4" />
+        </a>
+      </div>
+    </div>
   );
 }
 
