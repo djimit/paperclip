@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { groupWarningsByStage } from "@paperclipai/shared";
-import type { IssueAttachment } from "@paperclipai/shared";
+import type { Issue, IssueAttachment } from "@paperclipai/shared";
 import { AlertTriangle, ArrowUpDown, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, CircleDot, Download, ExternalLink, FileText, GitBranch, Hexagon, Image as ImageIcon, Info, List, ListTree, Loader2, MessageSquare, MoreHorizontal, Plus, Search, Settings, Trash2, X } from "lucide-react";
 import {
   DndContext,
@@ -84,12 +84,17 @@ import { queryKeys } from "../lib/queryKeys";
 import { cn, formatNumber, relativeTime } from "../lib/utils";
 import { attachmentDownloadPath, attachmentFilename, attachmentOpenPath, isImageAttachment } from "../lib/issue-attachments";
 import { formatBytes } from "../lib/issue-output";
+import { createIssueDetailPath, withIssueDetailHeaderSeed } from "../lib/issueDetailBreadcrumb";
 
 interface DraftRow {
   id: string;
   expanded: boolean;
   values: Record<string, string>;
   serverError?: string | null;
+}
+
+function issueDetailPath(issue: Pick<Issue, "id" | "identifier">) {
+  return createIssueDetailPath(issue.identifier ?? issue.id);
 }
 
 type FieldErrors = Record<string, string>;
@@ -1673,6 +1678,7 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
       ?? links.find((link) => link.link.role === "work")
       ?? null;
   }, [issueLinks.data]);
+  const conversationIssue = detail?.conversationSource?.issue ?? conversationLink?.issue ?? null;
   const linkedIssues = useMemo(() => {
     const byIssueId = new Map<string, PipelineCaseIssueLinkWithIssue["issue"]>();
     for (const link of issueLinks.data ?? []) {
@@ -1693,7 +1699,7 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
     },
     enabled: issueLinks.isSuccess && linkedIssues.length > 0,
   });
-  const conversationIssueId = conversationLink?.issue.id ?? null;
+  const conversationIssueId = conversationIssue?.id ?? null;
   const comments = useQuery({
     queryKey: conversationIssueId ? queryKeys.issues.comments(conversationIssueId) : ["pipeline-item", caseId, "missing-conversation"],
     queryFn: () => issuesApi.listComments(conversationIssueId!, { order: "asc", limit: 50 }),
@@ -1894,6 +1900,8 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
   const childRows = normalizePipelineChildRows(children.data);
   const eventRows = events.data?.items ?? [];
   const activeWork = detail.activeWork ?? null;
+  const conversationIssuePath = conversationIssue ? issueDetailPath(conversationIssue) : null;
+  const conversationIssueState = conversationIssue ? withIssueDetailHeaderSeed(null, conversationIssue) : undefined;
   const waitingChildren = getWaitingChildren(childRows);
   const childrenGate = hasChildrenGate(detail.stage);
   // "Break into pieces" rollup: the configured piece noun drives every count
@@ -1905,12 +1913,12 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
   const pieceNounPluralLabel = pieceNounPlural(pieceNoun);
   const pieceLabel = (count: number) => (count === 1 ? pieceNoun : pieceNounPluralLabel);
   const changedNotice = itemHasChangedNotice(detail.case) ?? changedNoticeFromEvents(eventRows);
-  const primaryAction = conversationLink
+  const primaryAction = conversationIssue
     ? (
         <Button asChild>
-          <Link to={`/issues/${conversationLink.issue.id}`}>
+          <Link to={conversationIssuePath!} state={conversationIssueState} issuePrefetch={conversationIssue}>
             <MessageSquare className="mr-2 h-4 w-4" />
-            Open full issue
+            Open conversation
           </Link>
         </Button>
       )
@@ -2167,20 +2175,33 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
           />
 
           <DetailSection title="Conversation">
-            {conversationLink ? (
+            {conversationIssue ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3 text-sm">
-                  <span className="font-medium text-foreground">{conversationLink.issue.title}</span>
-                  <Link to={`/issues/${conversationLink.issue.id}`} className="text-muted-foreground hover:text-foreground">
-                    Open full issue
+                  <Link
+                    to={conversationIssuePath!}
+                    state={conversationIssueState}
+                    issuePrefetch={conversationIssue}
+                    className="min-w-0 font-medium text-foreground hover:underline"
+                  >
+                    {conversationIssue.identifier ? `${conversationIssue.identifier}: ` : null}
+                    {conversationIssue.title}
+                  </Link>
+                  <Link
+                    to={conversationIssuePath!}
+                    state={conversationIssueState}
+                    issuePrefetch={conversationIssue}
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    Open conversation
                   </Link>
                 </div>
                 <IssueChatThread
                   comments={comments.data ?? []}
-                  issueId={conversationLink.issue.id}
-                  companyId={conversationLink.issue.companyId}
-                  projectId={conversationLink.issue.projectId}
-                  issueStatus={conversationLink.issue.status}
+                  issueId={conversationIssue.id}
+                  companyId={conversationIssue.companyId}
+                  projectId={conversationIssue.projectId}
+                  issueStatus={conversationIssue.status}
                   onAdd={addConversationComment}
                   emptyMessage="No conversation yet."
                   variant="embedded"
@@ -2294,6 +2315,7 @@ function ActivePipelineWorkBanner({ activeWork }: { activeWork: PipelineCaseActi
   const isAutomation = activeWork.issueRole === "automation";
   const title = isAutomation ? "Automation is running" : "Linked work is running";
   const issueLabel = activeWork.issueIdentifier ?? activeWork.issueTitle;
+  const issuePath = createIssueDetailPath(activeWork.issueIdentifier ?? activeWork.issueId);
   const startedLabel = activeWork.startedAt ? `Started ${relativeTime(activeWork.startedAt)}` : null;
 
   return (
@@ -2309,7 +2331,7 @@ function ActivePipelineWorkBanner({ activeWork }: { activeWork: PipelineCaseActi
             {title}
           </h2>
           <p className="mt-1 text-sm opacity-85">
-            <Link to={`/issues/${activeWork.issueId}`} className="font-medium underline-offset-2 hover:underline">
+            <Link to={issuePath} className="font-medium underline-offset-2 hover:underline">
               {issueLabel}
             </Link>{" "}
             is active with {activeWork.agentName}
@@ -2323,7 +2345,7 @@ function ActivePipelineWorkBanner({ activeWork }: { activeWork: PipelineCaseActi
         variant="outline"
         className="border-emerald-300 bg-transparent hover:bg-emerald-100 dark:border-emerald-900/70 dark:hover:bg-emerald-950/40"
       >
-        <Link to={`/issues/${activeWork.issueId}`}>
+        <Link to={issuePath}>
           <ExternalLink className="mr-2 h-4 w-4" />
           Open issue
         </Link>
@@ -2583,7 +2605,10 @@ function PipelineEventText({
         {issue ? (
           <>
             {" -> "}
-            <Link to={`/issues/${issue.id}`} className="font-medium text-foreground hover:underline">
+            <Link
+              to={issueDetailPath(issue)}
+              className="font-medium text-foreground hover:underline"
+            >
               {issue.identifier ?? issue.title}
             </Link>
           </>
@@ -2659,7 +2684,9 @@ function LinkedIssueAssetGroup({ group }: { group: LinkedIssueAssetGroup }) {
     <div className="py-3">
       <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
         <Link
-          to={`/issues/${group.issue.id}`}
+          to={issueDetailPath(group.issue)}
+          state={withIssueDetailHeaderSeed(null, group.issue)}
+          issuePrefetch={group.issue}
           className="min-w-0 truncate text-sm font-medium text-foreground hover:underline"
           title={group.issue.title}
         >

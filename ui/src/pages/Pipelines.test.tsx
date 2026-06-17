@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Issue } from "@paperclipai/shared";
 import type {
   PipelineAttentionCaseRef,
   PipelineAttentionFeed,
@@ -68,7 +69,13 @@ const mockIssuesApi = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/router", () => ({
-  Link: ({ children, to, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { to: string }) => (
+  Link: ({
+    children,
+    to,
+    state: _state,
+    issuePrefetch: _issuePrefetch,
+    ...props
+  }: AnchorHTMLAttributes<HTMLAnchorElement> & { to: string; state?: unknown; issuePrefetch?: unknown }) => (
     <a href={to} {...props}>{children}</a>
   ),
   useLocation: () => ({ pathname: mockLocationPathname.value }),
@@ -408,7 +415,7 @@ describe("PipelineItemDetailView", () => {
 
     expect(container.textContent).toContain("Draft launch post");
     expect(container.textContent).toContain("Ready to move to Review?");
-    expect(container.textContent).toContain("Open full issue");
+    expect(container.textContent).toContain("Open conversation");
     expect(container.textContent).toContain("Child outline");
     expect(container.textContent).toContain("2 nested items hidden");
     expect(container.textContent).toContain("Suggested moving to Review.");
@@ -421,6 +428,75 @@ describe("PipelineItemDetailView", () => {
       issueId: "issue-1",
       variant: "embedded",
     }));
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("uses the resolved conversation source issue for comments and composer actions", async () => {
+    const sourceIssue = {
+      ...linkedIssue,
+      id: "producer-issue",
+      identifier: "PAP-2",
+      title: "Produce launch post",
+      projectId: "project-1",
+    } as Issue;
+    const fallbackIssue = {
+      ...linkedIssue,
+      id: "fallback-work-issue",
+      identifier: "PAP-3",
+      title: "Fallback work item",
+    };
+    const detail = itemDetail();
+    detail.conversationSource = {
+      issue: sourceIssue,
+      reason: "producer_update",
+      linkRole: "automation",
+      sourceRunId: "run-1",
+    };
+    mockIssuesApi.addComment.mockResolvedValue({ id: "comment-1" });
+
+    const { container, root } = await renderItemPage(detail, [
+      {
+        link: {
+          id: "link-work",
+          companyId: "company-1",
+          caseId: "item-1",
+          issueId: "fallback-work-issue",
+          role: "work",
+          createdAt: "2026-06-10T12:00:00.000Z",
+          updatedAt: "2026-06-10T12:00:00.000Z",
+        },
+        issue: fallbackIssue,
+      },
+    ], { children: [], events: [] });
+
+    expect(container.textContent).toContain("Open conversation");
+    expect(container.textContent).not.toContain("Start a conversation");
+    expect(container.textContent).toContain("PAP-2: Produce launch post");
+    expect(container.querySelector('a[href="/issues/PAP-2"]')).not.toBeNull();
+    expect(mockIssuesApi.listComments).toHaveBeenCalledWith("producer-issue", { order: "asc", limit: 50 });
+
+    const threadProps = mockIssueChatThreadRender.mock.calls.at(-1)?.[0] as {
+      issueId: string;
+      companyId: string;
+      projectId: string | null;
+      issueStatus: string;
+      onAdd: (body: string) => Promise<void>;
+    };
+    expect(threadProps).toMatchObject({
+      issueId: "producer-issue",
+      companyId: "company-1",
+      projectId: "project-1",
+      issueStatus: "todo",
+    });
+
+    await act(async () => {
+      await threadProps.onAdd("Use the producer thread.");
+    });
+    expect(mockIssuesApi.addComment).toHaveBeenCalledWith("producer-issue", "Use the producer thread.");
+    expect(mockIssuesApi.addComment).not.toHaveBeenCalledWith("fallback-work-issue", expect.any(String));
 
     act(() => {
       root.unmount();
@@ -872,7 +948,7 @@ describe("PipelineItemDetailView", () => {
     expect(container.textContent).toContain("Automation is running");
     expect(container.textContent).toContain("PAP-11218");
     expect(container.textContent).toContain("is active with CodexCoder");
-    expect(container.querySelector('a[href="/issues/issue-automation"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/issues/PAP-11218"]')).not.toBeNull();
 
     act(() => {
       root.unmount();
