@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
+  heartbeatRuns,
   issueComments,
   issues,
   pipelineAutomationExecutions,
@@ -18,18 +19,26 @@ import {
   routineRevisions,
   routines,
 } from "@paperclipai/db";
-import { syncRoutineVariablesWithTemplate, type RoutineVariable, type RoutineRevisionSnapshotV1 } from "@paperclipai/shared";
+import {
+  syncRoutineVariablesWithTemplate,
+  type PipelineCaseConversationSourceLinkRole,
+  type PipelineCaseConversationSourceReason,
+  type RoutineVariable,
+  type RoutineRevisionSnapshotV1,
+} from "@paperclipai/shared";
 import { conflict, HttpError, notFound, unprocessable } from "../errors.js";
 import { routineService } from "./routines.js";
 import type { IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { logActivity } from "./activity-log.js";
 import { assertAssignableAgent } from "./agent-assignability.js";
+import { authorizationService } from "./authorization.js";
 
 const DEFAULT_LEASE_MS = 15 * 60 * 1000;
 const MAX_LEASE_MS = 24 * 60 * 60 * 1000;
 const MAX_CASE_KEY_LENGTH = 1024;
 const MAX_BATCH_INGEST = 200;
 const MAX_FIELDS_BYTES = 64 * 1024;
+const PIPELINE_WRITE_PERMISSION = "pipelines:write";
 export const PIPELINE_CASE_EVENTS_DEFAULT_LIMIT = 50;
 export const PIPELINE_CASE_EVENTS_MAX_LIMIT = 100;
 export const PIPELINE_CONTEXT_PACK_EVENT_LIMIT = 20;
@@ -117,8 +126,210 @@ export type PipelineAutomationExecutionResult =
 
 type PipelineDb = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
 
+export interface ResolvedPipelineCaseConversationSource {
+  issue: typeof issues.$inferSelect;
+  reason: PipelineCaseConversationSourceReason;
+  linkRole: PipelineCaseConversationSourceLinkRole | null;
+  sourceRunId: string | null;
+}
+
+class PipelinePermissionPreflightError extends HttpError {
+  readonly fingerprint: string;
+
+  constructor(input: {
+    caseId: string;
+    stageId: string;
+    automationId: string;
+    targetPipelineId: string;
+    principalId: string;
+    permissionKey: typeof PIPELINE_WRITE_PERMISSION;
+    explanation: string;
+    reason: string;
+  }) {
+    const fingerprint = [
+      input.caseId,
+      input.stageId,
+      input.automationId,
+      input.targetPipelineId,
+      input.principalId,
+      input.permissionKey,
+    ].join(":");
+    super(403, "Pipeline automation assignee lacks pipelines:write on the target pipeline", {
+      code: "pipeline_permission_preflight_failed",
+      fingerprint,
+      caseId: input.caseId,
+      stageId: input.stageId,
+      automationId: input.automationId,
+      targetPipelineId: input.targetPipelineId,
+      principalId: input.principalId,
+      permissionKey: input.permissionKey,
+      reason: input.reason,
+      explanation: input.explanation,
+    });
+    this.fingerprint = fingerprint;
+  }
+}
+
 function nowDate() {
   return new Date();
+}
+
+function issueIdFromRunContext(contextSnapshot: unknown) {
+  if (!contextSnapshot || typeof contextSnapshot !== "object" || Array.isArray(contextSnapshot)) return null;
+  const issueId = (contextSnapshot as Record<string, unknown>).issueId;
+  return typeof issueId === "string" && issueId.trim().length > 0 ? issueId.trim() : null;
+}
+
+async function getUsableConversationIssue(db: PipelineDb, companyId: string, issueId: string) {
+  return db
+    .select()
+    .from(issues)
+    .where(and(
+      eq(issues.companyId, companyId),
+      eq(issues.id, issueId),
+      isNull(issues.hiddenAt),
+      isNull(issues.cancelledAt),
+      ne(issues.status, "cancelled"),
+    ))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+}
+
+async function resolveIssueFromRun(
+  db: PipelineDb,
+  input: {
+    companyId: string;
+    runId: string | null | undefined;
+    reason: PipelineCaseConversationSourceReason;
+  },
+): Promise<ResolvedPipelineCaseConversationSource | null> {
+  if (!input.runId) return null;
+  const run = await db
+    .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+    .from(heartbeatRuns)
+    .where(and(eq(heartbeatRuns.companyId, input.companyId), eq(heartbeatRuns.id, input.runId)))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  const issueId = issueIdFromRunContext(run?.contextSnapshot);
+  if (!issueId) return null;
+  const issue = await getUsableConversationIssue(db, input.companyId, issueId);
+  return issue
+    ? { issue, reason: input.reason, linkRole: null, sourceRunId: input.runId }
+    : null;
+}
+
+async function resolveLatestCaseIssueLink(
+  db: PipelineDb,
+  input: {
+    companyId: string;
+    caseId: string;
+    roles: PipelineCaseConversationSourceLinkRole[];
+    reasonByRole: Record<PipelineCaseConversationSourceLinkRole, PipelineCaseConversationSourceReason>;
+  },
+): Promise<ResolvedPipelineCaseConversationSource | null> {
+  const row = await db
+    .select({ issue: issues, link: pipelineCaseIssueLinks })
+    .from(pipelineCaseIssueLinks)
+    .innerJoin(issues, eq(pipelineCaseIssueLinks.issueId, issues.id))
+    .where(and(
+      eq(pipelineCaseIssueLinks.companyId, input.companyId),
+      eq(pipelineCaseIssueLinks.caseId, input.caseId),
+      inArray(pipelineCaseIssueLinks.role, input.roles),
+      eq(issues.companyId, input.companyId),
+      isNull(issues.hiddenAt),
+      isNull(issues.cancelledAt),
+      ne(issues.status, "cancelled"),
+    ))
+    .orderBy(desc(pipelineCaseIssueLinks.createdAt), desc(pipelineCaseIssueLinks.id))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (!row) return null;
+  const role = row.link.role as PipelineCaseConversationSourceLinkRole;
+  return {
+    issue: row.issue,
+    reason: input.reasonByRole[role],
+    linkRole: role,
+    sourceRunId: row.link.createdByRunId,
+  };
+}
+
+export async function resolvePipelineCaseConversationSource(
+  db: PipelineDb,
+  companyId: string,
+  caseId: string,
+): Promise<ResolvedPipelineCaseConversationSource | null> {
+  const caseRow = await db
+    .select({ originRunId: pipelineCases.originRunId })
+    .from(pipelineCases)
+    .where(and(eq(pipelineCases.companyId, companyId), eq(pipelineCases.id, caseId)))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (!caseRow) throw notFound("Pipeline case not found");
+
+  const materialUpdateEvents = await db
+    .select({ runId: pipelineCaseEvents.runId })
+    .from(pipelineCaseEvents)
+    .where(and(
+      eq(pipelineCaseEvents.companyId, companyId),
+      eq(pipelineCaseEvents.caseId, caseId),
+      eq(pipelineCaseEvents.type, "updated"),
+      eq(pipelineCaseEvents.actorType, "agent"),
+      isNotNull(pipelineCaseEvents.runId),
+      sql`${pipelineCaseEvents.payload}->>'materialChanged' = 'true'`,
+    ))
+    .orderBy(desc(pipelineCaseEvents.createdAt), desc(pipelineCaseEvents.id))
+    .limit(20);
+
+  for (const event of materialUpdateEvents) {
+    const source = await resolveIssueFromRun(db, {
+      companyId,
+      runId: event.runId,
+      reason: "producer_update",
+    });
+    if (source) return source;
+  }
+
+  const creationSource = await resolveIssueFromRun(db, {
+    companyId,
+    runId: caseRow.originRunId,
+    reason: "producer_create",
+  });
+  if (creationSource) return creationSource;
+
+  const automationLink = await resolveLatestCaseIssueLink(db, {
+    companyId,
+    caseId,
+    roles: ["automation"],
+    reasonByRole: {
+      automation: "automation_link",
+      conversation: "conversation_link",
+      work: "work_link",
+    },
+  });
+  if (automationLink) return automationLink;
+
+  const conversationLink = await resolveLatestCaseIssueLink(db, {
+    companyId,
+    caseId,
+    roles: ["conversation"],
+    reasonByRole: {
+      automation: "automation_link",
+      conversation: "conversation_link",
+      work: "work_link",
+    },
+  });
+  if (conversationLink) return conversationLink;
+
+  return resolveLatestCaseIssueLink(db, {
+    companyId,
+    caseId,
+    roles: ["work"],
+    reasonByRole: {
+      automation: "automation_link",
+      conversation: "conversation_link",
+      work: "work_link",
+    },
+  });
 }
 
 function normalizeStageKind(kind: PipelineStageKind | string): CanonicalPipelineStageKind {
@@ -1485,6 +1696,7 @@ async function enqueueStageAutomationLedger(
 
 export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeupDeps } = {}) {
   const routinesSvc = routineService(db, { heartbeat: deps.heartbeat });
+  const authorization = authorizationService(db);
 
   async function assertRoutineInCompany(companyId: string, routineId: string) {
     const routine = await db
@@ -1514,6 +1726,44 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
     const targetPipeline = await getPipelineOrThrow(dbOrTx, companyId, config.targetPipelineId);
     const targetStage = await getStageByKeyOrThrow(dbOrTx, targetPipeline.id, config.targetStageKey);
     return { targetPipeline, targetStage };
+  }
+
+  async function assertAutomationAssigneeCanWriteTargetPipeline(input: {
+    companyId: string;
+    principalId: string | null;
+    caseId: string;
+    stageId: string;
+    automationId: string;
+    targetPipelineId: string;
+  }) {
+    if (!input.principalId) {
+      throw new PipelinePermissionPreflightError({
+        ...input,
+        principalId: "unassigned",
+        permissionKey: PIPELINE_WRITE_PERMISSION,
+        reason: "missing_assignee",
+        explanation: "Pipeline automation has no routine assignee to authorize target-pipeline writes.",
+      });
+    }
+    const decision = await authorization.decide({
+      actor: {
+        type: "agent",
+        agentId: input.principalId,
+        companyId: input.companyId,
+        source: "agent_key",
+      },
+      action: PIPELINE_WRITE_PERMISSION,
+      resource: { type: "company", companyId: input.companyId },
+      scope: { pipelineId: input.targetPipelineId },
+    });
+    if (decision.allowed) return;
+    throw new PipelinePermissionPreflightError({
+      ...input,
+      principalId: input.principalId,
+      permissionKey: PIPELINE_WRITE_PERMISSION,
+      reason: decision.reason,
+      explanation: decision.explanation,
+    });
   }
 
   function inheritedBreakdownFields(
@@ -1892,6 +2142,17 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       const contextPack = buildPipelineCaseContextPack(detail);
       const variables = buildPipelineCaseVariables(detail);
       const breakdownConfig = readBreakdownConfig(stageConfig(detail.stage));
+      if (breakdownConfig) {
+        const { targetPipeline } = await loadBreakdownTarget(db, execution.companyId, breakdownConfig);
+        await assertAutomationAssigneeCanWriteTargetPipeline({
+          companyId: execution.companyId,
+          principalId: routine.assigneeAgentId,
+          caseId: execution.caseId,
+          stageId: detail.stage.id,
+          automationId: execution.automationId,
+          targetPipelineId: targetPipeline.id,
+        });
+      }
       const breakdownMechanics = breakdownConfig
         ? await buildBreakdownMechanicsPrompt(db, {
             companyId: execution.companyId,
@@ -1961,7 +2222,17 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       });
       return { status: "succeeded", execution: updated! };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const permissionPreflight = error instanceof PipelinePermissionPreflightError ? error : null;
+      const message = permissionPreflight
+        ? `permission_preflight_failed:${permissionPreflight.fingerprint}`
+        : error instanceof Error ? error.message : String(error);
+      if (
+        permissionPreflight &&
+        execution.status === "failed" &&
+        execution.error === message
+      ) {
+        return { status: "failed", execution };
+      }
       const [failed] = await db
         .update(pipelineAutomationExecutions)
         .set({ status: "failed", error: message, updatedAt: nowDate() })
@@ -1972,7 +2243,18 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
         caseId: execution.caseId,
         type: "automation_failed",
         actor,
-        payload: { automationId: execution.automationId, routineId: execution.routineId, error: message },
+        payload: {
+          automationId: execution.automationId,
+          routineId: execution.routineId,
+          error: message,
+          ...(permissionPreflight
+            ? {
+              kind: "permission_preflight_failed",
+              fingerprint: permissionPreflight.fingerprint,
+              details: permissionPreflight.details,
+            }
+            : {}),
+        },
       });
       return { status: "failed", execution: failed! };
     }

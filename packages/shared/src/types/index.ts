@@ -236,6 +236,13 @@ export type {
   CompanyArtifactsResponse,
 } from "./artifact.js";
 export type {
+  PipelineCaseConversationSource,
+  PipelineCaseLiveness,
+  PipelineCaseLivenessState,
+  PipelineCaseConversationSourceLinkRole,
+  PipelineCaseConversationSourceReason,
+} from "./pipeline.js";
+export type {
   Issue,
   IssueWorkMode,
   IssueAssigneeAdapterOverrides,

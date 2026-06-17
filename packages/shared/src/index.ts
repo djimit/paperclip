@@ -33,6 +33,13 @@ export {
   deriveCaseType,
   type CaseTypePipelineRef,
 } from "./pipeline-case-type.js";
+export type {
+  PipelineCaseConversationSource,
+  PipelineCaseLiveness,
+  PipelineCaseLivenessState,
+  PipelineCaseConversationSourceLinkRole,
+  PipelineCaseConversationSourceReason,
+} from "./types/pipeline.js";
 export {
   asBoolean,
   asString,

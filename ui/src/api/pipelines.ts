@@ -1,4 +1,4 @@
-import type { Issue, PipelineHealthReport } from "@paperclipai/shared";
+import type { Issue, PipelineCaseConversationSource, PipelineCaseLiveness, PipelineHealthReport } from "@paperclipai/shared";
 import { api } from "./client";
 
 export type { PipelineHealthReport, PipelineHealthWarning } from "@paperclipai/shared";
@@ -176,6 +176,8 @@ export interface PipelineCaseDetail {
     pipeline: { id: string; key: string; name: string };
   } | null;
   activeWork?: PipelineCaseActiveWork | null;
+  liveness?: PipelineCaseLiveness | null;
+  conversationSource?: PipelineCaseConversationSource | null;
   pendingSuggestion?: PipelineCasePendingSuggestion | null;
 }
 

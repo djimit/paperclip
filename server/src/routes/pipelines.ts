@@ -1,12 +1,13 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
-import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
   documents,
   documentRevisions,
   issues as issueRows,
+  issueRelations,
   pipelineAutomationExecutions,
   pipelineCaseBlockers,
   pipelineCaseEvents,
@@ -25,6 +26,7 @@ import {
   PIPELINE_CASE_EVENTS_MAX_LIMIT,
   PIPELINE_CONTEXT_PACK_EVENT_LIMIT,
   pipelineService,
+  resolvePipelineCaseConversationSource,
   type PipelineActor,
   type PipelineStageConfig,
   type PipelineStageKind,
@@ -46,11 +48,13 @@ import {
   type AttentionCaller,
 } from "../services/pipelines-aggregation.js";
 import { accessService } from "../services/access.js";
+import { authorizationService } from "../services/authorization.js";
 import { issueService } from "../services/issues.js";
 import { assertCompanyAccess } from "./authz.js";
 import {
   computePipelineHealth,
   deriveCaseType,
+  type PipelineCaseLiveness,
   type PipelineHealthFailedAutomationInput,
   type PipelineHealthStageInput,
 } from "@paperclipai/shared";
@@ -1384,21 +1388,9 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
     const caseId = req.params.caseId as string;
     const companyId = await assertCaseAccess(db, req, caseId);
     const actor = actorForMutation(req);
-    const existing = await db
-      .select({ issue: issueRows, link: pipelineCaseIssueLinks })
-      .from(pipelineCaseIssueLinks)
-      .innerJoin(issueRows, eq(pipelineCaseIssueLinks.issueId, issueRows.id))
-      .where(and(
-        eq(pipelineCaseIssueLinks.companyId, companyId),
-        eq(pipelineCaseIssueLinks.caseId, caseId),
-        eq(pipelineCaseIssueLinks.role, "conversation"),
-        isNull(issueRows.completedAt),
-        isNull(issueRows.cancelledAt),
-      ))
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
-    if (existing) {
-      res.json({ issue: existing.issue, created: false });
+    const conversationSource = await resolvePipelineCaseConversationSource(db, companyId, caseId);
+    if (conversationSource) {
+      res.json({ issue: conversationSource.issue, created: false });
       return;
     }
     const detail = await getCaseDetail(db, companyId, caseId);
@@ -1619,6 +1611,8 @@ async function getCaseDetail(db: Db, companyId: string, caseId: string) {
     activeWorkByCase,
     descendantActiveWorkCounts,
     parentCase,
+    conversationSource,
+    liveness,
   ] = await Promise.all([
     db.select().from(pipelineStages).where(eq(pipelineStages.pipelineId, row.case.pipelineId)).orderBy(asc(pipelineStages.position)),
     db.select().from(pipelineCaseIssueLinks).where(and(eq(pipelineCaseIssueLinks.companyId, companyId), eq(pipelineCaseIssueLinks.caseId, caseId))),
@@ -1628,6 +1622,8 @@ async function getCaseDetail(db: Db, companyId: string, caseId: string) {
     loadActiveWorkForCases(db, companyId, [caseId]),
     loadDescendantActiveWorkCountsForCases(db, companyId, [caseId]),
     parentCasePromise,
+    resolvePipelineCaseConversationSource(db, companyId, caseId),
+    derivePipelineCaseLiveness(db, companyId, row),
   ]);
   return {
     ...row,
@@ -1646,8 +1642,297 @@ async function getCaseDetail(db: Db, companyId: string, caseId: string) {
       ...childrenCounts,
     },
     activeWork: activeWorkByCase.get(caseId) ?? null,
+    liveness,
+    conversationSource,
     parentCase,
     pendingSuggestion: row.case.pendingSuggestion,
+  };
+}
+
+function isLiveIssueStatus(status: string) {
+  return status === "todo" || status === "in_progress" || status === "in_review";
+}
+
+function isWaitingIssueStatus(status: string) {
+  return status === "backlog" || status === "todo" || status === "in_review";
+}
+
+function summarizeLinkedIssue(issue: typeof issueRows.$inferSelect) {
+  return {
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    status: issue.status,
+  };
+}
+
+function readBreakdownRequestKeys(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const keys = (payload as Record<string, unknown>).requestKeys;
+  if (!Array.isArray(keys)) return [];
+  return [...new Set(keys.filter((key): key is string => typeof key === "string" && key.trim().length > 0))];
+}
+
+function readStageBreakdownConfig(config: unknown) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return null;
+  const raw = (config as Record<string, unknown>).breakdown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return raw as Record<string, unknown>;
+}
+
+function parsePermissionPreflightFingerprint(fingerprint: string | null) {
+  if (!fingerprint) return null;
+  const parts = fingerprint.split(":");
+  if (parts.length < 7) return null;
+  const caseId = parts[0];
+  const stageId = parts[1];
+  const targetPipelineId = parts[parts.length - 4];
+  const principalId = parts[parts.length - 3];
+  const permissionKey = parts.slice(parts.length - 2).join(":");
+  const automationId = parts.slice(2, parts.length - 4).join(":");
+  if (!caseId || !stageId || !automationId || !targetPipelineId || !principalId || !permissionKey) return null;
+  return { caseId, stageId, automationId, targetPipelineId, principalId, permissionKey };
+}
+
+async function latestBreakdownCreatedEvent(db: Db, companyId: string, caseId: string) {
+  return db
+    .select()
+    .from(pipelineCaseEvents)
+    .where(and(
+      eq(pipelineCaseEvents.companyId, companyId),
+      eq(pipelineCaseEvents.caseId, caseId),
+      eq(pipelineCaseEvents.type, "updated"),
+      sql`${pipelineCaseEvents.payload}->>'kind' = 'breakdown_created'`,
+    ))
+    .orderBy(desc(pipelineCaseEvents.createdAt), desc(pipelineCaseEvents.id))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+}
+
+async function derivePipelineCaseLiveness(
+  db: Db,
+  companyId: string,
+  row: { case: typeof pipelineCases.$inferSelect; stage: typeof pipelineStages.$inferSelect },
+): Promise<PipelineCaseLiveness> {
+  if (row.case.terminalKind) {
+    return {
+      state: "terminal",
+      reason: "terminal",
+      message: `Pipeline item is terminal (${row.case.terminalKind}).`,
+    };
+  }
+
+  if (row.case.leaseToken && row.case.leaseExpiresAt && row.case.leaseExpiresAt.getTime() > Date.now()) {
+    return {
+      state: "live",
+      reason: "lease_active",
+      message: "Pipeline item has an active lease.",
+    };
+  }
+
+  const blockerCase = await db
+    .select({
+      id: pipelineCases.id,
+      title: pipelineCases.title,
+      terminalKind: pipelineCases.terminalKind,
+    })
+    .from(pipelineCaseBlockers)
+    .innerJoin(pipelineCases, eq(pipelineCaseBlockers.blockedByCaseId, pipelineCases.id))
+    .where(and(
+      eq(pipelineCaseBlockers.companyId, companyId),
+      eq(pipelineCaseBlockers.caseId, row.case.id),
+      or(isNull(pipelineCases.terminalKind), ne(pipelineCases.terminalKind, "done")),
+    ))
+    .orderBy(asc(pipelineCases.createdAt))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (blockerCase) {
+    return {
+      state: "blocked",
+      reason: "case_blocked",
+      message: `Pipeline item is blocked by "${blockerCase.title}".`,
+      blocker: {
+        caseId: blockerCase.id,
+        title: blockerCase.title,
+        terminalKind: blockerCase.terminalKind,
+      },
+    };
+  }
+
+  const linkedIssues = await db
+    .select({ link: pipelineCaseIssueLinks, issue: issueRows })
+    .from(pipelineCaseIssueLinks)
+    .innerJoin(issueRows, eq(pipelineCaseIssueLinks.issueId, issueRows.id))
+    .where(and(
+      eq(pipelineCaseIssueLinks.companyId, companyId),
+      eq(pipelineCaseIssueLinks.caseId, row.case.id),
+      inArray(pipelineCaseIssueLinks.role, ["automation", "work"]),
+      eq(issueRows.companyId, companyId),
+      isNull(issueRows.hiddenAt),
+    ))
+    .orderBy(desc(issueRows.updatedAt), desc(pipelineCaseIssueLinks.createdAt));
+  const blockedIssue = linkedIssues.find(({ issue }) => issue.status === "blocked");
+  if (blockedIssue) {
+    const blocker = await db
+      .select({
+        id: issueRows.id,
+        identifier: issueRows.identifier,
+        title: issueRows.title,
+        status: issueRows.status,
+      })
+      .from(issueRelations)
+      .innerJoin(issueRows, eq(issueRelations.issueId, issueRows.id))
+      .where(and(
+        eq(issueRelations.companyId, companyId),
+        eq(issueRelations.type, "blocks"),
+        eq(issueRelations.relatedIssueId, blockedIssue.issue.id),
+      ))
+      .orderBy(asc(issueRows.title))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return {
+      state: "blocked",
+      reason: "linked_issue_blocked",
+      message: `Linked ${blockedIssue.link.role} issue is blocked.`,
+      issue: summarizeLinkedIssue(blockedIssue.issue),
+      blocker: blocker
+        ? { issueId: blocker.id, title: blocker.title, status: blocker.status }
+        : null,
+    };
+  }
+  const activeIssue = linkedIssues.find(({ issue }) => issue.status === "in_progress");
+  if (activeIssue) {
+    return {
+      state: "live",
+      reason: "linked_issue_active",
+      message: `Linked ${activeIssue.link.role} issue is in progress.`,
+      issue: summarizeLinkedIssue(activeIssue.issue),
+    };
+  }
+  const waitingIssue = linkedIssues.find(({ issue }) => isWaitingIssueStatus(issue.status));
+  if (waitingIssue) {
+    return {
+      state: isLiveIssueStatus(waitingIssue.issue.status) ? "waiting" : "attention",
+      reason: "linked_issue_waiting",
+      message: `Linked ${waitingIssue.link.role} issue is ${waitingIssue.issue.status}.`,
+      issue: summarizeLinkedIssue(waitingIssue.issue),
+    };
+  }
+
+  const latestAutomation = await db
+    .select()
+    .from(pipelineAutomationExecutions)
+    .where(and(
+      eq(pipelineAutomationExecutions.companyId, companyId),
+      eq(pipelineAutomationExecutions.caseId, row.case.id),
+    ))
+    .orderBy(desc(pipelineAutomationExecutions.updatedAt), desc(pipelineAutomationExecutions.createdAt))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (latestAutomation?.status === "failed") {
+    const fingerprint = latestAutomation.error?.startsWith("permission_preflight_failed:")
+      ? latestAutomation.error.slice("permission_preflight_failed:".length)
+      : null;
+    const parsedFingerprint = parsePermissionPreflightFingerprint(fingerprint);
+    if (parsedFingerprint?.permissionKey === "pipelines:write") {
+      const decision = await authorizationService(db).decide({
+        actor: {
+          type: "agent",
+          agentId: parsedFingerprint.principalId,
+          companyId,
+          source: "agent_key",
+        },
+        action: "pipelines:write",
+        resource: { type: "company", companyId },
+        scope: { pipelineId: parsedFingerprint.targetPipelineId },
+      });
+      if (decision.allowed) {
+        return {
+          state: "attention",
+          reason: "automation_failed",
+          message: "Pipeline automation permission has been restored; retry the failed automation ledger.",
+          automation: {
+            automationId: latestAutomation.automationId,
+            routineId: latestAutomation.routineId,
+            executionId: latestAutomation.id,
+            error: latestAutomation.error,
+            fingerprint,
+          },
+        };
+      }
+    }
+    return {
+      state: fingerprint ? "blocked" : "attention",
+      reason: fingerprint ? "permission_preflight_failed" : "automation_failed",
+      message: fingerprint
+        ? "Pipeline automation is blocked until the configured assignee can write to the target pipeline."
+        : "Pipeline automation failed and needs retry or recovery.",
+      automation: {
+        automationId: latestAutomation.automationId,
+        routineId: latestAutomation.routineId,
+        executionId: latestAutomation.id,
+        error: latestAutomation.error,
+        fingerprint,
+      },
+    };
+  }
+
+  const breakdownConfig = readStageBreakdownConfig(row.stage.config);
+  if (breakdownConfig) {
+    const breakdownEvent = await latestBreakdownCreatedEvent(db, companyId, row.case.id);
+    if (!breakdownEvent) {
+      return {
+        state: "attention",
+        reason: "breakdown_pending",
+        message: "Breakdown stage has not recorded breakdown_created evidence yet.",
+      };
+    }
+    const expectedRequestKeys = readBreakdownRequestKeys(breakdownEvent.payload);
+    const createdRows = expectedRequestKeys.length > 0
+      ? await db
+        .select({ requestKey: pipelineCases.requestKey })
+        .from(pipelineCases)
+        .where(and(
+          eq(pipelineCases.companyId, companyId),
+          eq(pipelineCases.parentCaseId, row.case.id),
+          inArray(pipelineCases.requestKey, expectedRequestKeys),
+        ))
+      : [];
+    const createdRequestKeys = [...new Set(createdRows
+      .map((child) => child.requestKey)
+      .filter((key): key is string => typeof key === "string"))];
+    const missingRequestKeys = expectedRequestKeys.filter((key) => !createdRequestKeys.includes(key));
+    if (missingRequestKeys.length > 0) {
+      return {
+        state: "blocked",
+        reason: "breakdown_incomplete",
+        message: "Breakdown evidence does not match created child cases.",
+        breakdown: { expectedRequestKeys, createdRequestKeys, missingRequestKeys },
+      };
+    }
+    const waitForPieces = breakdownConfig.waitForPieces === true;
+    if (waitForPieces && row.case.childCount !== row.case.terminalChildCount) {
+      return {
+        state: "waiting",
+        reason: "children_waiting",
+        message: "Pipeline item is waiting for child items to finish.",
+        breakdown: { expectedRequestKeys, createdRequestKeys, missingRequestKeys: [] },
+      };
+    }
+  }
+
+  if (row.stage.kind === "review") {
+    return {
+      state: "waiting",
+      reason: "review_waiting",
+      message: "Pipeline item is waiting for stage review.",
+    };
+  }
+
+  return {
+    state: "attention",
+    reason: "no_action_path",
+    message: "No lease, linked work, blocker, automation retry, review, or breakdown action path is visible.",
   };
 }
 

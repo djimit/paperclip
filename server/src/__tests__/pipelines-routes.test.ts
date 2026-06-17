@@ -280,6 +280,207 @@ describeEmbeddedPostgres("pipeline routes", () => {
     await http.delete(`/api/pipelines/${pipelineId}/stages/${stageId}?moveCasesToStageId=${qaStage.body.id}`).expect(200);
   });
 
+  it("returns origin-run producer issue as the case conversation source", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const [agent] = await db.insert(agents).values({
+      companyId: company.id,
+      name: "Producer Agent",
+      role: "engineer",
+      status: "idle",
+    }).returning();
+    const [producerIssue] = await db.insert(issues).values({
+      companyId: company.id,
+      title: "Produced the item",
+      status: "done",
+      priority: "medium",
+      completedAt: new Date(),
+    }).returning();
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId: company.id,
+      agentId: agent!.id,
+      status: "succeeded",
+      contextSnapshot: { issueId: producerIssue!.id },
+    });
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "producer-origin", name: "Producer origin" })
+      .expect(201);
+    const created = await http
+      .post(`/api/pipelines/${pipeline.body.id}/cases`)
+      .send({ caseKey: "origin", title: "Origin-produced item" })
+      .expect(201);
+    await db
+      .update(pipelineCases)
+      .set({ originRunId: runId })
+      .where(eq(pipelineCases.id, created.body.case.id));
+
+    const detail = await http.get(`/api/cases/${created.body.case.id}`).expect(200);
+
+    expect(detail.body.conversationSource).toMatchObject({
+      reason: "producer_create",
+      sourceRunId: runId,
+      linkRole: null,
+      issue: { id: producerIssue!.id, title: "Produced the item" },
+    });
+  });
+
+  it("prefers the latest material agent update run over creation provenance", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const [agent] = await db.insert(agents).values({
+      companyId: company.id,
+      name: "Producer Agent",
+      role: "engineer",
+      status: "idle",
+    }).returning();
+    const [creationIssue, updateIssue] = await db.insert(issues).values([
+      {
+        companyId: company.id,
+        title: "Created the item",
+        status: "done",
+        priority: "medium",
+        completedAt: new Date(),
+      },
+      {
+        companyId: company.id,
+        title: "Updated the item materially",
+        status: "done",
+        priority: "medium",
+        completedAt: new Date(),
+      },
+    ]).returning();
+    const creationRunId = randomUUID();
+    const updateRunId = randomUUID();
+    await db.insert(heartbeatRuns).values([
+      {
+        id: creationRunId,
+        companyId: company.id,
+        agentId: agent!.id,
+        status: "succeeded",
+        contextSnapshot: { issueId: creationIssue!.id },
+      },
+      {
+        id: updateRunId,
+        companyId: company.id,
+        agentId: agent!.id,
+        status: "succeeded",
+        contextSnapshot: { issueId: updateIssue!.id },
+      },
+    ]);
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "producer-update", name: "Producer update" })
+      .expect(201);
+    const created = await http
+      .post(`/api/pipelines/${pipeline.body.id}/cases`)
+      .send({ caseKey: "update", title: "Update-produced item" })
+      .expect(201);
+    await db
+      .update(pipelineCases)
+      .set({ originRunId: creationRunId })
+      .where(eq(pipelineCases.id, created.body.case.id));
+    await db.insert(pipelineCaseEvents).values({
+      companyId: company.id,
+      caseId: created.body.case.id,
+      type: "updated",
+      actorType: "agent",
+      actorAgentId: agent!.id,
+      runId: updateRunId,
+      payload: { materialChanged: true },
+      createdAt: new Date(Date.now() + 1_000),
+    });
+
+    const detail = await http.get(`/api/cases/${created.body.case.id}`).expect(200);
+
+    expect(detail.body.conversationSource).toMatchObject({
+      reason: "producer_update",
+      sourceRunId: updateRunId,
+      issue: { id: updateIssue!.id, title: "Updated the item materially" },
+    });
+  });
+
+  it("prefers automation links over conversation and work link fallbacks", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "producer-links", name: "Producer links" })
+      .expect(201);
+    const created = await http
+      .post(`/api/pipelines/${pipeline.body.id}/cases`)
+      .send({ caseKey: "links", title: "Link-produced item" })
+      .expect(201);
+    const [workIssue, conversationIssue, automationIssue] = await db.insert(issues).values([
+      { companyId: company.id, title: "Legacy work", status: "todo", priority: "medium" },
+      { companyId: company.id, title: "Manual discussion", status: "todo", priority: "medium" },
+      { companyId: company.id, title: "Automation producer", status: "todo", priority: "medium" },
+    ]).returning();
+    await db.insert(pipelineCaseIssueLinks).values([
+      { companyId: company.id, caseId: created.body.case.id, issueId: workIssue!.id, role: "work" },
+      { companyId: company.id, caseId: created.body.case.id, issueId: conversationIssue!.id, role: "conversation" },
+      { companyId: company.id, caseId: created.body.case.id, issueId: automationIssue!.id, role: "automation" },
+    ]);
+
+    const detail = await http.get(`/api/cases/${created.body.case.id}`).expect(200);
+
+    expect(detail.body.conversationSource).toMatchObject({
+      reason: "automation_link",
+      linkRole: "automation",
+      issue: { id: automationIssue!.id, title: "Automation producer" },
+    });
+  });
+
+  it("does not create a duplicate discussion issue when a producer source exists", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const [agent] = await db.insert(agents).values({
+      companyId: company.id,
+      name: "Producer Agent",
+      role: "engineer",
+      status: "idle",
+    }).returning();
+    const [producerIssue] = await db.insert(issues).values({
+      companyId: company.id,
+      title: "Producer thread",
+      status: "done",
+      priority: "medium",
+      completedAt: new Date(),
+    }).returning();
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId: company.id,
+      agentId: agent!.id,
+      status: "succeeded",
+      contextSnapshot: { issueId: producerIssue!.id },
+    });
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "producer-open", name: "Producer open" })
+      .expect(201);
+    const created = await http
+      .post(`/api/pipelines/${pipeline.body.id}/cases`)
+      .send({ caseKey: "open", title: "Open conversation item" })
+      .expect(201);
+    await db
+      .update(pipelineCases)
+      .set({ originRunId: runId })
+      .where(eq(pipelineCases.id, created.body.case.id));
+    const beforeIssues = await db.select().from(issues).where(eq(issues.companyId, company.id));
+
+    const opened = await http.post(`/api/cases/${created.body.case.id}/open-conversation`).expect(200);
+
+    expect(opened.body).toMatchObject({
+      created: false,
+      issue: { id: producerIssue!.id, title: "Producer thread" },
+    });
+    const afterIssues = await db.select().from(issues).where(eq(issues.companyId, company.id));
+    expect(afterIssues).toHaveLength(beforeIssues.length);
+  });
+
   it("allows same-company agents to create pipelines without an explicit pipelines:write grant", async () => {
     const company = await seedCompany();
     const [agent] = await db.insert(agents).values({
@@ -1336,6 +1537,188 @@ describeEmbeddedPostgres("pipeline routes", () => {
 
     const targetCases = await http.get(`/api/pipelines/${target.body.id}/cases`).expect(200);
     expect(targetCases.body).toHaveLength(0);
+  });
+
+  it("blocks pipeline breakdown automation when the routine assignee lacks target pipeline write permission, then recovers after grant", async () => {
+    const company = await seedCompany();
+    const [agent] = await db.insert(agents).values({
+      companyId: company.id,
+      name: "Breakdown Bot",
+      role: "engineer",
+      status: "idle",
+    }).returning();
+    const [routine] = await db.insert(routines).values({
+      companyId: company.id,
+      title: "Break down item",
+      description: "Create target work.",
+      assigneeAgentId: agent!.id,
+    }).returning();
+    const http = request(app(boardActor));
+    const target = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "preflight-target", name: "Preflight Target" })
+      .expect(201);
+    const source = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({
+        key: "preflight-source",
+        name: "Preflight Source",
+        stages: [
+          { key: "intake", name: "Intake", kind: "open", position: 100 },
+          {
+            key: "breakdown",
+            name: "Breakdown",
+            kind: "working",
+            position: 200,
+            config: {
+              onEnter: { type: "run_routine", routineId: routine!.id },
+              breakdown: {
+                targetPipelineId: target.body.id,
+                targetStageKey: "intake",
+                pieceNoun: "piece",
+                waitForPieces: true,
+              },
+            },
+          },
+          { key: "done", name: "Done", kind: "done", position: 900 },
+          { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
+        ],
+      })
+      .expect(201);
+    const parent = await http
+      .post(`/api/pipelines/${source.body.id}/cases`)
+      .send({ caseKey: "parent", title: "Parent" })
+      .expect(201);
+
+    await http
+      .post(`/api/cases/${parent.body.case.id}/transition`)
+      .send({ toStageKey: "breakdown", expectedVersion: 1 })
+      .expect(200);
+
+    const [failedLedger] = await db
+      .select()
+      .from(pipelineAutomationExecutions)
+      .where(eq(pipelineAutomationExecutions.caseId, parent.body.case.id));
+    expect(failedLedger).toMatchObject({
+      status: "failed",
+      executionIssueId: null,
+    });
+    expect(failedLedger!.error).toMatch(/^permission_preflight_failed:/);
+    const failureEvents = await db
+      .select()
+      .from(pipelineCaseEvents)
+      .where(eq(pipelineCaseEvents.caseId, parent.body.case.id));
+    expect(failureEvents.filter((event) => event.type === "automation_failed")).toHaveLength(1);
+    const routineRunsBeforeGrant = await db.select().from(routineRuns).where(eq(routineRuns.routineId, routine!.id));
+    expect(routineRunsBeforeGrant).toHaveLength(0);
+
+    const blockedDetail = await http.get(`/api/cases/${parent.body.case.id}`).expect(200);
+    expect(blockedDetail.body.liveness).toMatchObject({
+      state: "blocked",
+      reason: "permission_preflight_failed",
+    });
+
+    await http
+      .post(`/api/cases/${parent.body.case.id}/automations/${failedLedger!.automationId}/retry`)
+      .expect(200);
+    const stillFailureEvents = await db
+      .select()
+      .from(pipelineCaseEvents)
+      .where(eq(pipelineCaseEvents.caseId, parent.body.case.id));
+    expect(stillFailureEvents.filter((event) => event.type === "automation_failed")).toHaveLength(1);
+
+    await grantAgentPipelineWrite(company.id, agent!.id, { pipelineId: target.body.id });
+    const revalidatedDetail = await http.get(`/api/cases/${parent.body.case.id}`).expect(200);
+    expect(revalidatedDetail.body.liveness).toMatchObject({
+      state: "attention",
+      reason: "automation_failed",
+      message: "Pipeline automation permission has been restored; retry the failed automation ledger.",
+    });
+    const retried = await http
+      .post(`/api/cases/${parent.body.case.id}/automations/${failedLedger!.automationId}/retry`)
+      .expect(200);
+    expect(retried.body).toMatchObject({
+      status: "succeeded",
+      execution: { executionIssueId: expect.any(String) },
+    });
+    const linkedAutomationIssues = await db
+      .select()
+      .from(pipelineCaseIssueLinks)
+      .where(eq(pipelineCaseIssueLinks.caseId, parent.body.case.id));
+    expect(linkedAutomationIssues.filter((link) => link.role === "automation")).toHaveLength(1);
+    const routineRunsAfterGrant = await db.select().from(routineRuns).where(eq(routineRuns.routineId, routine!.id));
+    expect(routineRunsAfterGrant).toHaveLength(1);
+  });
+
+  it("reuses breakdown children by request key when automation retries after recovery", async () => {
+    const company = await seedCompany();
+    const [agent] = await db.insert(agents).values({
+      companyId: company.id,
+      name: "Fanout Bot",
+      role: "engineer",
+      status: "idle",
+    }).returning();
+    await grantAgentPipelineWrite(company.id, agent!.id);
+    const http = request(app(boardActor));
+    const target = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "dedupe-target", name: "Dedupe Target" })
+      .expect(201);
+    const source = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({
+        key: "dedupe-source",
+        name: "Dedupe Source",
+        stages: [
+          {
+            key: "breakdown",
+            name: "Breakdown",
+            kind: "open",
+            position: 100,
+            config: {
+              breakdown: {
+                targetPipelineId: target.body.id,
+                targetStageKey: "intake",
+                pieceNoun: "piece",
+                waitForPieces: true,
+              },
+            },
+          },
+          { key: "done", name: "Done", kind: "done", position: 900 },
+          { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
+        ],
+      })
+      .expect(201);
+    const parent = await http
+      .post(`/api/pipelines/${source.body.id}/cases`)
+      .send({ caseKey: "parent", title: "Parent" })
+      .expect(201);
+    const agentActor: Express.Request["actor"] = {
+      type: "agent",
+      agentId: agent!.id,
+      companyId: company.id,
+      runId: randomUUID(),
+      source: "agent_key",
+    };
+    const agentHttp = request(app(agentActor));
+
+    const first = await agentHttp
+      .post(`/api/cases/${parent.body.case.id}/breakdown`)
+      .send({ items: [{ key: "api", title: "API" }] })
+      .expect(200);
+    const retry = await agentHttp
+      .post(`/api/cases/${parent.body.case.id}/breakdown`)
+      .send({ items: [{ key: "api", title: "API duplicate" }] })
+      .expect(200);
+
+    expect(first.body.items[0]).toMatchObject({ ok: true, created: true });
+    expect(retry.body.items[0]).toMatchObject({
+      ok: true,
+      created: false,
+      case: { id: first.body.items[0].case.id, title: "API" },
+    });
+    const targetCases = await http.get(`/api/pipelines/${target.body.id}/cases`).expect(200);
+    expect(targetCases.body.map((row: { case: { requestKey: string | null } }) => row.case.requestKey)).toEqual(["piece:api"]);
   });
 
   it("rejects agent exits from human review stages", async () => {
