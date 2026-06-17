@@ -63,6 +63,7 @@ export function Sidebar() {
   // (top-level Projects link). Issue/Task wording is split to PR #7651.
   // Gating is navigation-only; all routes stay registered in both modes.
   const streamlined = experimentalSettings?.enableStreamlinedLeftNavigation === true;
+  const showPipelines = experimentalSettings?.enablePipelines === true;
 
   const pluginContext = {
     companyId: selectedCompanyId,
@@ -168,9 +169,13 @@ export function Sidebar() {
         <SidebarSection label="Work">
           <SidebarNavItem to="/issues" label="Tasks" icon={CircleDot} />
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
-          <SidebarNavItem to="/review-queue" label="Review queue" icon={ListChecks} />
-          <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
-          <SidebarNavItem to="/learnings" label="Learnings" icon={BookOpenText} />
+          {showPipelines ? (
+            <>
+              <SidebarNavItem to="/review-queue" label="Review queue" icon={ListChecks} />
+              <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
+              <SidebarNavItem to="/learnings" label="Learnings" icon={BookOpenText} />
+            </>
+          ) : null}
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
           <SidebarNavItem to="/artifacts" label="Artifacts" icon={Package} />
           {showWorkspacesLink ? (

@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/r
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/i18n";
 import { Layout } from "./components/Layout";
+import { PipelinesExperimentalGate } from "./components/PipelinesExperimentalGate";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
 import { Dashboard } from "./pages/Dashboard";
@@ -131,14 +132,38 @@ function boardRoutes() {
         <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
       ) : null}
       <Route path="routines" element={<Routines />} />
-      <Route path="review-queue" element={<ReviewQueue />} />
-      <Route path="learnings" element={<Learnings />} />
-      <Route path="pipelines" element={<Pipelines />} />
-      <Route path="pipelines/:pipelineId" element={<Pipelines />} />
-      <Route path="pipelines/:pipelineId/add" element={<Pipelines />} />
-      <Route path="pipelines/:pipelineId/settings" element={<PipelineSettings />} />
-      <Route path="pipelines/:pipelineId/items/:caseId" element={<PipelineItemDetail />} />
-      <Route path="pipelines/:pipelineId/cases/:caseId" element={<PipelineItemLegacyRedirect />} />
+      <Route
+        path="review-queue"
+        element={<PipelinesExperimentalGate><ReviewQueue /></PipelinesExperimentalGate>}
+      />
+      <Route
+        path="learnings"
+        element={<PipelinesExperimentalGate><Learnings /></PipelinesExperimentalGate>}
+      />
+      <Route
+        path="pipelines"
+        element={<PipelinesExperimentalGate><Pipelines /></PipelinesExperimentalGate>}
+      />
+      <Route
+        path="pipelines/:pipelineId"
+        element={<PipelinesExperimentalGate><Pipelines /></PipelinesExperimentalGate>}
+      />
+      <Route
+        path="pipelines/:pipelineId/add"
+        element={<PipelinesExperimentalGate><Pipelines /></PipelinesExperimentalGate>}
+      />
+      <Route
+        path="pipelines/:pipelineId/settings"
+        element={<PipelinesExperimentalGate><PipelineSettings /></PipelinesExperimentalGate>}
+      />
+      <Route
+        path="pipelines/:pipelineId/items/:caseId"
+        element={<PipelinesExperimentalGate><PipelineItemDetail /></PipelinesExperimentalGate>}
+      />
+      <Route
+        path="pipelines/:pipelineId/cases/:caseId"
+        element={<PipelinesExperimentalGate><PipelineItemLegacyRedirect /></PipelinesExperimentalGate>}
+      />
       <Route path="routines/:routineId" element={<RoutineDetail />} />
       <Route path="routines/:routineId/:section" element={<RoutineDetail />} />
       <Route path="execution-workspaces/:workspaceId" element={<ExecutionWorkspaceDetail />} />

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { buildPipelineMentionHref, buildRoutineMentionHref, buildSkillMentionHref } from "@paperclipai/shared";
 import { companySkillsApi } from "../api/companySkills";
 import { pipelinesApi, type PipelineStage } from "../api/pipelines";
+import { instanceSettingsApi } from "../api/instanceSettings";
 import { routinesApi } from "../api/routines";
 import { useCompany } from "./CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -67,12 +68,17 @@ export function EditorAutocompleteProvider({ children }: { children: ReactNode }
     queryFn: () => routinesApi.list(selectedCompanyId!),
     enabled: Boolean(selectedCompanyId),
   });
+  const { data: experimentalSettings } = useQuery({
+    queryKey: queryKeys.instance.experimentalSettings,
+    queryFn: () => instanceSettingsApi.getExperimental(),
+  });
+  const pipelinesEnabled = experimentalSettings?.enablePipelines === true;
   const { data: pipelines = [] } = useQuery({
     queryKey: selectedCompanyId
       ? queryKeys.pipelines.list(selectedCompanyId)
       : ["pipelines", "__none__"],
     queryFn: () => pipelinesApi.list(selectedCompanyId!),
-    enabled: Boolean(selectedCompanyId),
+    enabled: Boolean(selectedCompanyId) && pipelinesEnabled,
   });
 
   const value = useMemo<EditorAutocompleteContextValue>(() => ({
@@ -100,7 +106,7 @@ export function EditorAutocompleteProvider({ children }: { children: ReactNode }
           href: buildRoutineMentionHref(routine.id),
           aliases: [`routine:${routine.title}`, routine.title, routine.id],
         })),
-      ...pipelines
+      ...(pipelinesEnabled ? pipelines : [])
         .filter((pipeline) => !pipeline.archivedAt)
         .sort((left, right) => left.name.localeCompare(right.name))
         .flatMap((pipeline) => {
@@ -113,7 +119,13 @@ export function EditorAutocompleteProvider({ children }: { children: ReactNode }
             key: pipeline.key,
             stageName: null,
             href: buildPipelineMentionHref(pipeline.id),
-            aliases: [`pipeline:${pipeline.name}`, `pipeline:${pipeline.key}`, pipeline.name, pipeline.key, pipeline.id],
+            aliases: [
+              `pipeline:${pipeline.name}`,
+              `pipeline:${pipeline.key}`,
+              pipeline.name,
+              pipeline.key,
+              pipeline.id,
+            ],
           };
           const stages = Array.isArray((pipeline as { stages?: PipelineStage[] }).stages)
             ? (pipeline as { stages?: PipelineStage[] }).stages ?? []
@@ -140,7 +152,7 @@ export function EditorAutocompleteProvider({ children }: { children: ReactNode }
           ];
         }),
     ],
-  }), [companySkills, pipelines, routines]);
+  }), [companySkills, pipelines, pipelinesEnabled, routines]);
 
   return (
     <EditorAutocompleteContext.Provider value={value}>
