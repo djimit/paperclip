@@ -1,5 +1,22 @@
 # Task Watchdog
 
+## Table of contents
+
+- [Why it exists](#why-it-exists)
+- [Mental model](#mental-model)
+- [Configuration](#configuration)
+  - [From the UI](#from-the-ui)
+  - [From the API](#from-the-api)
+- [How a scan works](#how-a-scan-works)
+- [What the watchdog agent does](#what-the-watchdog-agent-does)
+  - [Writing custom instructions](#writing-custom-instructions)
+- [Scope enforcement](#scope-enforcement)
+- [Origin and badges](#origin-and-badges)
+- [When not to use a watchdog](#when-not-to-use-a-watchdog)
+- [Reference](#reference)
+
+---
+
 A **task watchdog** is an agent you assign to verify a stopped issue tree and put it back into motion when stopping was a mistake. You configure it on a single issue, and it watches that issue plus its non-watchdog descendants. When every leaf in that subtree comes to rest — done, cancelled, blocked, in review, or waiting on an interaction — and there is no live continuation path, Paperclip wakes the watchdog agent to read the evidence and decide whether the stop is legitimate.
 
 Watchdogs are opt-in per issue. There is no global "watch everything" mode.
@@ -169,3 +186,20 @@ If what you actually want is "wake me when this is done," use a routine or an is
 | HTTP routes                      | `server/src/routes/issues.ts` (`GET/PUT/DELETE /issues/:id/watchdog`) |
 | Properties UI                    | `ui/src/components/IssueProperties.tsx` (Watchdog row)               |
 | New-issue dialog UI              | `ui/src/components/NewIssueDialog.tsx`                                |
+
+---
+
+And that's all folks!
+
+```
+              ,.
+             (_|,.
+            ,' /, )_______   _
+         __j o``-'        `.'-)'
+         (")                 \'
+          `-j                |
+            `-._(           /
+               |_\  |--^.  /
+              /_]'|_| /_)_/
+                 /_]'  /_]'
+```
