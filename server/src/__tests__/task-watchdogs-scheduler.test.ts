@@ -7,8 +7,11 @@ import {
   agents,
   companies,
   createDb,
+  documents,
   heartbeatRuns,
   issueComments,
+  issueDocuments,
+  issueWorkProducts,
   issues,
   issueWatchdogs,
 } from "@paperclipai/db";
@@ -38,6 +41,9 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(issueWorkProducts);
+    await db.delete(issueDocuments);
+    await db.delete(documents);
     await db.delete(issueComments);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
@@ -102,6 +108,34 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
       createdAt: overrides.createdAt ?? new Date(Date.now() - 60 * 60 * 1000),
     });
     return id;
+  }
+
+  async function seedIssueDocument(companyId: string, issueId: string, updatedAt: Date) {
+    const [document] = await db.insert(documents).values({
+      companyId,
+      title: "Plan",
+      latestBody: "Plan body",
+      updatedAt,
+    }).returning();
+    await db.insert(issueDocuments).values({
+      companyId,
+      issueId,
+      documentId: document!.id,
+      key: "plan",
+      updatedAt,
+    });
+  }
+
+  async function seedIssueWorkProduct(companyId: string, issueId: string, updatedAt: Date) {
+    await db.insert(issueWorkProducts).values({
+      companyId,
+      issueId,
+      type: "artifact",
+      provider: "test",
+      title: "Report",
+      status: "ready",
+      updatedAt,
+    });
   }
 
   async function seedWatchdog(companyId: string, issueId: string, agentId: string) {
@@ -311,6 +345,81 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
       lastObservedFingerprint: newerFingerprint,
     });
     expect(wakes.length).toBe(2);
+  });
+
+  it("revalidates stale watchdog reviews against current source evidence before allowing mutations", async () => {
+    const companyId = await seedCompany();
+    const sourceId = await seedIssue(companyId, { identifier: "WDOG-REVALIDATE", status: "blocked" });
+    const agentId = await seedAgent(companyId);
+    await seedWatchdog(companyId, sourceId, agentId);
+    const { service } = createService();
+
+    await service.reconcileTaskWatchdogs({ companyId });
+    const [watchdog] = await db.select().from(issueWatchdogs).where(eq(issueWatchdogs.issueId, sourceId));
+    const originalFingerprint = watchdog!.lastObservedFingerprint!;
+    expect(originalFingerprint).toMatch(/^task_watchdog_stop:/);
+
+    const later = new Date(Date.now() + 60_000);
+    await db.insert(issueComments).values({
+      companyId,
+      issueId: sourceId,
+      authorType: "agent",
+      body: "Fresh source evidence.",
+      updatedAt: later,
+      createdAt: later,
+    });
+    await seedIssueDocument(companyId, sourceId, new Date(later.getTime() + 1_000));
+    await seedIssueWorkProduct(companyId, sourceId, new Date(later.getTime() + 2_000));
+
+    const revalidated = await service.revalidateMutationScope({
+      kind: "watchdog",
+      watchdogId: watchdog!.id,
+      companyId,
+      watchedIssueId: sourceId,
+      stopFingerprint: originalFingerprint,
+    });
+
+    expect(revalidated.allowed).toBe(false);
+    expect(revalidated.reason).toContain("stop fingerprint changed");
+    expect(revalidated.classification?.state).toBe("stopped");
+    if (revalidated.classification?.state !== "stopped") throw new Error("Expected stopped classification");
+    expect(revalidated.classification.stopFingerprint).not.toBe(originalFingerprint);
+    expect(revalidated.classification.stoppedLeaves[0]).toMatchObject({
+      latestCommentAt: later.toISOString(),
+      latestDocumentAt: new Date(later.getTime() + 1_000).toISOString(),
+      latestWorkProductAt: new Date(later.getTime() + 2_000).toISOString(),
+    });
+  });
+
+  it("revalidates a stale watchdog review as live when the source gets a fresh run path", async () => {
+    const companyId = await seedCompany();
+    const sourceId = await seedIssue(companyId, { identifier: "WDOG-LIVE-REVALIDATE", status: "blocked" });
+    const agentId = await seedAgent(companyId);
+    await seedWatchdog(companyId, sourceId, agentId);
+    const { service } = createService();
+
+    await service.reconcileTaskWatchdogs({ companyId });
+    const [watchdog] = await db.select().from(issueWatchdogs).where(eq(issueWatchdogs.issueId, sourceId));
+    const originalFingerprint = watchdog!.lastObservedFingerprint!;
+    await db.insert(heartbeatRuns).values({
+      companyId,
+      agentId,
+      status: "running",
+      invocationSource: "assignment",
+      contextSnapshot: { issueId: sourceId },
+    });
+
+    const revalidated = await service.revalidateMutationScope({
+      kind: "watchdog",
+      watchdogId: watchdog!.id,
+      companyId,
+      watchedIssueId: sourceId,
+      stopFingerprint: originalFingerprint,
+    });
+
+    expect(revalidated.allowed).toBe(false);
+    expect(revalidated.reason).toContain("now has a live");
+    expect(revalidated.classification?.state).toBe("live");
   });
 
   it("does not raise a stopped-subtree review while a freshly-created assigned issue's first run is starting", async () => {

@@ -26,6 +26,7 @@ export type TaskWatchdogMutationScope =
       companyId: string;
       watchedIssueId: string;
       watchdogIssueId: string | null;
+      stopFingerprint: string | null;
     };
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -39,9 +40,10 @@ function readString(value: unknown): string | null {
 function readTaskWatchdogContext(contextSnapshot: unknown) {
   const context = isPlainRecord(contextSnapshot) ? contextSnapshot : null;
   const taskWatchdog = isPlainRecord(context?.taskWatchdog) ? context.taskWatchdog : null;
-  if (!taskWatchdog) return null;
+  if (!taskWatchdog && context?.taskWatchdog !== true) return null;
   return {
-    watchedIssueId: readString(taskWatchdog.watchedIssueId),
+    watchedIssueId: readString(taskWatchdog?.watchedIssueId) ?? readString(context?.watchedIssueId),
+    stopFingerprint: readString(taskWatchdog?.stopFingerprint) ?? readString(context?.stopFingerprint),
   };
 }
 
@@ -114,6 +116,7 @@ export async function resolveTaskWatchdogMutationScope(
     companyId: watchdog.companyId,
     watchedIssueId: watchdog.issueId,
     watchdogIssueId: watchdog.watchdogIssueId ?? null,
+    stopFingerprint: taskWatchdog.stopFingerprint,
   };
 }
 

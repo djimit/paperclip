@@ -1903,7 +1903,7 @@ export function issueRoutes(
         });
         return false;
       }
-      return true;
+      return assertFreshTaskWatchdogSourceMutation(res, watchdogScope, issue);
     }
     const boundaryDecision = await decideIssueAccess(req, issue, "issue:mutate");
     if (!boundaryDecision.allowed) {
@@ -1967,6 +1967,31 @@ export function issueRoutes(
     return true;
   }
 
+  async function assertFreshTaskWatchdogSourceMutation(
+    res: Response,
+    scope: Awaited<ReturnType<typeof resolveTaskWatchdogMutationScope>>,
+    issue: { id: string },
+  ) {
+    if (scope.kind !== "watchdog") return true;
+    if (scope.watchdogIssueId && issue.id === scope.watchdogIssueId) return true;
+
+    const revalidated = await taskWatchdogsSvc.revalidateMutationScope(scope);
+    if (revalidated.allowed) return true;
+    res.status(409).json({
+      error: revalidated.reason,
+      details: {
+        watchedIssueId: scope.watchedIssueId,
+        watchdogId: scope.watchdogId,
+        runStopFingerprint: scope.stopFingerprint,
+        currentState: revalidated.classification?.state ?? null,
+        currentStopFingerprint: revalidated.classification && "stopFingerprint" in revalidated.classification
+          ? revalidated.classification.stopFingerprint
+          : null,
+      },
+    });
+    return false;
+  }
+
   async function assertTaskWatchdogIssueMutationAllowed(
     req: Request,
     res: Response,
@@ -1981,7 +2006,7 @@ export function issueRoutes(
     const scope = await resolveTaskWatchdogMutationScope(db, req.actor);
     if (scope.kind === "none") return true;
     const result = await taskWatchdogScopeAllowsIssueMutation(db, scope, issue, opts);
-    if (result.kind !== "invalid") return true;
+    if (result.kind !== "invalid") return assertFreshTaskWatchdogSourceMutation(res, scope, issue);
     res.status(403).json({
       error: result.detail,
       details: {
@@ -2026,7 +2051,7 @@ export function issueRoutes(
       return false;
     }
     const result = await taskWatchdogScopeAllowsIssueMutation(db, scope, parent, { allowWatchdogIssue: false });
-    if (result.kind !== "invalid") return true;
+    if (result.kind !== "invalid") return assertFreshTaskWatchdogSourceMutation(res, scope, parent);
     res.status(403).json({
       error: result.detail,
       details: {

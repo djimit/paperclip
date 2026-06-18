@@ -75,6 +75,10 @@ const mockIssueRecoveryActionService = vi.hoisted(() => ({
 }));
 const mockTaskWatchdogService = vi.hoisted(() => ({
   getActiveForIssue: vi.fn(async () => null),
+  revalidateMutationScope: vi.fn(async () => ({
+    allowed: true,
+    classification: { state: "stopped", stopFingerprint: "task_watchdog_stop:test" },
+  })),
   reconcileForIssueAndAncestors: vi.fn(async () => ({
     checked: 0,
     triggered: 0,
@@ -400,6 +404,11 @@ describe("agent issue mutation checkout ownership", () => {
     });
     mockTaskWatchdogService.getActiveForIssue.mockReset();
     mockTaskWatchdogService.getActiveForIssue.mockResolvedValue(null);
+    mockTaskWatchdogService.revalidateMutationScope.mockReset();
+    mockTaskWatchdogService.revalidateMutationScope.mockResolvedValue({
+      allowed: true,
+      classification: { state: "stopped", stopFingerprint: "task_watchdog_stop:test" },
+    });
     mockTaskWatchdogService.reconcileForIssueAndAncestors.mockReset();
     mockTaskWatchdogService.reconcileForIssueAndAncestors.mockResolvedValue({
       checked: 0,
@@ -1203,7 +1212,7 @@ describe("agent issue mutation checkout ownership", () => {
         id: watchdogRunId,
         companyId,
         agentId: peerAgentId,
-        contextSnapshot: { taskWatchdog: { watchedIssueId } },
+        contextSnapshot: { taskWatchdog: { watchedIssueId, stopFingerprint: "task_watchdog_stop:test" } },
       }];
       const watchdogRows = options.watchdogRows ?? [{
         id: "dddddddd-dddd-4ddd-8ddd-ddddddddddde",
@@ -1250,10 +1259,10 @@ describe("agent issue mutation checkout ownership", () => {
     // watchdog scope can widen access. Denying it here proves the grant works.
     function denyBaseBoundary() {
       mockAccessService.decide.mockImplementation(async (input: { action: string }) => ({
-        allowed: input.action === "company_scope:read" || input.action === "tasks:assign",
+        allowed: input.action === "company_scope:read" || input.action === "issue:read" || input.action === "tasks:assign",
         action: input.action,
         reason:
-          input.action === "company_scope:read" || input.action === "tasks:assign"
+          input.action === "company_scope:read" || input.action === "issue:read" || input.action === "tasks:assign"
             ? "allow_explicit_grant"
             : "deny_missing_grant",
         explanation: "Watchdog test boundary default.",
@@ -1311,6 +1320,44 @@ describe("agent issue mutation checkout ownership", () => {
 
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       expect(mockIssueService.update).toHaveBeenCalledWith(issueId, expect.objectContaining({ status: "in_review" }));
+    });
+
+    it("rejects stale watchdog source mutations when revalidation finds a live path", async () => {
+      denyBaseBoundary();
+      mockIssueService.getById.mockResolvedValue(makeIssue({ status: "in_progress", assigneeAgentId: ownerAgentId }));
+      mockTaskWatchdogService.revalidateMutationScope.mockResolvedValueOnce({
+        allowed: false,
+        reason:
+          "Task-watchdog review is stale because the watched subtree now has a live, waiting, already-reviewed, or not-applicable path; refresh the source state before mutating it.",
+        classification: { state: "live", liveIssueIds: [issueId] },
+      });
+
+      const app = await createApp(watchdogActor(), createWatchdogDb());
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked" });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      expect(res.body.error).toContain("Task-watchdog review is stale");
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+    });
+
+    it("suppresses watchdog follow-up creation when current source revalidation is live", async () => {
+      denyBaseBoundary();
+      mockIssueService.getById.mockResolvedValue(makeIssue({ assigneeAgentId: ownerAgentId }));
+      mockTaskWatchdogService.revalidateMutationScope.mockResolvedValueOnce({
+        allowed: false,
+        reason:
+          "Task-watchdog review is stale because the watched subtree now has a live, waiting, already-reviewed, or not-applicable path; refresh the source state before mutating it.",
+        classification: { state: "live", liveIssueIds: [issueId] },
+      });
+
+      const app = await createApp(watchdogActor(), createWatchdogDb());
+      const res = await request(app)
+        .post(`/api/issues/${issueId}/children`)
+        .send({ title: "Stale follow-up", status: "todo" });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      expect(res.body.error).toContain("Task-watchdog review is stale");
+      expect(mockIssueService.createChild).not.toHaveBeenCalled();
     });
 
     it("lets a watchdog run reassign a watched issue to an active same-company agent", async () => {

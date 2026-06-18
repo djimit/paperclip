@@ -6,11 +6,14 @@ import {
   agents,
   approvals,
   heartbeatRuns,
+  issueComments,
+  issueDocuments,
   issueApprovals,
   issueRelations,
   issues,
   issueThreadInteractions,
   issueWatchdogs,
+  issueWorkProducts,
 } from "@paperclipai/db";
 import type { IssueWatchdog, IssueWatchdogSummary } from "@paperclipai/shared";
 import { conflict, notFound } from "../errors.js";
@@ -66,6 +69,9 @@ export type TaskWatchdogClassifierIssue = Pick<
   // grace window keep working; the pending-first-run guard is skipped when
   // it (or `evaluatedAt`) is absent.
   createdAt?: Date | string | null;
+  latestCommentAt?: Date | string | null;
+  latestDocumentAt?: Date | string | null;
+  latestWorkProductAt?: Date | string | null;
 };
 
 export type TaskWatchdogClassifierPath = {
@@ -104,6 +110,9 @@ export type TaskWatchdogStoppedLeaf = {
   pendingInteractionIds: string[];
   pendingApprovalIds: string[];
   updatedAt: string;
+  latestCommentAt: string | null;
+  latestDocumentAt: string | null;
+  latestWorkProductAt: string | null;
 };
 
 export type TaskWatchdogClassifierResult =
@@ -221,6 +230,13 @@ function issueUpdatedAtIso(issue: Pick<TaskWatchdogClassifierIssue, "updatedAt">
   return issue.updatedAt instanceof Date
     ? issue.updatedAt.toISOString()
     : new Date(String(issue.updatedAt)).toISOString();
+}
+
+function optionalIso(value: Date | string | null | undefined): string | null {
+  if (value == null) return null;
+  const ms = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
 }
 
 function toEpochMs(value: Date | string | null | undefined): number | null {
@@ -376,6 +392,9 @@ export function classifyTaskWatchdogSubtree(input: TaskWatchdogClassifierInput):
       pendingInteractionIds: waitingPathIds(input.pendingInteractions, input.watchdog.companyId, issue.id),
       pendingApprovalIds: waitingPathIds(input.pendingApprovals, input.watchdog.companyId, issue.id),
       updatedAt: issueUpdatedAtIso(issue),
+      latestCommentAt: optionalIso(issue.latestCommentAt),
+      latestDocumentAt: optionalIso(issue.latestDocumentAt),
+      latestWorkProductAt: optionalIso(issue.latestWorkProductAt),
     }));
   const stopFingerprint = stableStopFingerprint({
     companyId: input.watchdog.companyId,
@@ -531,7 +550,11 @@ function watchdogWakeContext(input: {
     taskId: input.watchdogIssue.id,
     wakeReason: "task_watchdog_stopped_subtree",
     source: TASK_WATCHDOG_ORIGIN_KIND,
-    taskWatchdog: true,
+    taskWatchdog: {
+      watchedIssueId: input.sourceIssue.id,
+      watchedIssueIdentifier: input.sourceIssue.identifier,
+      stopFingerprint: input.classification.stopFingerprint,
+    },
     watchdogId: input.watchdog.id,
     watchedIssueId: input.sourceIssue.id,
     watchedIssueIdentifier: input.sourceIssue.identifier,
@@ -638,6 +661,9 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
       blockerRows,
       interactionRows,
       approvalRows,
+      commentActivityRows,
+      documentActivityRows,
+      workProductActivityRows,
     ] = await Promise.all([
       db
         .select({
@@ -723,7 +749,34 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
           eq(issueApprovals.companyId, companyId),
           inArray(approvals.status, ["pending", "revision_requested"]),
         )),
+      db
+        .select({
+          issueId: issueComments.issueId,
+          latestAt: sql<Date | null>`MAX(${issueComments.updatedAt})`,
+        })
+        .from(issueComments)
+        .where(and(eq(issueComments.companyId, companyId), isNull(issueComments.deletedAt)))
+        .groupBy(issueComments.issueId),
+      db
+        .select({
+          issueId: issueDocuments.issueId,
+          latestAt: sql<Date | null>`MAX(${issueDocuments.updatedAt})`,
+        })
+        .from(issueDocuments)
+        .where(eq(issueDocuments.companyId, companyId))
+        .groupBy(issueDocuments.issueId),
+      db
+        .select({
+          issueId: issueWorkProducts.issueId,
+          latestAt: sql<Date | null>`MAX(${issueWorkProducts.updatedAt})`,
+        })
+        .from(issueWorkProducts)
+        .where(eq(issueWorkProducts.companyId, companyId))
+        .groupBy(issueWorkProducts.issueId),
     ]);
+    const latestCommentByIssueId = new Map(commentActivityRows.map((row) => [row.issueId, row.latestAt]));
+    const latestDocumentByIssueId = new Map(documentActivityRows.map((row) => [row.issueId, row.latestAt]));
+    const latestWorkProductByIssueId = new Map(workProductActivityRows.map((row) => [row.issueId, row.latestAt]));
 
     const evaluatedAt = new Date();
     const evaluatedAtMs = evaluatedAt.getTime();
@@ -741,7 +794,12 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
 
     return {
       watchdog: summarizeIssueWatchdog(watchdog),
-      issues: issueRows,
+      issues: issueRows.map((issue) => ({
+        ...issue,
+        latestCommentAt: latestCommentByIssueId.get(issue.id) ?? null,
+        latestDocumentAt: latestDocumentByIssueId.get(issue.id) ?? null,
+        latestWorkProductAt: latestWorkProductByIssueId.get(issue.id) ?? null,
+      })),
       activeRuns: activeRunRows.map((row) => ({
         companyId: row.companyId,
         agentId: row.agentId,
@@ -1169,6 +1227,52 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
       ));
   }
 
+  async function revalidateMutationScope(scope: {
+    kind: "watchdog";
+    watchdogId: string;
+    companyId: string;
+    watchedIssueId: string;
+    stopFingerprint: string | null;
+  }) {
+    if (!scope.stopFingerprint) {
+      return {
+        allowed: false as const,
+        reason: "Task-watchdog run context is missing the stopped fingerprint required for mutation revalidation.",
+      };
+    }
+
+    const watchdog = await db
+      .select()
+      .from(issueWatchdogs)
+      .where(and(
+        eq(issueWatchdogs.id, scope.watchdogId),
+        eq(issueWatchdogs.companyId, scope.companyId),
+        eq(issueWatchdogs.issueId, scope.watchedIssueId),
+        eq(issueWatchdogs.status, "active"),
+      ))
+      .then((rows) => rows[0] ?? null);
+    if (!watchdog) {
+      return {
+        allowed: false as const,
+        reason: "Task-watchdog run context is not backed by an active persisted watchdog.",
+      };
+    }
+
+    const input = await collectClassifierInput(watchdog.companyId, watchdog);
+    const classification = classifyTaskWatchdogSubtree(input);
+    if (classification.state === "stopped" && classification.stopFingerprint === scope.stopFingerprint) {
+      return { allowed: true as const, classification };
+    }
+
+    return {
+      allowed: false as const,
+      reason: classification.state === "stopped"
+        ? "Task-watchdog review is stale because the watched subtree stop fingerprint changed; refresh the source state before mutating it."
+        : "Task-watchdog review is stale because the watched subtree now has a live, waiting, already-reviewed, or not-applicable path; refresh the source state before mutating it.",
+      classification,
+    };
+  }
+
   return {
     getActiveForIssue: async (companyId: string, issueId: string): Promise<IssueWatchdog | null> => {
       const row = await db
@@ -1291,5 +1395,7 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
       }
       return result;
     },
+
+    revalidateMutationScope,
   };
 }
