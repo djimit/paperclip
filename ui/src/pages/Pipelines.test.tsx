@@ -55,6 +55,8 @@ const mockPipelinesApi = vi.hoisted(() => ({
   resolveSuggestion: vi.fn(),
   transitionCase: vi.fn(),
   rerunCurrentStageAutomation: vi.fn(),
+  getAutomationRetryPlan: vi.fn(),
+  retryStageAutomation: vi.fn(),
   ingestCasesBatch: vi.fn(),
   listAttention: vi.fn(),
   listReviewCases: vi.fn(),
@@ -370,6 +372,33 @@ async function renderItemPage(
     pagination: { limit: 100, offset: 0, nextOffset: null, hasMore: false, order: "asc" },
   });
   mockPipelinesApi.getCaseIssueLinks.mockResolvedValue(links);
+  mockPipelinesApi.getAutomationRetryPlan.mockImplementation((_caseId: string, scope: "current_stage" | "previous_stage") =>
+    Promise.resolve({
+      caseId: detail.case.id,
+      scope,
+      allowed: scope === "current_stage",
+      caseVersion: detail.case.version ?? 1,
+      currentStage: { id: detail.stage.id, key: detail.stage.key, name: detail.stage.name },
+      targetStage: scope === "current_stage" ? { id: detail.stage.id, key: detail.stage.key, name: detail.stage.name } : null,
+      automationId: scope === "current_stage" ? `${detail.stage.id}:on_enter` : null,
+      routine: scope === "current_stage" ? { id: "routine-1", assigneeAgentId: "agent-1" } : null,
+      previousAttemptId: null,
+      generation: 1,
+      effectCounts: {
+        directChildren: 0,
+        descendants: 0,
+        linkedAutomationIssues: 0,
+        activeDescendants: 0,
+        unresolvedBlockers: 0,
+      },
+      defaultCleanup: {
+        retireDirectChildren: false,
+        retireDescendants: false,
+        cancelLinkedAutomationIssues: false,
+      },
+      blockers: scope === "current_stage" ? [] : [{ kind: "previous_stage_not_found", message: "No previous step." }],
+    }),
+  );
   mockIssuesApi.listComments.mockResolvedValue([]);
   mockIssuesApi.listAttachments.mockImplementation((issueId: string) =>
     Promise.resolve(options.attachmentsByIssueId?.[issueId] ?? []),
@@ -655,10 +684,11 @@ describe("PipelineItemDetailView", () => {
   });
 
   it("shows the current stage and can re-run its entry automation", async () => {
-    mockPipelinesApi.rerunCurrentStageAutomation.mockResolvedValue({});
+    mockPipelinesApi.retryStageAutomation.mockResolvedValue({});
     const detail = itemDetail({
       stageId: "stage-review",
       pendingSuggestion: null,
+      version: 7,
     });
     detail.stage = {
       ...pipeline.stages[1],
@@ -671,16 +701,40 @@ describe("PipelineItemDetailView", () => {
     expect(container.querySelector('button[aria-label="Stage actions"]')).toBeNull();
     expect(container.querySelector('button[aria-label="Item actions"]')).not.toBeNull();
     const rerunButton = Array.from(container.querySelectorAll("button"))
-      .find((button) => button.textContent?.includes("Re-run stage automation"));
+      .find((button) => button.textContent?.includes("Re-run this step"));
     expect(rerunButton).not.toBeNull();
 
     await act(async () => {
       rerunButton!.click();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    expect(container.textContent).toContain("Review the automation preflight");
 
-    expect(mockPipelinesApi.rerunCurrentStageAutomation).toHaveBeenCalledWith("item-1");
-    expect(mockPushToast).toHaveBeenCalledWith({ title: "Stage automation re-run started", tone: "success" });
+    let confirmButton: HTMLButtonElement | undefined;
+    for (let attempt = 0; attempt < 10 && !confirmButton; attempt += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      confirmButton = Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent?.includes("Re-run this step") && button !== rerunButton);
+    }
+    expect(confirmButton).toBeDefined();
+
+    await act(async () => {
+      confirmButton!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mockPipelinesApi.retryStageAutomation).toHaveBeenCalledWith("item-1", {
+      scope: "current_stage",
+      expectedVersion: 7,
+      cleanup: {
+        retireDirectChildren: false,
+        retireDescendants: false,
+        cancelLinkedAutomationIssues: false,
+      },
+    });
+    expect(mockPushToast).toHaveBeenCalledWith({ title: "Step automation re-run started", tone: "success" });
 
     act(() => {
       root.unmount();

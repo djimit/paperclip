@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { groupWarningsByStage } from "@paperclipai/shared";
-import type { Issue, IssueAttachment } from "@paperclipai/shared";
+import type {
+  Issue,
+  IssueAttachment,
+  PipelineAutomationRetryCleanupOptions,
+  PipelineAutomationRetryPlan,
+  PipelineAutomationRetryScope,
+} from "@paperclipai/shared";
 import { AlertTriangle, ArrowUpDown, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, CircleDot, Download, ExternalLink, FileText, GitBranch, Hexagon, Image as ImageIcon, Info, List, ListTree, Loader2, MessageSquare, MoreHorizontal, Plus, Search, Settings, Trash2, X } from "lucide-react";
 import {
   DndContext,
@@ -17,6 +23,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -175,6 +182,94 @@ function currentStageAutomation(stage: PipelineStage) {
   return config.type === "run_routine" && typeof config.routineId === "string" && config.routineId.trim()
     ? { routineId: config.routineId }
     : null;
+}
+
+function RetryMetric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: number;
+  tone?: "default" | "warning";
+}) {
+  return (
+    <div className={cn(
+      "rounded-sm border px-3 py-2",
+      tone === "warning"
+        ? "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-100"
+        : "border-border bg-background text-foreground",
+    )}>
+      <div className="text-base font-semibold">{formatNumber(value)}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+type RetryCleanupId = keyof PipelineAutomationRetryCleanupOptions | "keepAuditHistory";
+
+function retryCleanupItems(plan: PipelineAutomationRetryPlan): Array<{
+  id: RetryCleanupId;
+  label: string;
+  description: string;
+  count?: number;
+  disabled?: boolean;
+  required?: boolean;
+}> {
+  return [
+    {
+      id: "retireDirectChildren",
+      label: "Retire direct child items",
+      description: "Hide child outputs from normal pipeline boards and parent rollups.",
+      count: plan.effectCounts.directChildren,
+      disabled: plan.effectCounts.directChildren === 0,
+    },
+    {
+      id: "retireDescendants",
+      label: "Retire descendants",
+      description: "Hide downstream output items under those children.",
+      count: plan.effectCounts.descendants,
+      disabled: plan.effectCounts.descendants === 0,
+    },
+    {
+      id: "cancelLinkedAutomationIssues",
+      label: "Cancel linked automation issues",
+      description: "Cancel unfinished automation issues superseded by the fresh retry.",
+      count: plan.effectCounts.linkedAutomationIssues,
+      disabled: plan.effectCounts.linkedAutomationIssues === 0,
+    },
+    {
+      id: "keepAuditHistory",
+      label: "Keep audit trail visible in item history",
+      description: "Record retry and retired outputs as history instead of deleting records.",
+      required: true,
+      disabled: true,
+    },
+  ];
+}
+
+function selectedCleanupIds(plan: PipelineAutomationRetryPlan) {
+  const selected = new Set<string>(["keepAuditHistory"]);
+  if (plan.defaultCleanup.retireDirectChildren) selected.add("retireDirectChildren");
+  if (plan.defaultCleanup.retireDescendants) selected.add("retireDescendants");
+  if (plan.defaultCleanup.cancelLinkedAutomationIssues) selected.add("cancelLinkedAutomationIssues");
+  return selected;
+}
+
+function retryCleanupFromIds(ids: Set<string>): PipelineAutomationRetryCleanupOptions {
+  return {
+    retireDirectChildren: ids.has("retireDirectChildren"),
+    retireDescendants: ids.has("retireDescendants"),
+    cancelLinkedAutomationIssues: ids.has("cancelLinkedAutomationIssues"),
+  };
+}
+
+function retryPrimaryActionLabel(plan: PipelineAutomationRetryPlan) {
+  const retiredOutputCount = plan.effectCounts.directChildren + plan.effectCounts.descendants;
+  if (retiredOutputCount > 0 && (plan.defaultCleanup.retireDirectChildren || plan.defaultCleanup.retireDescendants)) {
+    return `Retry and retire ${formatNumber(retiredOutputCount)} ${retiredOutputCount === 1 ? "item" : "items"}`;
+  }
+  return plan.scope === "previous_stage" ? "Retry previous step" : "Re-run this step";
 }
 
 export function Pipelines() {
@@ -1636,6 +1731,9 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
   const [moveStageKey, setMoveStageKey] = useState("");
   const [reviewDecisionNote, setReviewDecisionNote] = useState("");
   const [livenessRetryError, setLivenessRetryError] = useState<string | null>(null);
+  const [retryDialogScope, setRetryDialogScope] = useState<PipelineAutomationRetryScope | null>(null);
+  const [selectedRetryCleanupIds, setSelectedRetryCleanupIds] = useState<Set<string>>(() => new Set());
+  const [retryDialogError, setRetryDialogError] = useState<string | null>(null);
 
   const pipeline = useQuery({
     queryKey: queryKeys.pipelines.detail(pipelineId),
@@ -1770,13 +1868,66 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
     onError: () => pushToast({ title: "Could not acknowledge the change", tone: "error" }),
   });
 
+  const previousRetryAvailability = useQuery({
+    queryKey: ["pipelines", "item", caseId, "automation-retry-plan", "previous_stage"],
+    queryFn: () => pipelinesApi.getAutomationRetryPlan(caseId, "previous_stage"),
+    enabled: Boolean(caseId),
+    retry: false,
+  });
+
+  const retryPlan = useQuery({
+    queryKey: ["pipelines", "item", caseId, "automation-retry-plan", retryDialogScope],
+    queryFn: () => pipelinesApi.getAutomationRetryPlan(caseId, retryDialogScope!),
+    enabled: Boolean(retryDialogScope),
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!retryPlan.data) return;
+    setRetryDialogError(null);
+    setSelectedRetryCleanupIds(selectedCleanupIds(retryPlan.data));
+  }, [retryPlan.data]);
+
   const rerunCurrentStageAutomation = useMutation({
-    mutationFn: () => pipelinesApi.rerunCurrentStageAutomation(caseId),
+    mutationFn: () => pipelinesApi.retryStageAutomation(caseId, {
+      scope: "current_stage",
+      expectedVersion: retryPlan.data?.caseVersion ?? detail?.case.version ?? 1,
+      cleanup: retryCleanupFromIds(selectedRetryCleanupIds),
+    }),
     onSuccess: async () => {
+      setRetryDialogScope(null);
       await invalidateItem();
-      pushToast({ title: "Stage automation re-run started", tone: "success" });
+      pushToast({ title: "Step automation re-run started", tone: "success" });
     },
-    onError: () => pushToast({ title: "Could not re-run the stage automation", tone: "error" }),
+    onError: (error: unknown) => {
+      const message = error instanceof ApiError && error.message ? error.message : "Could not re-run this step.";
+      setRetryDialogError(message);
+      pushToast({ title: "Could not re-run this step", tone: "error" });
+    },
+  });
+
+  const retryStageAutomation = useMutation({
+    mutationFn: (plan: PipelineAutomationRetryPlan) => pipelinesApi.retryStageAutomation(caseId, {
+      scope: plan.scope,
+      expectedVersion: plan.caseVersion,
+      cleanup: retryCleanupFromIds(selectedRetryCleanupIds),
+    }),
+    onSuccess: async () => {
+      setRetryDialogScope(null);
+      setRetryDialogError(null);
+      await Promise.all([
+        invalidateItem(),
+        queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.cases(pipelineId) }),
+        queryClient.invalidateQueries({ queryKey: ["pipelines", "item", caseId, "automation-retry-plan"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.caseChildren(caseId) }),
+      ]);
+      pushToast({ title: "Retry started", tone: "success" });
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof ApiError && error.message ? error.message : "Could not retry this automation.";
+      setRetryDialogError(message);
+      pushToast({ title: "Could not retry this automation", tone: "error" });
+    },
   });
 
   // Liveness banner retry. Targets the specific failed automation ledger when we
@@ -1926,6 +2077,7 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
   const banner = getPendingTransitionBannerState(detail.case, stageLookup);
   const statusLabel = humanizePipelineItemStatus(detail.case.terminalKind ?? detail.stage.kind);
   const stageAutomation = currentStageAutomation(detail.stage);
+  const previousRetryPlan = previousRetryAvailability.data;
   // Don't let the operator re-run automation into the same 403 — they must get
   // the grant first. The banner's "Request access" path is the way out.
   const rerunBlockedByPermission = shouldDisableRerunForPermission(detail.liveness);
@@ -2018,16 +2170,32 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
                   title={rerunBlockedByPermission ? "Permission still missing — request access first" : undefined}
                   onSelect={(event) => {
                     event.preventDefault();
-                    rerunCurrentStageAutomation.mutate();
+                    setRetryDialogScope("current_stage");
                   }}
                 >
-                  {rerunCurrentStageAutomation.isPending ? (
+                  {rerunCurrentStageAutomation.isPending && retryDialogScope === "current_stage" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <CircleDot className="h-4 w-4" />
                   )}
-                  Re-run stage automation
+                  Re-run this step
                 </DropdownMenuItem>
+                {previousRetryPlan?.allowed ? (
+                  <DropdownMenuItem
+                    disabled={retryStageAutomation.isPending}
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      setRetryDialogScope("previous_stage");
+                    }}
+                  >
+                    {retryStageAutomation.isPending && retryDialogScope === "previous_stage" ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ArrowUpDown className="h-4 w-4" />
+                    )}
+                    Retry previous step...
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuItem
                   disabled={moveStageOptions.length === 0 || moveItemToStage.isPending}
                   onSelect={(event) => {
@@ -2106,6 +2274,147 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
               disabled={!selectedMoveStage || moveItemToStage.isPending}
             >
               {moveItemToStage.isPending ? "Moving..." : `Move to ${selectedMoveStage?.name ?? "stage"}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(retryDialogScope)} onOpenChange={(open) => {
+        if (!open) {
+          setRetryDialogScope(null);
+          setRetryDialogError(null);
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{retryDialogScope === "previous_stage" ? "Retry previous step" : "Re-run this step"}</DialogTitle>
+            <DialogDescription>
+              Review the automation preflight before Paperclip dispatches a fresh run.
+            </DialogDescription>
+          </DialogHeader>
+          {retryPlan.isLoading ? (
+            <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Checking retry safety...
+            </div>
+          ) : retryPlan.error ? (
+            <div className="rounded-sm border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              {retryPlan.error instanceof ApiError && retryPlan.error.message
+                ? retryPlan.error.message
+                : "Could not check whether this automation can be retried."}
+            </div>
+          ) : retryPlan.data ? (
+            <div className="space-y-4 py-2">
+              <div className="grid gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <div className="text-xs font-medium uppercase text-muted-foreground">From</div>
+                  <div className="mt-1 font-medium text-foreground">{retryPlan.data.currentStage.name}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase text-muted-foreground">Runs at</div>
+                  <div className="mt-1 font-medium text-foreground">{retryPlan.data.targetStage?.name ?? "No retryable step"}</div>
+                </div>
+                <div className="sm:col-span-2">
+                  <div className="text-xs font-medium uppercase text-muted-foreground">Automation</div>
+                  <div className="mt-1 text-foreground">
+                    {retryPlan.data.routine
+                      ? `Routine ${retryPlan.data.routine.id}${retryPlan.data.routine.assigneeAgentId ? ` with assignee ${retryPlan.data.routine.assigneeAgentId}` : ""}`
+                      : "No routine configured"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-2 text-sm sm:grid-cols-4">
+                <RetryMetric label="children" value={retryPlan.data.effectCounts.directChildren} />
+                <RetryMetric label="descendants" value={retryPlan.data.effectCounts.descendants} />
+                <RetryMetric label="linked issues" value={retryPlan.data.effectCounts.linkedAutomationIssues} />
+                <RetryMetric label="active work" value={retryPlan.data.effectCounts.activeDescendants} tone={retryPlan.data.effectCounts.activeDescendants > 0 ? "warning" : "default"} />
+              </div>
+
+              {retryPlan.data.blockers.length > 0 ? (
+                <div className="space-y-2">
+                  {retryPlan.data.blockers.map((blocker) => (
+                    <div
+                      key={blocker.kind}
+                      className={cn(
+                        "flex gap-2 rounded-sm border p-3 text-sm",
+                        "border-destructive/30 bg-destructive/5 text-destructive",
+                      )}
+                    >
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{blocker.message}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="space-y-2">
+                {retryCleanupItems(retryPlan.data).map((option) => {
+                  const checked = selectedRetryCleanupIds.has(option.id);
+                  return (
+                    <label
+                      key={option.id}
+                      className={cn(
+                        "grid grid-cols-[18px_minmax(0,1fr)] gap-3 py-1.5 text-sm",
+                        option.disabled && !option.required ? "text-muted-foreground" : "text-foreground",
+                      )}
+                    >
+                      <Checkbox
+                        checked={checked}
+                        disabled={option.disabled || option.required}
+                        onCheckedChange={(value) => {
+                          setSelectedRetryCleanupIds((current) => {
+                            const next = new Set(current);
+                            if (value) next.add(option.id);
+                            else next.delete(option.id);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span>
+                        <span className="block font-medium">
+                          {option.label}{typeof option.count === "number" ? ` (${formatNumber(option.count)})` : ""}
+                        </span>
+                        <span className="block text-xs text-muted-foreground">{option.description}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              {retryDialogError ? (
+                <div className="rounded-sm border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                  {retryDialogError}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRetryDialogScope(null)}
+              disabled={rerunCurrentStageAutomation.isPending || retryStageAutomation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                !retryPlan.data?.allowed ||
+                rerunCurrentStageAutomation.isPending ||
+                retryStageAutomation.isPending
+              }
+              onClick={() => {
+                const plan = retryPlan.data;
+                if (!plan) return;
+                if (plan.scope === "current_stage") rerunCurrentStageAutomation.mutate();
+                else retryStageAutomation.mutate(plan);
+              }}
+            >
+              {(rerunCurrentStageAutomation.isPending || retryStageAutomation.isPending)
+                ? "Starting..."
+                : retryPlan.data ? retryPrimaryActionLabel(retryPlan.data) : "Retry"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,4 +1,13 @@
-import type { Issue, PipelineCaseConversationSource, PipelineCaseLiveness, PipelineHealthReport, RoutineEnvConfig } from "@paperclipai/shared";
+import type {
+  Issue,
+  PipelineAutomationRetryCleanupOptions,
+  PipelineAutomationRetryPlan,
+  PipelineAutomationRetryScope,
+  PipelineCaseConversationSource,
+  PipelineCaseLiveness,
+  PipelineHealthReport,
+  RoutineEnvConfig,
+} from "@paperclipai/shared";
 import { api } from "./client";
 
 export type { PipelineHealthReport, PipelineHealthWarning } from "@paperclipai/shared";
@@ -537,6 +546,12 @@ export const pipelinesApi = {
   ) => api.post<unknown>(`/cases/${caseId}/transition`, data),
   rerunCurrentStageAutomation: (caseId: string) =>
     api.post<unknown>(`/cases/${caseId}/automation/current-stage/rerun`, {}),
+  getAutomationRetryPlan: (caseId: string, scope: PipelineAutomationRetryScope) =>
+    api.get<PipelineAutomationRetryPlan>(`/cases/${caseId}/automation/retry-plan?scope=${encodeURIComponent(scope)}`),
+  retryStageAutomation: (
+    caseId: string,
+    data: { scope: PipelineAutomationRetryScope; expectedVersion: number; cleanup: PipelineAutomationRetryCleanupOptions },
+  ) => api.post<unknown>(`/cases/${caseId}/automation/retry`, data),
   retryAutomation: (caseId: string, automationId: string) =>
     api.post<unknown>(`/cases/${caseId}/automations/${automationId}/retry`, {}),
   ingestCasesBatch: (pipelineId: string, data: {
