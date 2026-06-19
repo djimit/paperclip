@@ -283,6 +283,30 @@ describeEmbeddedPostgres("issue watchdog routes", () => {
     expect(actionNames).toContain("issue.task_watchdog_triggered");
   });
 
+  it("handles concurrent first-time watchdog upserts without duplicate-key failures", async () => {
+    const companyId = await seedCompany();
+    const issueId = await seedIssue(companyId, { identifier: "WDOG-RACE", issueNumber: 99 });
+    const agentId = await seedAgent(companyId, { name: "Race Watchdog" });
+    const app = createApp(companyId);
+
+    const responses = await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        request(app)
+          .put(`/api/issues/${issueId}/watchdog`)
+          .send({ agentId, instructions: `Concurrent instructions ${index}` }),
+      ),
+    );
+
+    expect(responses.map((res) => res.status), JSON.stringify(responses.map((res) => res.body)))
+      .toEqual(Array(12).fill(200));
+    const stored = await db
+      .select()
+      .from(issueWatchdogs)
+      .where(and(eq(issueWatchdogs.companyId, companyId), eq(issueWatchdogs.issueId, issueId)));
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ status: "active", watchdogAgentId: agentId });
+  });
+
   it("creates an issue and watchdog atomically from the create issue route", async () => {
     const companyId = await seedCompany();
     const agentId = await seedAgent(companyId);

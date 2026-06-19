@@ -609,18 +609,58 @@ function isWatchdogReviewDisposition(issue: Pick<
   return Boolean(issue.assigneeUserId || issue.executionState || issue.monitorNextCheckAt || hasPendingReviewPath);
 }
 
+function isUniqueConstraintConflict(error: unknown, constraintName: string) {
+  const queue: unknown[] = [error];
+  const messages: string[] = [];
+  let hasUniqueCode = false;
+  let hasConstraint = false;
+  for (const candidate of queue) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const typed = candidate as {
+      code?: string;
+      constraint?: string;
+      constraint_name?: string;
+      cause?: unknown;
+      message?: string;
+    };
+    if (typed.code === "23505") hasUniqueCode = true;
+    if (typed.constraint === constraintName || typed.constraint_name === constraintName) hasConstraint = true;
+    if (typed.message) messages.push(typed.message);
+    if (typed.cause) queue.push(typed.cause);
+  }
+  const message = messages.join("\n");
+  return (hasUniqueCode || message.includes("duplicate key value violates unique constraint")) &&
+    (hasConstraint || message.includes(constraintName));
+}
+
 function isActiveTaskWatchdogUniqueConflict(error: unknown) {
-  const candidate = error as {
-    code?: string;
-    constraint?: string;
-    cause?: { code?: string; constraint?: string; message?: string };
-    message?: string;
-  } | null;
-  const code = candidate?.code ?? candidate?.cause?.code;
-  const constraint = candidate?.constraint ?? candidate?.cause?.constraint;
-  const message = candidate?.message ?? candidate?.cause?.message ?? "";
-  return (code === "23505" || message.includes("duplicate key value violates unique constraint")) &&
-    (constraint === "issues_active_task_watchdog_uq" || message.includes("issues_active_task_watchdog_uq"));
+  return isUniqueConstraintConflict(error, "issues_active_task_watchdog_uq");
+}
+
+function isIssueWatchdogUniqueConflict(error: unknown) {
+  return isUniqueConstraintConflict(error, "issue_watchdogs_company_issue_uq");
+}
+
+async function updateIssueWatchdogRow(
+  dbOrTx: any,
+  existing: IssueWatchdogRow,
+  input: IssueWatchdogUpsertInput,
+  now: Date,
+) {
+  const [updated] = await dbOrTx
+    .update(issueWatchdogs)
+    .set({
+      watchdogAgentId: input.agentId,
+      instructions: normalizeInstructions(input.instructions),
+      status: "active",
+      updatedByAgentId: input.actor?.agentId ?? null,
+      updatedByUserId: input.actor?.userId ?? null,
+      updatedByRunId: input.actor?.runId ?? null,
+      updatedAt: now,
+    })
+    .where(eq(issueWatchdogs.id, existing.id))
+    .returning();
+  return updated;
 }
 
 export async function upsertIssueWatchdogForIssue(
@@ -640,23 +680,11 @@ export async function upsertIssueWatchdogForIssue(
     .then((rows: IssueWatchdogRow[]) => rows[0] ?? null);
 
   if (existing) {
-    const [updated] = await dbOrTx
-      .update(issueWatchdogs)
-      .set({
-        watchdogAgentId: input.agentId,
-        instructions: normalizeInstructions(input.instructions),
-        status: "active",
-        updatedByAgentId: input.actor?.agentId ?? null,
-        updatedByUserId: input.actor?.userId ?? null,
-        updatedByRunId: input.actor?.runId ?? null,
-        updatedAt: now,
-      })
-      .where(eq(issueWatchdogs.id, existing.id))
-      .returning();
+    const updated = await updateIssueWatchdogRow(dbOrTx, existing, input, now);
     return { watchdog: toIssueWatchdog(updated), created: false };
   }
 
-  const [created] = await dbOrTx
+  const insertResult: { row: IssueWatchdogRow; created: boolean } = await dbOrTx
     .insert(issueWatchdogs)
     .values({
       companyId,
@@ -673,8 +701,20 @@ export async function upsertIssueWatchdogForIssue(
       createdAt: now,
       updatedAt: now,
     })
-    .returning();
-  return { watchdog: toIssueWatchdog(created), created: true };
+    .returning()
+    .then((rows: IssueWatchdogRow[]) => ({ row: rows[0], created: true }))
+    .catch(async (error: unknown) => {
+      if (!isIssueWatchdogUniqueConflict(error)) throw error;
+      const winner = await dbOrTx
+        .select()
+        .from(issueWatchdogs)
+        .where(and(eq(issueWatchdogs.companyId, companyId), eq(issueWatchdogs.issueId, issueId)))
+        .then((rows: IssueWatchdogRow[]) => rows[0] ?? null);
+      if (!winner) throw error;
+      const updated = await updateIssueWatchdogRow(dbOrTx, winner, input, now);
+      return { row: updated, created: false };
+    });
+  return { watchdog: toIssueWatchdog(insertResult.row), created: insertResult.created };
 }
 
 export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) {
