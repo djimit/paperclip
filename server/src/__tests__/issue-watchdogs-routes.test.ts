@@ -462,6 +462,22 @@ describeEmbeddedPostgres("issue watchdog routes", () => {
     expect(deniedParentCreate.status, JSON.stringify(deniedParentCreate.body)).toBe(403);
     expect(deniedParentCreate.body.error).toBe("Task-watchdog runs can only mutate the watched issue subtree.");
 
+    const deniedNestedWatchdog = await request(app)
+      .put(`/api/issues/${watchedChildId}/watchdog`)
+      .send({ agentId: watchdogAgentId, instructions: "Create a nested watchdog" });
+    expect(deniedNestedWatchdog.status, JSON.stringify(deniedNestedWatchdog.body)).toBe(403);
+    expect(deniedNestedWatchdog.body.error).toBe("Task-watchdog runs cannot change watchdog configuration.");
+
+    const deniedWatchdogRemoval = await request(app).delete(`/api/issues/${watchedRootId}/watchdog`);
+    expect(deniedWatchdogRemoval.status, JSON.stringify(deniedWatchdogRemoval.body)).toBe(403);
+    expect(deniedWatchdogRemoval.body.error).toBe("Task-watchdog runs cannot change watchdog configuration.");
+
+    const nestedWatchdogs = await db
+      .select({ id: issueWatchdogs.id })
+      .from(issueWatchdogs)
+      .where(and(eq(issueWatchdogs.companyId, companyId), eq(issueWatchdogs.issueId, watchedChildId)));
+    expect(nestedWatchdogs).toHaveLength(0);
+
     const allowedChild = await request(app)
       .post(`/api/issues/${watchedChildId}/children`)
       .send({ title: "Allowed watched child" });

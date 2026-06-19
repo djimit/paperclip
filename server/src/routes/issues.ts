@@ -2040,6 +2040,21 @@ export function issueRoutes(
     return false;
   }
 
+  async function rejectTaskWatchdogConfigMutation(req: Request, res: Response) {
+    if (req.actor.type !== "agent") return false;
+    const scope = await resolveTaskWatchdogMutationScope(db, req.actor);
+    if (scope.kind !== "watchdog") return false;
+    res.status(403).json({
+      error: "Task-watchdog runs cannot change watchdog configuration.",
+      details: {
+        watchedIssueId: scope.watchedIssueId,
+        watchdogId: scope.watchdogId,
+        securityPrinciples: ["Least Privilege", "Complete Mediation", "Fail Securely"],
+      },
+    });
+    return true;
+  }
+
   async function assertTaskWatchdogIssueMutationAllowed(
     req: Request,
     res: Response,
@@ -3369,6 +3384,7 @@ export function issueRoutes(
     assertCompanyAccess(req, issue.companyId);
     if (!(await assertIssueReadAllowed(req, res, issue))) return;
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    if (await rejectTaskWatchdogConfigMutation(req, res)) return;
     if (await assertLowTrustControlPlaneDenied(req, res, issue.companyId, issue)) return;
 
     const actor = getActorInfo(req);
@@ -3412,6 +3428,7 @@ export function issueRoutes(
     assertCompanyAccess(req, issue.companyId);
     if (!(await assertIssueReadAllowed(req, res, issue))) return;
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    if (await rejectTaskWatchdogConfigMutation(req, res)) return;
     if (await assertLowTrustControlPlaneDenied(req, res, issue.companyId, issue)) return;
 
     const actor = getActorInfo(req);
