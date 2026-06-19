@@ -66,6 +66,7 @@ describe("instance settings routes", () => {
       enableIsolatedWorkspaces: false,
       enableIssuePlanDecompositions: false,
       enableExperimentalFileViewer: false,
+      enableTaskWatchdogs: false,
       enableCloudSync: false,
       autoRestartDevServerWhenIdle: false,
       enableIssueGraphLivenessAutoRecovery: true,
@@ -86,6 +87,7 @@ describe("instance settings routes", () => {
         enableIsolatedWorkspaces: true,
         enableIssuePlanDecompositions: true,
         enableExperimentalFileViewer: true,
+        enableTaskWatchdogs: true,
         enableCloudSync: true,
         autoRestartDevServerWhenIdle: false,
         enableIssueGraphLivenessAutoRecovery: true,
@@ -131,6 +133,7 @@ describe("instance settings routes", () => {
       enableIsolatedWorkspaces: false,
       enableIssuePlanDecompositions: false,
       enableExperimentalFileViewer: false,
+      enableTaskWatchdogs: false,
       enableCloudSync: false,
       autoRestartDevServerWhenIdle: false,
       enableIssueGraphLivenessAutoRecovery: true,
@@ -245,6 +248,24 @@ describe("instance settings routes", () => {
 
     expect(mockInstanceSettingsService.updateExperimental).toHaveBeenCalledWith({
       enableEnvironments: true,
+    });
+  });
+
+  it("allows local board users to update task watchdog controls", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "local-board",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    await request(app)
+      .patch("/api/instance/settings/experimental")
+      .send({ enableTaskWatchdogs: true })
+      .expect(200);
+
+    expect(mockInstanceSettingsService.updateExperimental).toHaveBeenCalledWith({
+      enableTaskWatchdogs: true,
     });
   });
 

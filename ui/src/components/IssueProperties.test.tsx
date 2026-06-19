@@ -38,6 +38,10 @@ const mockAuthApi = vi.hoisted(() => ({
   getSession: vi.fn(),
 }));
 
+const mockInstanceSettingsApi = vi.hoisted(() => ({
+  getExperimental: vi.fn(),
+}));
+
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
     selectedCompanyId: "company-1",
@@ -58,6 +62,10 @@ vi.mock("../api/issues", () => ({
 
 vi.mock("../api/auth", () => ({
   authApi: mockAuthApi,
+}));
+
+vi.mock("../api/instanceSettings", () => ({
+  instanceSettingsApi: mockInstanceSettingsApi,
 }));
 
 vi.mock("../context/ToastContext", () => ({
@@ -391,6 +399,9 @@ describe("IssueProperties", () => {
     mockIssuesApi.upsertWatchdog.mockResolvedValue({});
     mockIssuesApi.deleteWatchdog.mockResolvedValue({ ok: true });
     mockAuthApi.getSession.mockResolvedValue({ user: { id: "user-1" } });
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableTaskWatchdogs: false,
+    });
   });
 
   afterEach(() => {
@@ -533,6 +544,40 @@ describe("IssueProperties", () => {
     });
 
     expect(onAddSubIssue).toHaveBeenCalledTimes(1);
+
+    act(() => root.unmount());
+  });
+
+  it("hides watchdog setup controls while the experimental flag is off", async () => {
+    const root = renderProperties(container, {
+      issue: createIssue(),
+      childIssues: [],
+      onUpdate: vi.fn(),
+    });
+    await flush();
+
+    expect(container.textContent).not.toContain("Watchdog");
+    expect(container.textContent).not.toContain("Set watchdog");
+
+    act(() => root.unmount());
+  });
+
+  it("shows watchdog setup controls when the experimental flag is enabled", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableTaskWatchdogs: true,
+    });
+    const root = renderProperties(container, {
+      issue: createIssue(),
+      childIssues: [],
+      onUpdate: vi.fn(),
+      inline: true,
+    });
+    await flush();
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Watchdog");
+      expect(container.textContent).toContain("Set watchdog");
+    });
 
     act(() => root.unmount());
   });
@@ -1475,6 +1520,9 @@ describe("IssueProperties", () => {
   }
 
   it("shows the empty watchdog state and saves a new watchdog via the API", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableTaskWatchdogs: true,
+    });
     mockAgentsApi.list.mockResolvedValue([watchdogAgent]);
     const onUpdate = vi.fn();
     const root = renderProperties(container, {
@@ -1485,10 +1533,13 @@ describe("IssueProperties", () => {
     });
     await flush();
 
-    expect(container.textContent).toContain("Watchdog");
-    const trigger = Array.from(container.querySelectorAll("button"))
-      .find((button) => button.textContent?.includes("Set watchdog"));
-    expect(trigger).toBeTruthy();
+    let trigger: HTMLButtonElement | undefined;
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Watchdog");
+      trigger = Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent?.includes("Set watchdog"));
+      expect(trigger).toBeTruthy();
+    });
 
     await act(async () => {
       trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -1537,6 +1588,9 @@ describe("IssueProperties", () => {
   });
 
   it("renders an existing watchdog and removes it via the API", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableTaskWatchdogs: true,
+    });
     mockAgentsApi.list.mockResolvedValue([watchdogAgent]);
     const onUpdate = vi.fn();
     const root = renderProperties(container, {
@@ -1572,6 +1626,9 @@ describe("IssueProperties", () => {
   });
 
   it("links to the generated watchdog task when one exists", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableTaskWatchdogs: true,
+    });
     mockAgentsApi.list.mockResolvedValue([watchdogAgent]);
     const root = renderProperties(container, {
       issue: createIssue({ watchdog: createWatchdogSummary({ watchdogIssueId: "issue-wd" }) }),

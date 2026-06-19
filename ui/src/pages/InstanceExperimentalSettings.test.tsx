@@ -21,6 +21,14 @@ vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }),
 }));
 
+async function act(callback: () => void | Promise<void>) {
+  let result: void | Promise<void> = undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+}
+
 async function flushReact() {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();
@@ -31,6 +39,8 @@ async function flushReact() {
 
 const CONFERENCE_TOGGLE_SELECTOR =
   'button[aria-label="Toggle conference room chat experimental setting"]';
+const TASK_WATCHDOGS_TOGGLE_SELECTOR =
+  'button[aria-label="Toggle task watchdogs experimental setting"]';
 
 describe("InstanceExperimentalSettings — Conference Room Chat card (PAP-11233)", () => {
   let container: HTMLDivElement;
@@ -89,5 +99,49 @@ describe("InstanceExperimentalSettings — Conference Room Chat card (PAP-11233)
     const toggle = container.querySelector(CONFERENCE_TOGGLE_SELECTOR);
     expect(toggle).toBeNull();
     expect(mockInstanceSettingsApi.updateExperimental).not.toHaveBeenCalled();
+  });
+
+  it("renders and patches the Task Watchdogs experimental toggle on and off", async () => {
+    await renderPage();
+
+    expect(container.textContent).toContain("Task Watchdogs");
+    expect(container.textContent).toContain(
+      "Show task detail controls for configuring watchdog agents that verify stopped task subtrees and restore live paths when work should continue.",
+    );
+
+    const toggle = container.querySelector<HTMLButtonElement>(TASK_WATCHDOGS_TOGGLE_SELECTOR);
+    expect(toggle?.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => {
+      toggle?.click();
+    });
+    await flushReact();
+
+    expect(mockInstanceSettingsApi.updateExperimental).toHaveBeenCalledWith({
+      enableTaskWatchdogs: true,
+    });
+
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableTaskWatchdogs: true,
+      issueGraphLivenessAutoRecoveryLookbackHours: 24,
+    });
+    flushSync(() => {
+      root?.unmount();
+    });
+    root = null;
+    container.textContent = "";
+    await renderPage();
+
+    const enabledToggle = container.querySelector<HTMLButtonElement>(TASK_WATCHDOGS_TOGGLE_SELECTOR);
+    expect(enabledToggle?.getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => {
+      enabledToggle?.click();
+    });
+    await flushReact();
+
+    expect(mockInstanceSettingsApi.updateExperimental).toHaveBeenLastCalledWith({
+      enableTaskWatchdogs: false,
+    });
   });
 });

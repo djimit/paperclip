@@ -7,6 +7,7 @@ import type { AdapterModel } from "../api/agents";
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
+import { instanceSettingsApi } from "../api/instanceSettings";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
@@ -395,6 +396,11 @@ export function IssueProperties({
   const { selectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
   const companyId = issue.companyId ?? selectedCompanyId;
+  const { data: experimentalSettings } = useQuery({
+    queryKey: queryKeys.instance.experimentalSettings,
+    queryFn: () => instanceSettingsApi.getExperimental(),
+  });
+  const taskWatchdogsEnabled = experimentalSettings?.enableTaskWatchdogs === true;
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState("");
   /** When a run is live, a selection is staged here until the operator confirms
@@ -2288,29 +2294,31 @@ export function IssueProperties({
           {monitorContent}
         </PropertyPicker>
 
-        <PropertyPicker
-          inline={inline}
-          label="Watchdog"
-          open={watchdogOpen}
-          onOpenChange={setWatchdogOpen}
-          triggerContent={watchdogTrigger}
-          triggerClassName="min-w-0 max-w-full"
-          popoverClassName={cn("max-w-full", inline ? "w-full" : "w-80 sm:w-96")}
-          extra={
-            watchdogIssueRef ? (
-              <Link
-                to={`/issues/${watchdogIssueRef.id}`}
-                className="ml-1 inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-                title="Open watchdog task"
-              >
-                <ScanEye className="h-3 w-3" />
-                {watchdogIssueRef.identifier ?? "Task"}
-              </Link>
-            ) : undefined
-          }
-        >
-          {watchdogContent}
-        </PropertyPicker>
+        {taskWatchdogsEnabled ? (
+          <PropertyPicker
+            inline={inline}
+            label="Watchdog"
+            open={watchdogOpen}
+            onOpenChange={setWatchdogOpen}
+            triggerContent={watchdogTrigger}
+            triggerClassName="min-w-0 max-w-full"
+            popoverClassName={cn("max-w-full", inline ? "w-full" : "w-80 sm:w-96")}
+            extra={
+              watchdogIssueRef ? (
+                <Link
+                  to={`/issues/${watchdogIssueRef.id}`}
+                  className="ml-1 inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                  title="Open watchdog task"
+                >
+                  <ScanEye className="h-3 w-3" />
+                  {watchdogIssueRef.identifier ?? "Task"}
+                </Link>
+              ) : undefined
+            }
+          >
+            {watchdogContent}
+          </PropertyPicker>
+        ) : null}
 
         {issue.requestDepth > 0 && (
           <PropertyRow label="Depth">

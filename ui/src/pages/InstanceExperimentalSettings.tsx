@@ -216,6 +216,7 @@ export function InstanceExperimentalSettings() {
     experimentalQuery.data?.enableIssuePlanDecompositions === true;
   const enableExperimentalFileViewer =
     experimentalQuery.data?.enableExperimentalFileViewer === true;
+  const enableTaskWatchdogs = experimentalQuery.data?.enableTaskWatchdogs === true;
   const enableCloudSync = experimentalQuery.data?.enableCloudSync === true;
   const autoRestartDevServerWhenIdle = experimentalQuery.data?.autoRestartDevServerWhenIdle === true;
   const enableIssueGraphLivenessAutoRecovery =
@@ -396,6 +397,28 @@ export function InstanceExperimentalSettings() {
             }
             disabled={toggleMutation.isPending}
             aria-label="Toggle task plan decomposition panel experimental setting"
+          />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1.5">
+            <h2 className="text-sm font-semibold">Task Watchdogs</h2>
+            <p className="max-w-2xl text-sm text-muted-foreground">
+              Show task detail controls for configuring watchdog agents that verify stopped task subtrees and restore
+              live paths when work should continue.
+            </p>
+          </div>
+          <ToggleSwitch
+            checked={enableTaskWatchdogs}
+            onCheckedChange={(checked) =>
+              toggleMutation.mutate({
+                enableTaskWatchdogs: checked,
+              })
+            }
+            disabled={toggleMutation.isPending}
+            aria-label="Toggle task watchdogs experimental setting"
           />
         </div>
       </section>
