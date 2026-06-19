@@ -2065,6 +2065,26 @@ export function issueRoutes(
     return false;
   }
 
+  async function rejectAgentIssueThreadInteractionResolution(
+    req: Request,
+    res: Response,
+    issue: {
+      id: string;
+      companyId: string;
+      parentId?: string | null;
+    },
+  ) {
+    if (req.actor.type !== "agent") return false;
+    if (
+      req.actor.runId &&
+      !(await assertTaskWatchdogIssueMutationAllowed(req, res, issue, { allowWatchdogIssue: false }))
+    ) {
+      return true;
+    }
+    res.status(403).json({ error: "Agent actors cannot resolve issue-thread interactions through this board-only route" });
+    return true;
+  }
+
   async function assertTaskWatchdogCreateIssueAllowed(
     req: Request,
     res: Response,
@@ -3352,6 +3372,7 @@ export function issueRoutes(
     if (await assertLowTrustControlPlaneDenied(req, res, issue.companyId, issue)) return;
 
     const actor = getActorInfo(req);
+    const existingWatchdog = await taskWatchdogsSvc.getActiveForIssue(issue.companyId, issue.id);
     const { watchdog, created } = await taskWatchdogsSvc.upsertForIssue(issue.companyId, issue.id, {
       agentId: req.body.agentId,
       instructions: req.body.instructions,
@@ -3374,7 +3395,7 @@ export function issueRoutes(
         identifier: issue.identifier,
         watchdogId: watchdog.id,
         watchdogAgentId: watchdog.watchdogAgentId,
-        instructionsChanged: true,
+        instructionsChanged: (existingWatchdog?.instructions ?? null) !== (watchdog.instructions ?? null),
       },
     });
     await queueTaskWatchdogEvaluation(issue, actor.runId);
@@ -6772,11 +6793,7 @@ export function issueRoutes(
         return;
       }
       assertCompanyAccess(req, issue.companyId);
-      if (req.actor.type === "agent") {
-        if (!(await assertTaskWatchdogIssueMutationAllowed(req, res, issue, { allowWatchdogIssue: false }))) return;
-        res.status(403).json({ error: "Agent actors cannot resolve issue-thread interactions through this board-only route" });
-        return;
-      }
+      if (await rejectAgentIssueThreadInteractionResolution(req, res, issue)) return;
       assertBoard(req);
 
       const actor = getActorInfo(req);
@@ -6884,11 +6901,7 @@ export function issueRoutes(
         return;
       }
       assertCompanyAccess(req, issue.companyId);
-      if (req.actor.type === "agent") {
-        if (!(await assertTaskWatchdogIssueMutationAllowed(req, res, issue, { allowWatchdogIssue: false }))) return;
-        res.status(403).json({ error: "Agent actors cannot resolve issue-thread interactions through this board-only route" });
-        return;
-      }
+      if (await rejectAgentIssueThreadInteractionResolution(req, res, issue)) return;
       assertBoard(req);
 
       const actor = getActorInfo(req);
@@ -6945,11 +6958,7 @@ export function issueRoutes(
         return;
       }
       assertCompanyAccess(req, issue.companyId);
-      if (req.actor.type === "agent") {
-        if (!(await assertTaskWatchdogIssueMutationAllowed(req, res, issue, { allowWatchdogIssue: false }))) return;
-        res.status(403).json({ error: "Agent actors cannot resolve issue-thread interactions through this board-only route" });
-        return;
-      }
+      if (await rejectAgentIssueThreadInteractionResolution(req, res, issue)) return;
       assertBoard(req);
 
       const actor = getActorInfo(req);
@@ -7002,11 +7011,7 @@ export function issueRoutes(
         return;
       }
       assertCompanyAccess(req, issue.companyId);
-      if (req.actor.type === "agent") {
-        if (!(await assertTaskWatchdogIssueMutationAllowed(req, res, issue, { allowWatchdogIssue: false }))) return;
-        res.status(403).json({ error: "Agent actors cannot resolve issue-thread interactions through this board-only route" });
-        return;
-      }
+      if (await rejectAgentIssueThreadInteractionResolution(req, res, issue)) return;
       assertBoard(req);
 
       const actor = getActorInfo(req);
