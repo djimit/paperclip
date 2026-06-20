@@ -74,6 +74,44 @@ console.log(JSON.stringify({ type: "result", session_id: "11111111-1111-4111-811
   await fs.chmod(commandPath, 0o755);
 }
 
+async function writeHelpWithoutEffortClaudeCommand(commandPath: string): Promise<void> {
+  const script = `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+
+const argv = process.argv.slice(2);
+if (argv.includes("--help")) {
+  process.stdout.write("Usage: claude [options]\\n  --print\\n  --model <id>\\n");
+  process.exit(0);
+}
+if (argv.includes("--effort")) {
+  process.stderr.write("error: unknown option '--effort'\\n");
+  process.exit(1);
+}
+const addDirIndex = argv.indexOf("--add-dir");
+const addDir = addDirIndex >= 0 ? argv[addDirIndex + 1] : null;
+const instructionsIndex = argv.indexOf("--append-system-prompt-file");
+const instructionsFilePath = instructionsIndex >= 0 ? argv[instructionsIndex + 1] : null;
+const capturePath = process.env.PAPERCLIP_TEST_CAPTURE_PATH;
+const payload = {
+  argv,
+  prompt: fs.readFileSync(0, "utf8"),
+  addDir,
+  instructionsFilePath,
+  instructionsContents: instructionsFilePath ? fs.readFileSync(instructionsFilePath, "utf8") : null,
+  skillEntries: addDir ? fs.readdirSync(path.join(addDir, ".claude", "skills")).sort() : [],
+};
+if (capturePath) {
+  fs.writeFileSync(capturePath, JSON.stringify(payload), "utf8");
+}
+console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "33333333-3333-4333-8333-333333333333", model: "claude-sonnet" }));
+console.log(JSON.stringify({ type: "assistant", session_id: "33333333-3333-4333-8333-333333333333", message: { content: [{ type: "text", text: "hello" }] } }));
+console.log(JSON.stringify({ type: "result", session_id: "33333333-3333-4333-8333-333333333333", result: "hello", usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 } }));
+`;
+  await fs.writeFile(commandPath, script, "utf8");
+  await fs.chmod(commandPath, 0o755);
+}
+
 type CapturePayload = {
   argv: string[];
   prompt: string;
@@ -727,6 +765,63 @@ describe("claude execute", () => {
       else process.env.HOME = previousHome;
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it("omits --effort for sandbox-managed runs when the installed Claude CLI does not advertise it", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-sandbox-effort-"));
+    const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root, {
+      commandWriter: writeHelpWithoutEffortClaudeCommand,
+    });
+    const remoteWorkspace = path.join(root, "sandbox-workspace");
+    await fs.mkdir(remoteWorkspace, { recursive: true });
+
+    try {
+      const result = await execute({
+        runId: "run-sandbox-effort-fallback",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          effort: "low",
+          env: {
+            PAPERCLIP_TEST_CAPTURE_PATH: capturePath,
+          },
+          promptTemplate: "Fallback cleanly if the sandbox CLI is old.",
+        },
+        context: {},
+        executionTarget: {
+          kind: "remote",
+          transport: "sandbox",
+          providerKey: "daytona",
+          environmentId: "env-1",
+          leaseId: "lease-1",
+          remoteCwd: remoteWorkspace,
+          timeoutMs: 30_000,
+          runner: createLocalSandboxRunner(),
+        },
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+      });
+
+      expect(result.exitCode).toBe(0);
+      const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
+      expect(capture.argv).not.toContain("--effort");
+    } finally {
+      restore();
       await fs.rm(root, { recursive: true, force: true });
     }
   }, 10_000);
