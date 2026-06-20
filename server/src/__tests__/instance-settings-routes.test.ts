@@ -15,6 +15,9 @@ const mockHeartbeatService = vi.hoisted(() => ({
   buildIssueGraphLivenessAutoRecoveryPreview: vi.fn(),
   reconcileIssueGraphLiveness: vi.fn(),
 }));
+const mockEnvironmentService = vi.hoisted(() => ({
+  getById: vi.fn(),
+}));
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 function registerModuleMocks() {
@@ -22,6 +25,9 @@ function registerModuleMocks() {
     heartbeatService: () => mockHeartbeatService,
     instanceSettingsService: () => mockInstanceSettingsService,
     logActivity: mockLogActivity,
+  }));
+  vi.doMock("../services/environments.js", () => ({
+    environmentService: () => mockEnvironmentService,
   }));
 }
 
@@ -59,6 +65,7 @@ describe("instance settings routes", () => {
     mockInstanceSettingsService.listCompanyIds.mockReset();
     mockHeartbeatService.buildIssueGraphLivenessAutoRecoveryPreview.mockReset();
     mockHeartbeatService.reconcileIssueGraphLiveness.mockReset();
+    mockEnvironmentService.getById.mockReset();
     mockLogActivity.mockReset();
     mockInstanceSettingsService.get.mockResolvedValue({
       id: "instance-settings-1",
@@ -162,6 +169,12 @@ describe("instance settings routes", () => {
       skippedOutsideLookback: 0,
       escalationIssueIds: ["issue-2"],
     });
+    mockEnvironmentService.getById.mockResolvedValue({
+      id: "env-1",
+      driver: "local",
+      status: "active",
+      config: {},
+    });
   });
 
   it("allows local board users to read and update experimental settings", async () => {
@@ -218,6 +231,24 @@ describe("instance settings routes", () => {
       defaultEnvironmentId: "11111111-1111-4111-8111-111111111111",
     });
     expect(mockLogActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects unknown defaultEnvironmentId values with 422", async () => {
+    mockEnvironmentService.getById.mockResolvedValue(null);
+    const app = await createApp({
+      type: "board",
+      userId: "local-board",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app)
+      .patch("/api/instance/settings")
+      .send({ defaultEnvironmentId: "11111111-1111-4111-8111-111111111111" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("Environment not found");
+    expect(mockInstanceSettingsService.update).not.toHaveBeenCalled();
   });
 
   it("allows local board users to update guarded dev-server auto-restart", async () => {

@@ -134,6 +134,24 @@ describe("environment instance routes", () => {
     });
   });
 
+  it("allows non-admin board members with company access to read the shared environment catalog", async () => {
+    mockEnvironmentService.list.mockResolvedValue([createEnvironment()]);
+    const app = createApp({
+      type: "board",
+      userId: "user-1",
+      source: "session",
+      companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", membershipRole: "member", status: "active" }],
+      isInstanceAdmin: false,
+    });
+
+    const res = await request(app).get("/api/companies/company-1/environments");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(mockEnvironmentService.list).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects company agents from enumerating the shared environment catalog", async () => {
     const app = createApp({
       type: "agent",
@@ -146,7 +164,7 @@ describe("environment instance routes", () => {
     const res = await request(app).get("/api/companies/company-1/environments");
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("board operators");
+    expect(res.body.error).toContain("Board access required");
   });
 
   it("rejects non-admin signed-in board members from mutating instance environments", async () => {

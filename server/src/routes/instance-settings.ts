@@ -9,6 +9,8 @@ import {
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { heartbeatService, instanceSettingsService, logActivity } from "../services/index.js";
+import { environmentService } from "../services/environments.js";
+import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 
 function assertCanManageInstanceSettings(req: Request) {
@@ -24,6 +26,7 @@ function assertCanManageInstanceSettings(req: Request) {
 export function instanceSettingsRoutes(db: Db) {
   const router = Router();
   const svc = instanceSettingsService(db);
+  const environments = environmentService(db);
   const heartbeat = heartbeatService(db);
 
   router.get("/instance/settings", async (req, res) => {
@@ -36,6 +39,13 @@ export function instanceSettingsRoutes(db: Db) {
     validate(patchInstanceSettingsSchema),
     async (req, res) => {
       assertCanManageInstanceSettings(req);
+      if (Object.prototype.hasOwnProperty.call(req.body, "defaultEnvironmentId")) {
+        await assertEnvironmentSelectionForCompany(
+          environments,
+          "instance",
+          typeof req.body.defaultEnvironmentId === "string" ? req.body.defaultEnvironmentId : null,
+        );
+      }
       const updated = await svc.update(req.body);
       const actor = getActorInfo(req);
       const companyIds = await svc.listCompanyIds();

@@ -26,7 +26,7 @@ import { probeEnvironment } from "../services/environment-probe.js";
 import { secretService } from "../services/secrets.js";
 import { listReadyPluginEnvironmentDrivers } from "../services/plugin-environment-driver.js";
 import { getConfiguredSecretProvider } from "../secrets/configured-provider.js";
-import { getActorInfo } from "./authz.js";
+import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { executionWorkspaceService } from "../services/execution-workspaces.js";
@@ -56,6 +56,10 @@ export function environmentRoutes(
     }
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
     throw forbidden("Instance admin access required");
+  }
+
+  function assertCanReadInstanceEnvironments(req: Request) {
+    assertBoardOrgAccess(req);
   }
 
   async function assertCanReadSecretsForDraftProbe(req: Request, companyId: string) {
@@ -155,7 +159,7 @@ export function environmentRoutes(
   }
 
   router.get("/companies/:companyId/environments", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    assertCanReadInstanceEnvironments(req);
     const rows = await svc.list({
       status: req.query.status as string | undefined,
       driver: req.query.driver as string | undefined,
@@ -164,7 +168,7 @@ export function environmentRoutes(
   });
 
   router.get("/companies/:companyId/environments/capabilities", async (req, res) => {
-    assertCanAccessInstanceEnvironments(req);
+    assertCanReadInstanceEnvironments(req);
     const pluginDrivers = await listReadyPluginEnvironmentDrivers({
       db,
       workerManager: options.pluginWorkerManager,
@@ -253,7 +257,7 @@ export function environmentRoutes(
       res.status(404).json({ error: "Environment not found" });
       return;
     }
-    assertCanAccessInstanceEnvironments(req);
+    assertCanReadInstanceEnvironments(req);
     res.json(environment);
   });
 
@@ -263,7 +267,7 @@ export function environmentRoutes(
       res.status(404).json({ error: "Environment not found" });
       return;
     }
-    assertCanAccessInstanceEnvironments(req);
+    assertCanReadInstanceEnvironments(req);
     const leases = await svc.listLeases(environment.id, {
       status: req.query.status as string | undefined,
     });
@@ -276,7 +280,7 @@ export function environmentRoutes(
       res.status(404).json({ error: "Environment lease not found" });
       return;
     }
-    assertCanAccessInstanceEnvironments(req);
+    assertCanReadInstanceEnvironments(req);
     res.json(lease);
   });
 
