@@ -484,7 +484,13 @@ function buildGateConfirmationMirrorMarker(childIssueId: string) {
 }
 
 function escapeMarkdownText(value: string) {
-  return value.replace(/[\\[\]()]/g, "\\$&").replace(/\s+/g, " ").trim();
+  return value
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/[\\`*_{}[\]()#+\-.!|]/g, "\\$&");
 }
 
 function indentMarkdownCodeBlock(value: string) {
@@ -4665,6 +4671,7 @@ export function issueService(db: Db) {
         .where(and(
           eq(issueComments.companyId, child.companyId),
           eq(issueComments.issueId, child.parentId),
+          eq(issueComments.authorType, "system"),
           like(issueComments.body, `%${marker}%`),
         ))
         .limit(1)

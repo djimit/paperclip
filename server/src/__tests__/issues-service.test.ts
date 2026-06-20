@@ -2936,7 +2936,7 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     });
 
     const { issue: child } = await svc.createChild(parentIssueId, {
-      title: "Security gate",
+      title: "Security <gate> **bold** [x](y) `code` # heading | table!",
       status: "todo",
       gateConfirmationMirror: true,
     });
@@ -2950,6 +2950,12 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
 
     await svc.addComment(child.id, "Approved. The implementation keeps the system write bounded.", {});
     await db.update(issues).set({ status: "done" }).where(eq(issues.id, child.id));
+    await db.insert(issueComments).values({
+      companyId,
+      issueId: parentIssueId,
+      authorType: "user",
+      body: `A user pasted the mirror marker: <!-- gate-confirmation-mirror:${child.id} -->`,
+    });
 
     const mirrored = await svc.mirrorGateConfirmationToParent(child.id);
     expect(mirrored).toMatchObject({
@@ -2958,6 +2964,10 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     });
     expect(mirrored?.body).toContain("## Gate Confirmation");
     expect(mirrored?.body).toContain(child.identifier);
+    expect(mirrored?.body).toContain(
+      String.raw`Security &lt;gate&gt; \*\*bold\*\* \[x\]\(y\) \`code\` \# heading \| table\!`,
+    );
+    expect(mirrored?.body).not.toContain("Security <gate> **bold** [x](y) `code` # heading | table!");
     expect(mirrored?.body).toContain("Approved. The implementation keeps the system write bounded.");
 
     await expect(svc.mirrorGateConfirmationToParent(child.id)).resolves.toBeNull();
@@ -2965,7 +2975,7 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
       .select()
       .from(issueComments)
       .where(eq(issueComments.issueId, parentIssueId));
-    expect(parentComments).toHaveLength(1);
+    expect(parentComments).toHaveLength(2);
   });
 
   it("does not mirror unflagged done children", async () => {
