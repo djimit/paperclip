@@ -179,7 +179,7 @@ export async function openUrl(url: string): Promise<boolean> {
     process.platform === "darwin"
       ? { command: "open", args: [url] }
       : process.platform === "win32"
-        ? { command: "cmd", args: ["/c", "start", "", url] }
+        ? { command: "rundll32.exe", args: ["url.dll,FileProtocolHandler", url] }
         : { command: "xdg-open", args: [url] };
 
   return new Promise<boolean>((resolve) => {

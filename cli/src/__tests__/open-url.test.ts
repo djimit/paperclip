@@ -31,6 +31,11 @@ describe("openUrl", () => {
     });
 
     await expect(openUrl("https://example.com")).resolves.toBe(true);
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining(["https://example.com"]),
+      { detached: true, stdio: "ignore" },
+    );
   });
 
   it("resolves false instead of crashing when the opener is missing", async () => {
