@@ -1,10 +1,12 @@
 export function normalizeLeaseIdPart(input: string): string {
-  return input
+  const normalized = input
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
     .replace(/-{2,}/g, "-");
+  const start = normalized.startsWith("-") ? 1 : 0;
+  const end = normalized.endsWith("-") ? -1 : undefined;
+  return normalized.slice(start, end);
 }
 
 export function buildLeaseSandboxId(input: {

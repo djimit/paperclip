@@ -166,10 +166,10 @@ function secretName(input: {
   driver: EnvironmentDriver;
   field: string;
 }) {
-  const slug = input.environmentName
+  const delimited = input.environmentName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+  const slug = delimited.slice(delimited.startsWith("-") ? 1 : 0, delimited.endsWith("-") ? -1 : undefined)
     .slice(0, 48) || "environment";
   return `environment-${input.driver}-${slug}-${input.field}-${randomUUID().slice(0, 8)}`;
 }

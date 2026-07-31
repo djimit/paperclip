@@ -519,12 +519,15 @@ function percentile(values: number[], p: number): number | null {
 }
 
 function normalizeKey(input: string) {
-  return input
+  const normalized = input
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9._:-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 160) || "tool";
+    .replace(/[^a-z0-9._:-]+/g, "-");
+  let start = 0;
+  let end = normalized.length;
+  while (normalized[start] === "-") start += 1;
+  while (end > start && normalized[end - 1] === "-") end -= 1;
+  return normalized.slice(start, end).slice(0, 160) || "tool";
 }
 
 function connectionUid(namespace: string, name: string, connectionId: string) {
