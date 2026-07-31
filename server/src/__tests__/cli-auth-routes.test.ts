@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInviteRateLimiter, type InviteRateLimiter } from "../services/invite-rate-limit.js";
 
 const mockAccessService = vi.hoisted(() => ({
   isInstanceAdmin: vi.fn(),
@@ -52,7 +53,11 @@ function registerModuleMocks() {
 
 let appImportCounter = 0;
 
-async function createApp(actor: any, db: any = {} as any) {
+async function createApp(
+  actor: any,
+  db: any = {} as any,
+  routeOptions: { cliAuthCreateRateLimiter?: InviteRateLimiter } = {},
+) {
   appImportCounter += 1;
   const routeModulePath = `../routes/access.js?cli-auth-routes-${appImportCounter}`;
   const middlewareModulePath = `../middleware/index.js?cli-auth-routes-${appImportCounter}`;
@@ -84,6 +89,7 @@ async function createApp(actor: any, db: any = {} as any) {
       deploymentExposure: "private",
       bindHost: "127.0.0.1",
       allowedHostnames: [],
+      ...routeOptions,
     }),
   );
   app.use(errorHandler);
@@ -130,6 +136,25 @@ describe.sequential("cli auth routes", () => {
     });
     expect(res.body.boardApiToken).toBe("pcp_board_token");
     expect(res.body.approvalUrl).toContain("/cli-auth/challenge-1?token=pcp_cli_auth_secret");
+  });
+
+  it.sequential("rate limits anonymous CLI auth challenge creation per IP", async () => {
+    mockBoardAuthService.createCliAuthChallenge.mockResolvedValue({
+      challenge: { id: "challenge-1", expiresAt: new Date("2026-03-23T13:00:00.000Z") },
+      challengeSecret: "pcp_cli_auth_secret",
+      pendingBoardToken: "pcp_board_token",
+    });
+    const app = await createApp({ type: "none", source: "none" }, {} as any, {
+      cliAuthCreateRateLimiter: createInviteRateLimiter({ maxRequests: 1 }),
+    });
+    const payload = { command: "paperclipai company import", requestedAccess: "board" };
+
+    expect((await request(app).post("/api/cli-auth/challenges").send(payload)).status).toBe(201);
+    const blocked = await request(app).post("/api/cli-auth/challenges").send(payload);
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers["retry-after"]).toBeDefined();
+    expect(mockBoardAuthService.createCliAuthChallenge).toHaveBeenCalledTimes(1);
   });
 
   it.sequential("rejects anonymous access to generic skill documents", async () => {

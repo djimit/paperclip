@@ -2604,6 +2604,7 @@ export function accessRoutes(
     allowedHostnames: string[];
     inviteResolutionNetwork?: Partial<InviteResolutionNetwork>;
     inviteRateLimiter?: InviteRateLimiter;
+    cliAuthCreateRateLimiter?: InviteRateLimiter;
   }
 ) {
   const router = Router();
@@ -2627,6 +2628,7 @@ export function accessRoutes(
   // trust nothing), so it is the socket's remote address unless the
   // operator explicitly trusts a proxy — an unforgeable key either way.
   const inviteRateLimiter = opts.inviteRateLimiter ?? createInviteRateLimiter();
+  const cliAuthCreateRateLimiter = opts.cliAuthCreateRateLimiter ?? createInviteRateLimiter();
   router.use("/invites/:token", (req, res, next) => {
     const result = inviteRateLimiter.consume(
       req.ip || req.socket?.remoteAddress || "unknown",
@@ -2727,6 +2729,21 @@ export function accessRoutes(
 
   router.post(
     "/cli-auth/challenges",
+    (req, res, next) => {
+      const result = cliAuthCreateRateLimiter.consume(
+        req.ip || req.socket?.remoteAddress || "unknown",
+      );
+      res.setHeader("X-RateLimit-Limit", String(result.limit));
+      res.setHeader("X-RateLimit-Remaining", String(result.remaining));
+      if (!result.allowed) {
+        res.setHeader("Retry-After", String(result.retryAfterSeconds));
+        next(tooManyRequests("Too many CLI auth challenges", {
+          retryAfterSeconds: result.retryAfterSeconds,
+        }));
+        return;
+      }
+      next();
+    },
     validate(createCliAuthChallengeSchema),
     async (req, res) => {
       const created = await boardAuth.createCliAuthChallenge(req.body);
