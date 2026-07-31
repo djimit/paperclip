@@ -1,5 +1,14 @@
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UNSAFE_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function safePathKeys(dotPath: string) {
+  const keys = dotPath.split(".");
+  if (keys.some((key) => !key || UNSAFE_PATH_KEYS.has(key))) {
+    throw new Error(`Unsafe configuration path: ${dotPath}`);
+  }
+  return keys;
+}
 
 export function isUuidSecretRef(value: string): boolean {
   return UUID_RE.test(value);
@@ -49,6 +58,7 @@ export function collectSecretRefPaths(
     const properties = node.properties as Record<string, Record<string, unknown>> | undefined;
     if (!properties || typeof properties !== "object") return;
     for (const [key, propertySchema] of Object.entries(properties)) {
+      if (UNSAFE_PATH_KEYS.has(key)) continue;
       if (!propertySchema || typeof propertySchema !== "object") continue;
       const path = prefix ? `${prefix}.${key}` : key;
       if (propertySchema.format === "secret-ref") {
@@ -67,7 +77,7 @@ export function readConfigValueAtPath(
   dotPath: string,
 ): unknown {
   let current: unknown = config;
-  for (const key of dotPath.split(".")) {
+  for (const key of safePathKeys(dotPath)) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {
       return undefined;
     }
@@ -82,7 +92,7 @@ export function writeConfigValueAtPath(
   value: unknown,
 ): Record<string, unknown> {
   const result = structuredClone(config) as Record<string, unknown>;
-  const keys = dotPath.split(".");
+  const keys = safePathKeys(dotPath);
   let cursor: Record<string, unknown> = result;
 
   for (let index = 0; index < keys.length - 1; index += 1) {

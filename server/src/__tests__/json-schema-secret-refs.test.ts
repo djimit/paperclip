@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectSecretRefPaths, parseSecretRefBindingObject } from "../services/json-schema-secret-refs.ts";
+import { collectSecretRefPaths, parseSecretRefBindingObject, writeConfigValueAtPath } from "../services/json-schema-secret-refs.ts";
 
 describe("parseSecretRefBindingObject", () => {
   const secretId = "11111111-1111-1111-1111-111111111111";
@@ -73,5 +73,13 @@ describe("collectSecretRefPaths", () => {
         },
       ],
     })).sort()).toEqual(["apiKey", "nested.token"]);
+  });
+
+  it("rejects prototype-polluting config paths", () => {
+    expect(() => writeConfigValueAtPath({}, "__proto__.polluted", true)).toThrow(/unsafe configuration path/i);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Array.from(collectSecretRefPaths({
+      properties: { __proto__: { format: "secret-ref" } },
+    }))).toEqual([]);
   });
 });
