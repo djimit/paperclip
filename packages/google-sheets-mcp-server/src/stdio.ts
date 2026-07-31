@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { runServer } from "./index.js";
 
-void runServer().catch((error) => {
-  console.error("Failed to start Google Sheets MCP server:", error instanceof Error ? error.message : error);
+void runServer().catch(() => {
+  console.error("Failed to start Google Sheets MCP server. Check configuration and credentials.");
   process.exit(1);
 });

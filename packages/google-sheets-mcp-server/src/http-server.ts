@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((error) => {
-  console.error("Failed to start Google Sheets MCP HTTP server:", error instanceof Error ? error.message : error);
+void main().catch(() => {
+  console.error("Failed to start Google Sheets MCP HTTP server. Check configuration and credentials.");
   process.exit(1);
 });
