@@ -34,6 +34,7 @@ import {
   thematicBreakPlugin,
   type RealmPlugin,
 } from "@mdxeditor/editor";
+import { escapeMarkdownDestination, escapeMarkdownLabel, escapeMarkdownTitle } from "../lib/markdown-escape";
 import {
   buildAgentMentionHref,
   buildIssueReferenceHref,
@@ -131,11 +132,12 @@ function convertHtmlImagesToMarkdown(text: string): string {
     if (!src) return tag;
     const alt = readHtmlAttribute(attrs, "alt") ?? "image";
     const title = readHtmlAttribute(attrs, "title");
-    const escapedAlt = alt.replace(/[[\]]/g, "\\$&");
-    const escapedTitle = title?.replace(/"/g, '\\"');
+    const escapedAlt = escapeMarkdownLabel(alt);
+    const escapedSrc = escapeMarkdownDestination(src);
+    const escapedTitle = title ? escapeMarkdownTitle(title) : null;
     return escapedTitle
-      ? `![${escapedAlt}](${src} "${escapedTitle}")`
-      : `![${escapedAlt}](${src})`;
+      ? `![${escapedAlt}](${escapedSrc} "${escapedTitle}")`
+      : `![${escapedAlt}](${escapedSrc})`;
   });
 }
 

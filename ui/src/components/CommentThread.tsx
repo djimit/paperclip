@@ -24,6 +24,7 @@ import { formatTimelineWorkspaceLabel, type IssueTimelineAssignee, type IssueTim
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatDateTime } from "../lib/utils";
 import { restoreSubmittedCommentDraft } from "../lib/comment-submit-draft";
+import { escapeMarkdownDestination, escapeMarkdownLabel } from "../lib/markdown-escape";
 import { PluginSlotOutlet } from "@/plugins/slots";
 
 interface CommentWithRunMeta extends IssueComment {
@@ -934,8 +935,7 @@ export function CommentThread({
     try {
       if (imageUploadHandler) {
         const url = await imageUploadHandler(file);
-        const safeName = file.name.replace(/[[\]]/g, "\\$&");
-        const markdown = `![${safeName}](${url})`;
+        const markdown = `![${escapeMarkdownLabel(file.name)}](${escapeMarkdownDestination(url)})`;
         setBody((prev) => prev ? `${prev}\n\n${markdown}` : markdown);
       } else if (onAttachImage) {
         await onAttachImage(file);

@@ -48,6 +48,7 @@ import { useLiveRunTranscripts } from "./transcript/useLiveRunTranscripts";
 import { useSecondTick } from "../hooks/useSecondTick";
 import { usePaperclipIssueRuntime, type PaperclipIssueRuntimeReassignment } from "../hooks/usePaperclipIssueRuntime";
 import { useOptionalToastActions } from "../context/ToastContext";
+import { escapeMarkdownDestination, escapeMarkdownLabel } from "../lib/markdown-escape";
 import { copyTextToClipboard } from "../lib/clipboard";
 import {
   buildIssueChatMessages,
@@ -3702,8 +3703,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
     try {
       if (onImageUpload && file.type.startsWith("image/")) {
         const url = await onImageUpload(file);
-        const safeName = file.name.replace(/[[\]]/g, "\\$&");
-        const markdown = `![${safeName}](${url})`;
+        const markdown = `![${escapeMarkdownLabel(file.name)}](${escapeMarkdownDestination(url)})`;
         setBody((prev) => prev ? `${prev}\n\n${markdown}` : markdown);
         setComposerAttachments((prev) => prev.map((item) =>
           item.id === attachmentId
