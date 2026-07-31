@@ -39,7 +39,12 @@ function startStaticServer(rootDir) {
     const server = http.createServer(async (req, res) => {
       try {
         const urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]);
-        let filePath = path.join(rootDir, urlPath === "/" ? "index.html" : urlPath);
+        let filePath = path.resolve(rootDir, `.${urlPath === "/" ? "/index.html" : urlPath}`);
+        if (filePath !== rootDir && !filePath.startsWith(`${rootDir}${path.sep}`)) {
+          res.statusCode = 403;
+          res.end("forbidden");
+          return;
+        }
         let stat;
         try {
           stat = await fs.stat(filePath);
@@ -55,6 +60,15 @@ function startStaticServer(rootDir) {
           res.end("not found");
           return;
         }
+        const realRoot = await fs.realpath(rootDir);
+        const realFilePath = await fs.realpath(filePath);
+        const relativePath = path.relative(realRoot, realFilePath);
+        if (path.isAbsolute(relativePath) || relativePath === ".." || relativePath.startsWith(`..${path.sep}`)) {
+          res.statusCode = 403;
+          res.end("forbidden");
+          return;
+        }
+        filePath = realFilePath;
         const ext = path.extname(filePath).toLowerCase();
         res.setHeader("content-type", MIME[ext] ?? "application/octet-stream");
         res.setHeader("cache-control", "no-cache");
