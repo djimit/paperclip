@@ -74,9 +74,10 @@ function startStaticServer(rootDir) {
         res.setHeader("cache-control", "no-cache");
         const data = await fs.readFile(filePath);
         res.end(data);
-      } catch (err) {
+      } catch {
         res.statusCode = 500;
-        res.end(err.message);
+        res.setHeader("content-type", "text/plain; charset=utf-8");
+        res.end("internal error");
       }
     });
     server.listen(0, "127.0.0.1", () => {

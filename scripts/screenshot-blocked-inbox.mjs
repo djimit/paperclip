@@ -41,9 +41,9 @@ async function main() {
       }[ext] || "application/octet-stream";
       res.writeHead(200, { "content-type": mime });
       res.end(buf);
-    } catch (err) {
-      res.writeHead(404);
-      res.end(String(err));
+    } catch {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("not found");
     }
   });
 
