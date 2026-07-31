@@ -156,7 +156,7 @@ export function isCursorUnknownSessionError(stdout: string, stderr: string): boo
     .filter(Boolean)
     .join("\n");
 
-  return /unknown\s+(session|chat)|session\s+.*\s+not\s+found|chat\s+.*\s+not\s+found|resume\s+.*\s+not\s+found|could\s+not\s+resume/i.test(
+  return /unknown\s+(session|chat)|session\s+[^\n]{0,500}\s+not\s+found|chat\s+[^\n]{0,500}\s+not\s+found|resume\s+[^\n]{0,500}\s+not\s+found|could\s+not\s+resume/i.test(
     haystack,
   );
 }

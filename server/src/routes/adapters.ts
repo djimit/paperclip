@@ -263,14 +263,14 @@ export function adapterRoutes() {
     // e.g. "@henkey/hermes-paperclip-adapter@0.3.0" → packageName + version
     let canonicalName = packageName;
     let explicitVersion = version;
-    const versionSuffix = packageName.match(/@(\d+\.\d+\.\d+.*)$/);
-    if (versionSuffix) {
+    const lastAtIndex = packageName.lastIndexOf("@");
+    const versionSuffix = lastAtIndex > 0 ? packageName.slice(lastAtIndex + 1) : "";
+    if (/^\d+\.\d+\.\d+/.test(versionSuffix)) {
       // For scoped packages: "@scope/name@1.2.3" → "@scope/name" + "1.2.3"
       // For unscoped: "name@1.2.3" → "name" + "1.2.3"
-      const lastAtIndex = packageName.lastIndexOf("@");
       if (lastAtIndex > 0 && !explicitVersion) {
         canonicalName = packageName.slice(0, lastAtIndex);
-        explicitVersion = versionSuffix[1];
+        explicitVersion = versionSuffix;
       }
     }
 

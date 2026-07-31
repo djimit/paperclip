@@ -85,5 +85,5 @@ export function isGrokUnknownSessionError(stdout: string, stderr: string): boole
     .filter(Boolean)
     .join("\n");
 
-  return /unknown\s+session|session(?:\s+.*)?\s+not\s+found|resume\s+.*\s+not\s+found|invalid\s+session/i.test(haystack);
+  return /unknown\s+session|session(?:\s+[^\n]{0,500})?\s+not\s+found|resume\s+[^\n]{0,500}\s+not\s+found|invalid\s+session/i.test(haystack);
 }

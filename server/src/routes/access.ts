@@ -1817,7 +1817,11 @@ export function buildInviteOnboardingTextDocument(
 
   const lines: string[] = [];
   const appendBlock = (block: string) => {
-    const trimmed = block.replace(/^\n/, "").replace(/\n\s*$/, "");
+    let trimmed = block.startsWith("\n") ? block.slice(1) : block;
+    const finalNewline = trimmed.lastIndexOf("\n");
+    if (finalNewline >= 0 && trimmed.slice(finalNewline + 1).trim().length === 0) {
+      trimmed = trimmed.slice(0, finalNewline);
+    }
     const lineIndentation = trimmed
       .split("\n")
       .filter((line) => line.trim().length > 0)

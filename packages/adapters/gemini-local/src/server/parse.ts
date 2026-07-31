@@ -206,7 +206,7 @@ export function isGeminiSessionUnrecoverableError(stdout: string, stderr: string
     .filter(Boolean)
     .join("\n");
 
-  return /unknown\s+session|session\s+.*\s+not\s+found|resume\s+.*\s+not\s+found|checkpoint\s+.*\s+not\s+found|cannot\s+resume|failed\s+to\s+resume|exceeds\s+the\s+maximum\s+number\s+of\s+tokens|input\s+token\s+count\s+exceeds/i.test(
+  return /unknown\s+session|session\s+[^\n]{0,500}\s+not\s+found|resume\s+[^\n]{0,500}\s+not\s+found|checkpoint\s+[^\n]{0,500}\s+not\s+found|cannot\s+resume|failed\s+to\s+resume|exceeds\s+the\s+maximum\s+number\s+of\s+tokens|input\s+token\s+count\s+exceeds/i.test(
     haystack,
   );
 }
@@ -218,7 +218,7 @@ export function isGeminiTransientNetworkError(stdout: string, stderr: string): b
     .filter(Boolean)
     .join("\n");
 
-  return /ENOTFOUND\s+oauth2\.googleapis\.com|ENOTFOUND\s+sts\.googleapis\.com|EAI_AGAIN|_GaxiosError.*ENOTFOUND|_UserRefreshClient.*ENOTFOUND/i.test(
+  return /ENOTFOUND\s+oauth2\.googleapis\.com|ENOTFOUND\s+sts\.googleapis\.com|EAI_AGAIN|_GaxiosError[^\n]{0,500}ENOTFOUND|_UserRefreshClient[^\n]{0,500}ENOTFOUND/i.test(
     haystack,
   );
 }
