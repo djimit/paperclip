@@ -4091,9 +4091,10 @@ describe("resolveShell (shell fallback)", () => {
     expect(resolveShell()).toBe(process.execPath);
   });
 
-  it("preserves non-absolute shell names so PATH lookup still works", () => {
+  it("rejects non-absolute shell names to prevent PATH-based executable substitution", () => {
     process.env.SHELL = "zsh";
-    expect(resolveShell()).toBe("zsh");
+    Object.defineProperty(process, "platform", { value: "linux" });
+    expect(resolveShell()).toBe("/bin/sh");
   });
 
   it("falls back to /bin/sh on non-Windows when SHELL is unset", () => {
