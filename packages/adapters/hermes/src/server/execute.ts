@@ -127,10 +127,31 @@ function renderConditionalSections(template: string, vars: Record<string, unknow
     if (Array.isArray(value)) return value.length > 0;
     return Boolean(value);
   };
-  return template.replace(
-    /\{\{#([a-zA-Z0-9_.-]+)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
-    (_match, key: string, body: string) => (isTruthy(key) ? body : ""),
-  );
+  let output = "";
+  let cursor = 0;
+  while (cursor < template.length) {
+    const open = template.indexOf("{{#", cursor);
+    if (open < 0) return output + template.slice(cursor);
+    const keyEnd = template.indexOf("}}", open + 3);
+    if (keyEnd < 0) return output + template.slice(cursor);
+    const key = template.slice(open + 3, keyEnd);
+    if (!/^[a-zA-Z0-9_.-]+$/.test(key)) {
+      output += template.slice(cursor, open + 3);
+      cursor = open + 3;
+      continue;
+    }
+    const closeMarker = `{{/${key}}}`;
+    const close = template.indexOf(closeMarker, keyEnd + 2);
+    if (close < 0) {
+      output += template.slice(cursor, keyEnd + 2);
+      cursor = keyEnd + 2;
+      continue;
+    }
+    output += template.slice(cursor, open);
+    if (isTruthy(key)) output += template.slice(keyEnd + 2, close);
+    cursor = close + closeMarker.length;
+  }
+  return output;
 }
 
 export function buildPrompt(

@@ -155,12 +155,18 @@ export function extractClaudeLoginUrl(text: string): string | null {
   const match = text.match(URL_RE);
   if (!match || match.length === 0) return null;
   for (const rawUrl of match) {
-    const cleaned = rawUrl.replace(/[\])}.!,?;:'\"]+$/g, "");
+    let end = rawUrl.length;
+    while (end > 0 && "])}.!,?;:'\"".includes(rawUrl[end - 1] ?? "")) end -= 1;
+    const cleaned = rawUrl.slice(0, end);
     if (cleaned.includes("claude") || cleaned.includes("anthropic") || cleaned.includes("auth")) {
       return cleaned;
     }
   }
-  return match[0]?.replace(/[\])}.!,?;:'\"]+$/g, "") ?? null;
+  const fallback = match[0];
+  if (!fallback) return null;
+  let end = fallback.length;
+  while (end > 0 && "])}.!,?;:'\"".includes(fallback[end - 1] ?? "")) end -= 1;
+  return fallback.slice(0, end);
 }
 
 export function detectClaudeLoginRequired(input: {
@@ -274,7 +280,7 @@ export function isClaudePoisonedPreviousMessageIdError(parsed: Record<string, un
     .filter(Boolean);
 
   return allMessages.some((msg) =>
-    /diagnostics\.previous_message_id.*starts with `msg_`/i.test(msg),
+    /diagnostics\.previous_message_id[^\n]{0,500}starts with `msg_`/i.test(msg),
   );
 }
 

@@ -40,9 +40,9 @@ function titleCaseIdentifier(value: string): string {
 
 /** `Plugin: paperclipai.plugin-briefs` → `Briefs`; null when not a plugin label. */
 function pluginPackageLabel(raw: string): string | null {
-  const match = /^plugin:\s*(.+)$/i.exec(raw);
-  if (!match) return null;
-  let leaf = match[1].trim();
+  if (raw.slice(0, 7).toLowerCase() !== "plugin:") return null;
+  let leaf = raw.slice(7).trim();
+  if (!leaf) return null;
   // Keep the package leaf only: `paperclipai.plugin-briefs` → `plugin-briefs`.
   leaf = leaf.slice(leaf.lastIndexOf(".") + 1);
   // Drop the `plugin-` scaffolding leftover: `plugin-briefs` → `briefs`.

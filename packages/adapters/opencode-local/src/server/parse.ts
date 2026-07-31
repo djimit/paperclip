@@ -95,7 +95,7 @@ export function isOpenCodeUnknownSessionError(stdout: string, stderr: string): b
     .filter(Boolean)
     .join("\n");
 
-  return /unknown\s+session|session\b.*\bnot\s+found|resource\s+not\s+found:.*[\\/]session[\\/].*\.json|notfounderror|no session/i.test(
+  return /unknown\s+session|session\b[^\n]{0,500}\bnot\s+found|resource\s+not\s+found:[^\n]{0,500}[\\/]session[\\/][^\n]{0,500}\.json|notfounderror|no session/i.test(
     haystack,
   );
 }
