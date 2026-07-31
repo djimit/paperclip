@@ -17,6 +17,25 @@ export interface ConfigValidationResult {
   errors?: { field: string; message: string }[];
 }
 
+const MAX_SCHEMA_DEPTH = 64;
+const MAX_SCHEMA_NODES = 10_000;
+
+function schemaWithinTraversalBudget(schema: unknown) {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value: schema, depth: 0 }];
+  const seen = new WeakSet<object>();
+  let nodes = 0;
+  while (pending.length > 0) {
+    const { value, depth } = pending.pop()!;
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    if (depth > MAX_SCHEMA_DEPTH || ++nodes > MAX_SCHEMA_NODES) return false;
+    seen.add(value);
+    for (const nested of Array.isArray(value) ? value : Object.values(value)) {
+      pending.push({ value: nested, depth: depth + 1 });
+    }
+  }
+  return true;
+}
+
 /**
  * Validate a config object against a JSON Schema.
  *
@@ -28,6 +47,9 @@ export function validateInstanceConfig(
   configJson: Record<string, unknown>,
   schema: JsonSchema,
 ): ConfigValidationResult {
+  if (!schemaWithinTraversalBudget(schema)) {
+    return { valid: false, errors: [{ field: "/", message: "configuration schema is too deeply nested or complex" }] };
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const AjvCtor = (Ajv as any).default ?? Ajv;
   const ajv = new AjvCtor({ allErrors: true });
