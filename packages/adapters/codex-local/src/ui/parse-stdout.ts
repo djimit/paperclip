@@ -59,7 +59,7 @@ function parseCommandExecutionItem(
   const status = asString(item.status);
   const exitCode = typeof item.exit_code === "number" && Number.isFinite(item.exit_code) ? item.exit_code : null;
   const safeCommand = command;
-  const output = asString(item.aggregated_output).replace(/\s+$/, "");
+  const output = asString(item.aggregated_output).trimEnd();
 
   if (phase === "started") {
     return [{

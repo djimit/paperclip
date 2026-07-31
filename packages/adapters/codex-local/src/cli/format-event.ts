@@ -88,7 +88,7 @@ function printItemCompleted(item: Record<string, unknown>): boolean {
     const command = asString(item.command);
     const status = asString(item.status);
     const exitCode = typeof item.exit_code === "number" && Number.isFinite(item.exit_code) ? item.exit_code : null;
-    const output = asString(item.aggregated_output).replace(/\s+$/, "");
+    const output = asString(item.aggregated_output).trimEnd();
     const isError =
       (exitCode !== null && exitCode !== 0) ||
       status === "failed" ||

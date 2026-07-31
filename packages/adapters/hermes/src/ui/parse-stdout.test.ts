@@ -74,6 +74,11 @@ describe("parseHermesStdoutLine — ANSI stripping", () => {
     expect(result[0]).toHaveProperty("text", "Actual content");
   });
 
+  it("handles long unterminated OSC input without regex backtracking", () => {
+    const result = parseHermesStdoutLine(`\x1b]${"x".repeat(100_000)}`, TS);
+    expect(result).toHaveLength(1);
+  });
+
   it("handles empty lines after ANSI stripping", () => {
     const result = parseHermesStdoutLine("\x1b[0m", TS);
     expect(result).toHaveLength(0);

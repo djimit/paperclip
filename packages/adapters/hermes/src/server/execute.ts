@@ -157,7 +157,8 @@ export function buildPrompt(
     "http://127.0.0.1:3100/api";
   // Ensure /api suffix
   if (!paperclipApiUrl.endsWith("/api")) {
-    paperclipApiUrl = paperclipApiUrl.replace(/\/+$/, "") + "/api";
+    while (paperclipApiUrl.endsWith("/")) paperclipApiUrl = paperclipApiUrl.slice(0, -1);
+    paperclipApiUrl += "/api";
   }
 
   const paperclipTaskMarkdown = selectPaperclipTaskMarkdown(context, {

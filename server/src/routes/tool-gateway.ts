@@ -42,8 +42,8 @@ function gatewayToken(req: { header(name: string): string | undefined }) {
 
 function bearerToken(req: { header(name: string): string | undefined }) {
   const value = req.header("authorization")?.trim() ?? "";
-  const match = value.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || null;
+  if (value.slice(0, 6).toLowerCase() !== "bearer" || !/\s/.test(value[6] ?? "")) return null;
+  return value.slice(7).trim() || null;
 }
 
 function callerHeaders(req: { headers: Record<string, string | string[] | undefined> }): Record<string, string> {

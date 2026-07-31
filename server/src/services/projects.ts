@@ -435,7 +435,9 @@ function normalizeWorkspaceCwd(value: unknown): string | null {
 }
 
 function deriveNameFromCwd(cwd: string): string {
-  const normalized = cwd.replace(/[\\/]+$/, "");
+  let end = cwd.length;
+  while (end > 0 && (cwd[end - 1] === "/" || cwd[end - 1] === "\\")) end -= 1;
+  const normalized = cwd.slice(0, end);
   const segments = normalized.split(/[\\/]/).filter(Boolean);
   return segments[segments.length - 1] ?? "Local folder";
 }

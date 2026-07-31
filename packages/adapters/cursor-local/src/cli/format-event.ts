@@ -162,7 +162,7 @@ function printLegacyToolEvent(part: Record<string, unknown>): void {
   const state = asRecord(part.state);
   const status = asString(state?.status);
   const input = state?.input;
-  const output = asString(state?.output).replace(/\s+$/, "");
+  const output = asString(state?.output).trimEnd();
   const metadata = asRecord(state?.metadata);
   const exit = asNumber(metadata?.exit, NaN);
   const isError =
