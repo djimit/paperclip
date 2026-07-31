@@ -457,7 +457,7 @@ export function pluginUiStaticRoutes(db: Db, options: PluginUiStaticRouteOptions
     }
 
     // Step 6: Determine cache strategy based on filename
-    const basename = path.basename(resolvedFilePath);
+    const basename = path.basename(realFilePath);
     const isContentHashed = CONTENT_HASH_PATTERN.test(basename);
 
     // Step 7: Set cache headers
@@ -479,7 +479,7 @@ export function pluginUiStaticRoutes(db: Db, options: PluginUiStaticRouteOptions
     }
 
     // Step 8: Set Content-Type
-    const ext = path.extname(resolvedFilePath).toLowerCase();
+    const ext = path.extname(realFilePath).toLowerCase();
     const contentType = MIME_TYPES[ext];
     if (contentType) {
       res.set("Content-Type", contentType);
@@ -492,10 +492,10 @@ export function pluginUiStaticRoutes(db: Db, options: PluginUiStaticRouteOptions
     // The plugin source can live in Git worktrees (e.g. ".worktrees/...").
     // `send` defaults to dotfiles:"ignore", which treats dot-directories as
     // not found. We already enforce traversal safety above, so allow dot paths.
-    res.sendFile(resolvedFilePath, { dotfiles: "allow" }, (err) => {
+    res.sendFile(realFilePath, { dotfiles: "allow" }, (err) => {
       if (err) {
         log.error(
-          { err, pluginId: plugin.id, filePath: resolvedFilePath },
+          { err, pluginId: plugin.id, filePath: realFilePath },
           "plugin-ui-static: error sending file",
         );
         // Only send error if headers haven't been sent yet

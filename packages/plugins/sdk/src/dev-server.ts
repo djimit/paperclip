@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync, watch } from "node:fs";
+import { createReadStream, existsSync, realpathSync, statSync, watch } from "node:fs";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -158,14 +158,24 @@ export async function startPluginDevServer(options: PluginDevServerOptions = {})
 
     try {
       const filePath = normalizeFilePath(uiDir, url);
-      if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+      if (!existsSync(filePath)) {
+        send404(res);
+        return;
+      }
+      const realUiDir = realpathSync(uiDir);
+      const realFilePath = realpathSync(filePath);
+      const relativePath = path.relative(realUiDir, realFilePath);
+      if (path.isAbsolute(relativePath)
+        || relativePath === ".."
+        || relativePath.startsWith(`..${path.sep}`)
+        || !statSync(realFilePath).isFile()) {
         send404(res);
         return;
       }
 
       res.statusCode = 200;
-      res.setHeader("Content-Type", contentType(filePath));
-      createReadStream(filePath).pipe(res);
+      res.setHeader("Content-Type", contentType(realFilePath));
+      createReadStream(realFilePath).pipe(res);
     } catch {
       send404(res);
     }
