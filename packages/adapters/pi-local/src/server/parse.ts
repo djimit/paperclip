@@ -218,11 +218,14 @@ export function parsePiJsonl(stdout: string): ParsedPiOutput {
 }
 
 export function isPiUnknownSessionError(stdout: string, stderr: string): boolean {
-  const haystack = `${stdout}\n${stderr}`
+  const lines = `${stdout}\n${stderr}`
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
+    .map((line) => line.trim().toLowerCase().split(/\s+/).join(" "))
+    .filter(Boolean);
 
-  return /unknown\s+session|session\s+not\s+found|session\s+[^\n]{0,500}\s+not\s+found|no\s+session/i.test(haystack);
+  return lines.some((line) => {
+    if (line.includes("unknown session") || line.includes("no session")) return true;
+    const start = line.indexOf("session");
+    return start >= 0 && line.indexOf("not found", start + "session".length) >= 0;
+  });
 }

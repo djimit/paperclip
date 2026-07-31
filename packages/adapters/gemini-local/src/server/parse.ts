@@ -200,15 +200,18 @@ export function parseGeminiJsonl(stdout: string) {
 }
 
 export function isGeminiSessionUnrecoverableError(stdout: string, stderr: string): boolean {
-  const haystack = `${stdout}\n${stderr}`
+  const lines = `${stdout}\n${stderr}`
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
+    .map((line) => line.trim().toLowerCase().split(/\s+/).join(" "))
+    .filter(Boolean);
 
-  return /unknown\s+session|session\s+[^\n]{0,500}\s+not\s+found|resume\s+[^\n]{0,500}\s+not\s+found|checkpoint\s+[^\n]{0,500}\s+not\s+found|cannot\s+resume|failed\s+to\s+resume|exceeds\s+the\s+maximum\s+number\s+of\s+tokens|input\s+token\s+count\s+exceeds/i.test(
-    haystack,
-  );
+  return lines.some((line) =>
+    ["unknown session", "cannot resume", "failed to resume", "exceeds the maximum number of tokens", "input token count exceeds"]
+      .some((message) => line.includes(message))
+    || ["session", "resume", "checkpoint"].some((term) => {
+      const start = line.indexOf(term);
+      return start >= 0 && line.indexOf("not found", start + term.length) >= 0;
+    }));
 }
 
 export function isGeminiTransientNetworkError(stdout: string, stderr: string): boolean {
