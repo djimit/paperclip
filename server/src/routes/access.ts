@@ -498,9 +498,8 @@ function headerMapGetIgnoreCase(
 function tokenFromAuthorizationHeader(rawHeader: string | null): string | null {
   const trimmed = nonEmptyTrimmedString(rawHeader);
   if (!trimmed) return null;
-  const bearerMatch = trimmed.match(/^bearer\s+(.+)$/i);
-  if (bearerMatch?.[1]) {
-    return nonEmptyTrimmedString(bearerMatch[1]);
+  if (trimmed.slice(0, 6).toLowerCase() === "bearer" && /\s/.test(trimmed[6] ?? "")) {
+    return nonEmptyTrimmedString(trimmed.slice(7));
   }
   return trimmed;
 }

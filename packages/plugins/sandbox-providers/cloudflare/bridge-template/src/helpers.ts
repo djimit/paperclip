@@ -21,7 +21,9 @@ export function buildLeaseSandboxId(input: {
 }
 
 export function buildSentinelPath(remoteCwd: string): string {
-  return `${remoteCwd.replace(/\/+$/, "")}/.paperclip-lease.json`;
+  let end = remoteCwd.length;
+  while (end > 0 && remoteCwd[end - 1] === "/") end -= 1;
+  return `${remoteCwd.slice(0, end)}/.paperclip-lease.json`;
 }
 
 export function isTimeoutError(error: unknown): boolean {

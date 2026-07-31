@@ -619,9 +619,11 @@ function foldYamlBlockScalarLines(lines: string[]) {
 
 function applyYamlBlockChomp(value: string, chomp: "" | "+" | "-") {
   if (chomp === "+") return value;
-  if (chomp === "-") return value.replace(/\n+$/u, "");
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "\n") end -= 1;
+  if (chomp === "-") return value.slice(0, end);
   if (value.length === 0) return value;
-  return value.replace(/\n+$/u, "") + "\n";
+  return value.slice(0, end) + "\n";
 }
 
 function parseYamlScalar(rawValue: string): unknown {
