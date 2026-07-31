@@ -20,8 +20,8 @@ export interface ConfigValidationResult {
 const MAX_SCHEMA_DEPTH = 64;
 const MAX_SCHEMA_NODES = 10_000;
 
-function schemaWithinTraversalBudget(schema: unknown) {
-  const pending: Array<{ value: unknown; depth: number }> = [{ value: schema, depth: 0 }];
+function valueWithinTraversalBudget(value: unknown) {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
   const seen = new WeakSet<object>();
   let nodes = 0;
   while (pending.length > 0) {
@@ -47,8 +47,8 @@ export function validateInstanceConfig(
   configJson: Record<string, unknown>,
   schema: JsonSchema,
 ): ConfigValidationResult {
-  if (!schemaWithinTraversalBudget(schema)) {
-    return { valid: false, errors: [{ field: "/", message: "configuration schema is too deeply nested or complex" }] };
+  if (!valueWithinTraversalBudget(schema) || !valueWithinTraversalBudget(configJson)) {
+    return { valid: false, errors: [{ field: "/", message: "configuration is too deeply nested or complex" }] };
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const AjvCtor = (Ajv as any).default ?? Ajv;
