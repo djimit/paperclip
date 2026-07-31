@@ -11,12 +11,12 @@ function readNonEmptyString(value: unknown): string | null {
 }
 
 function slugify(value: string | null | undefined) {
-  const normalized = (value ?? "")
+  const delimited = (value ?? "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .replace(/-+/g, "-");
+  const normalized = delimited.slice(delimited.startsWith("-") ? 1 : 0, delimited.endsWith("-") ? -1 : undefined);
   return normalized.length > 0 ? normalized : null;
 }
 

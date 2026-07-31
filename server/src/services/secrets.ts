@@ -531,12 +531,15 @@ function isSensitiveEnvKey(key: string) {
 }
 
 function normalizeSecretKey(input: string) {
-  return input
+  const normalized = input
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
+    .replace(/[^a-z0-9_.-]+/g, "-");
+  let start = 0;
+  let end = normalized.length;
+  while (normalized[start] === "-") start += 1;
+  while (end > start && normalized[end - 1] === "-") end -= 1;
+  return normalized.slice(start, end).slice(0, 120);
 }
 
 function deriveSecretNameFromExternalRef(externalRef: string) {

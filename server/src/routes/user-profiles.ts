@@ -39,12 +39,12 @@ const PROFILE_WINDOWS = [
 ] as const;
 
 function slugifyUserPart(value: string | null | undefined) {
-  const normalized = value
+  const delimited = value
     ?.trim()
     .toLowerCase()
     .replace(/['"]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .replace(/[^a-z0-9]+/g, "-");
+  const normalized = delimited?.slice(delimited.startsWith("-") ? 1 : 0, delimited.endsWith("-") ? -1 : undefined);
   return normalized || null;
 }
 
