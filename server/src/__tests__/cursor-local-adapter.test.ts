@@ -63,6 +63,7 @@ describe("cursor stale session detection", () => {
   it("treats missing/unknown session messages as an unknown session error", () => {
     expect(isCursorUnknownSessionError("", "unknown session id chat_123")).toBe(true);
     expect(isCursorUnknownSessionError("", "chat abc not found")).toBe(true);
+    expect(isCursorUnknownSessionError("", `session${"\t\t".repeat(100_000)}still active`)).toBe(false);
   });
 });
 

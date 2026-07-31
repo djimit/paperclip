@@ -150,13 +150,17 @@ export function parseCursorJsonl(stdout: string) {
 }
 
 export function isCursorUnknownSessionError(stdout: string, stderr: string): boolean {
-  const haystack = `${stdout}\n${stderr}`
+  const lines = `${stdout}\n${stderr}`
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
+    .map((line) => line.trim().toLowerCase().split(/\s+/).join(" "))
+    .filter(Boolean);
 
-  return /unknown\s+(session|chat)|session\s+[^\n]{0,500}\s+not\s+found|chat\s+[^\n]{0,500}\s+not\s+found|resume\s+[^\n]{0,500}\s+not\s+found|could\s+not\s+resume/i.test(
-    haystack,
-  );
+  return lines.some((line) =>
+    line.includes("unknown session")
+    || line.includes("unknown chat")
+    || line.includes("could not resume")
+    || ["session", "chat", "resume"].some((term) => {
+      const start = line.indexOf(term);
+      return start >= 0 && line.indexOf("not found", start + term.length) >= 0;
+    }));
 }
