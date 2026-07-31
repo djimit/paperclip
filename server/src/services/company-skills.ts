@@ -1076,6 +1076,22 @@ function pathIsContained(rootPath: string, candidatePath: string) {
     || (!path.isAbsolute(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`));
 }
 
+function resolveContainedFilePath(rootPath: string, relativePath: string, label = "Skill file") {
+  const portablePath = relativePath.replace(/\\/g, "/");
+  if (path.posix.isAbsolute(portablePath)
+    || path.win32.isAbsolute(relativePath)
+    || portablePath.split("/").includes("..")) {
+    throw unprocessable(`${label} path is invalid: ${relativePath}`);
+  }
+  const normalizedPath = normalizePortablePath(portablePath);
+  if (!normalizedPath) throw unprocessable(`${label} path is invalid: ${relativePath}`);
+  const targetPath = path.resolve(rootPath, normalizedPath);
+  if (!pathIsContained(rootPath, targetPath)) {
+    throw unprocessable(`${label} path is invalid: ${relativePath}`);
+  }
+  return { normalizedPath, targetPath };
+}
+
 async function assertNoSymlinksInLocalTree(currentPath: string): Promise<void> {
   const entries = await fs.readdir(currentPath, { withFileTypes: true });
   for (const entry of entries) {
@@ -3826,7 +3842,7 @@ export function companySkillService(db: Db) {
     for (const entry of source.fileInventory) {
       const detail = await readFile(companyId, source.id, entry.path);
       if (!detail) continue;
-      const targetPath = path.resolve(forkDir, detail.path);
+      const { targetPath } = resolveContainedFilePath(forkDir, detail.path);
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, detail.content, "utf8");
     }
@@ -4159,7 +4175,7 @@ export function companySkillService(db: Db) {
       for (const entry of forkSource.fileInventory) {
         const detail = await readFile(companyId, forkSource.id, entry.path);
         if (!detail) continue;
-        const targetPath = path.resolve(skillDir, detail.path);
+        const { targetPath } = resolveContainedFilePath(skillDir, detail.path);
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
         await fs.writeFile(targetPath, detail.content, "utf8");
       }
@@ -4984,7 +5000,7 @@ export function companySkillService(db: Db) {
         : `${packageDir}/${entry.path}`;
       const content = normalizedFiles[sourcePath];
       if (typeof content !== "string") continue;
-      const targetPath = path.resolve(skillDir, entry.path);
+      const { targetPath } = resolveContainedFilePath(skillDir, entry.path, "Catalog file");
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, content, "utf8");
     }
@@ -5041,10 +5057,7 @@ export function companySkillService(db: Db) {
     const replacement = await createDirectoryReplacement(skillDir);
     try {
       for (const entry of catalogSkill.files) {
-        const targetPath = path.resolve(replacement.stagingDir, entry.path);
-        if (targetPath !== replacement.stagingDir && !targetPath.startsWith(`${replacement.stagingDir}${path.sep}`)) {
-          throw unprocessable(`Catalog file path is invalid: ${entry.path}`);
-        }
+        const { targetPath } = resolveContainedFilePath(replacement.stagingDir, entry.path, "Catalog file");
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
         await copyCatalogSkillFile(catalogSkill.id, entry.path, targetPath);
       }
@@ -5071,10 +5084,7 @@ export function companySkillService(db: Db) {
     const replacement = await createDirectoryReplacement(snapshotDir);
     try {
       for (const entry of catalogSkill.files) {
-        const targetPath = path.resolve(replacement.stagingDir, entry.path);
-        if (targetPath !== replacement.stagingDir && !targetPath.startsWith(`${replacement.stagingDir}${path.sep}`)) {
-          throw unprocessable(`Catalog file path is invalid: ${entry.path}`);
-        }
+        const { targetPath } = resolveContainedFilePath(replacement.stagingDir, entry.path, "Catalog file");
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
         await copyCatalogSkillFile(catalogSkill.id, entry.path, targetPath);
       }
@@ -5092,10 +5102,7 @@ export function companySkillService(db: Db) {
     const replacement = await createDirectoryReplacement(targetDir);
     try {
       for (const file of files) {
-        const targetPath = path.resolve(replacement.stagingDir, file.path);
-        if (targetPath !== replacement.stagingDir && !targetPath.startsWith(`${replacement.stagingDir}${path.sep}`)) {
-          throw unprocessable(`Skill file path is invalid: ${file.path}`);
-        }
+        const { targetPath } = resolveContainedFilePath(replacement.stagingDir, file.path);
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
         await fs.writeFile(targetPath, file.bytes);
       }
@@ -5349,7 +5356,7 @@ export function companySkillService(db: Db) {
       const detail = await readFile(companyId, skill.id, normalizedPath).catch(() => null);
       const content = detail?.content ?? (normalizedPath === "SKILL.md" ? skill.markdown : null);
       if (content === null) continue;
-      const targetPath = path.resolve(skillDir, entry.path);
+      const { targetPath } = resolveContainedFilePath(skillDir, entry.path);
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, content, "utf8");
       if (normalizedPath === "SKILL.md") wroteSkillFile = true;
@@ -5364,13 +5371,8 @@ export function companySkillService(db: Db) {
   }
 
   function resolveVersionSnapshotPath(skillDir: string, relativePath: string) {
-    const normalizedPath = normalizePortablePath(relativePath);
-    if (!normalizedPath) return null;
-    const targetPath = path.resolve(skillDir, normalizedPath);
-    if (targetPath !== skillDir && !targetPath.startsWith(`${skillDir}${path.sep}`)) {
-      throw unprocessable(`Skill version file path is invalid: ${relativePath}`);
-    }
-    return { normalizedPath, targetPath };
+    if (!normalizePortablePath(relativePath)) return null;
+    return resolveContainedFilePath(skillDir, relativePath, "Skill version file");
   }
 
   async function listMaterializedFiles(root: string): Promise<string[] | null> {

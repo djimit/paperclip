@@ -1845,6 +1845,50 @@ describeEmbeddedPostgres("companySkillService.list", () => {
     );
   });
 
+  it("does not materialize stored skill paths outside the managed runtime directory", async () => {
+    const companyId = randomUUID();
+    const skillKey = `company/${companyId}/unsafe-runtime-skill`;
+    const missingSkillDir = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-unsafe-runtime-skill-")), "gone");
+    cleanupDirs.add(path.dirname(missingSkillDir));
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: randomUUID(),
+      companyId,
+      key: skillKey,
+      slug: "unsafe-runtime-skill",
+      name: "Unsafe Runtime Skill",
+      description: null,
+      markdown: "# Must stay contained\n",
+      sourceType: "local_path",
+      sourceLocator: missingSkillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [{ path: "../../SKILL.md", kind: "skill" }],
+      metadata: { sourceKind: "local_path" },
+    });
+    await db.insert(agents).values({
+      id: randomUUID(),
+      companyId,
+      name: "Runner",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: { paperclipSkillSync: { desiredSkills: [skillKey] } },
+    });
+
+    const entries = await svc.listRuntimeSkillEntries(companyId);
+    const escapedPath = path.join(paperclipHome!, "instances", "default", "skills", companyId, "SKILL.md");
+
+    expect(entries.some((entry) => entry.key === skillKey)).toBe(false);
+    await expect(fs.stat(escapedPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("falls back to stored markdown when reading SKILL.md from a missing local source", async () => {
     const companyId = randomUUID();
     const skillId = randomUUID();
