@@ -5,8 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { databaseCheck } from "../checks/database-check.js";
 import type { PaperclipConfig } from "../config/schema.js";
 
+vi.mock("@paperclipai/db", () => ({
+  createDb: () => ({ execute: async () => undefined }),
+}));
+
 const created: string[] = [];
 const ORIGINAL_IN_WORKTREE = process.env.PAPERCLIP_IN_WORKTREE;
+const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 
 function makeBase(): string {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-dbcheck-"));
@@ -28,10 +33,24 @@ afterEach(() => {
   vi.restoreAllMocks();
   if (ORIGINAL_IN_WORKTREE === undefined) delete process.env.PAPERCLIP_IN_WORKTREE;
   else process.env.PAPERCLIP_IN_WORKTREE = ORIGINAL_IN_WORKTREE;
+  if (ORIGINAL_DATABASE_URL === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   while (created.length > 0) {
     const dir = created.pop();
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("databaseCheck — external postgres", () => {
+  it("uses DATABASE_URL when postgres mode deliberately keeps the secret out of config", async () => {
+    process.env.DATABASE_URL = "postgres://paperclip:secret@db.example/paperclip";
+    const config = { database: { mode: "postgres" } } as unknown as PaperclipConfig;
+
+    const result = await databaseCheck(config);
+
+    expect(result.status).toBe("pass");
+    expect(result.message).toBe("PostgreSQL connection successful");
+  });
 });
 
 describe("databaseCheck — embedded postgres temp-dir guard", () => {
