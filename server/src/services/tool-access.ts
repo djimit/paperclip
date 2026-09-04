@@ -2967,15 +2967,34 @@ export function toolAccessService(db: Db, options: ToolAccessServiceOptions = {}
   async function checkConnectionHealth(connectionId: string, actor?: ActorInfo): Promise<ToolConnectionHealthCheckResult> {
     const connection = await getConnectionRow(connectionId);
     try {
-      if (connection.transport === "mcp_remote") {
+      const [pluginConnection] = await db
+        .select({ applicationStatus: toolApplications.status, pluginStatus: plugins.status })
+        .from(toolApplications)
+        .leftJoin(plugins, eq(toolApplications.pluginId, plugins.id))
+        .where(and(
+          eq(toolApplications.id, connection.applicationId),
+          eq(toolApplications.type, "paperclip_plugin"),
+        ))
+        .limit(1);
+      if (pluginConnection) {
+        if (pluginConnection.applicationStatus !== "active" || pluginConnection.pluginStatus !== "ready") {
+          throw conflict("Paperclip plugin is not ready");
+        }
+      } else if (connection.transport === "mcp_remote") {
         await remoteTools(connection);
       } else {
         await resolveCredentialHeaders(connection);
         await stdioTemplateId(connection.companyId, connection.config);
       }
-      const updated = await updateConnectionHealth(connection, "ok", connection.transport === "local_stdio"
-        ? "Approved stdio template is ready."
-        : "Remote MCP server responded to tools/list.");
+      const updated = await updateConnectionHealth(
+        connection,
+        "ok",
+        pluginConnection
+          ? "Paperclip plugin is ready."
+          : connection.transport === "local_stdio"
+            ? "Approved stdio template is ready."
+            : "Remote MCP server responded to tools/list.",
+      );
       const runtimeSlot = await ensureRuntimeSlot(updated);
       await audit({
         companyId: connection.companyId,

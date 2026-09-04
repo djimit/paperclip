@@ -18,6 +18,7 @@ import {
   issueThreadInteractions,
   issues,
   principalPermissionGrants,
+  plugins,
   secretAccessEvents,
   toolAccessAuditEvents,
   toolActionRequests,
@@ -1046,6 +1047,40 @@ describeEmbeddedPostgres("tool access service", () => {
         healthStatus: "ok",
       }),
     ]);
+  });
+
+  it("checks managed plugin connections without treating them as remote MCP", async () => {
+    const company = await createCompany(db);
+    const [plugin] = await db.insert(plugins).values({
+      pluginKey: `plugin-health-${randomUUID()}`,
+      packageName: "@test/plugin-health",
+      version: "1.0.0",
+      manifestJson: { id: "test.plugin-health", name: "Plugin health", version: "1.0.0", apiVersion: 1 },
+      status: "ready",
+    }).returning();
+    const [application] = await db.insert(toolApplications).values({
+      companyId: company.id,
+      applicationKey: `paperclip_plugin:${plugin!.pluginKey}`,
+      name: `Plugin health ${randomUUID()}`,
+      type: "paperclip_plugin",
+      status: "active",
+      pluginId: plugin!.id,
+    }).returning();
+    const [connection] = await db.insert(toolConnections).values({
+      companyId: company.id,
+      applicationId: application!.id,
+      name: `Plugin connection ${randomUUID()}`,
+      uid: `plugin/${randomUUID()}`,
+      transport: "mcp_remote",
+      status: "active",
+      enabled: true,
+      config: { type: "paperclip_plugin", pluginKey: plugin!.pluginKey },
+    }).returning();
+
+    const health = await toolAccessService(db).checkHealth(connection!.id);
+
+    expect(health.connection.healthStatus).toBe("ok");
+    expect(health.connection.healthMessage).toBe("Paperclip plugin is ready.");
   });
 
   it("requires tools:admin to create, list, and disable stdio command templates", async () => {
