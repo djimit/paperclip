@@ -300,6 +300,9 @@ export function approvalRoutes(
       const linkedIssueIds = linkedIssues.map((issue) => issue.id);
       const primaryIssueId = linkedIssueIds[0] ?? null;
       const lostReviewIssueIds = await lostReviewPathIssueIds(approval.companyId, linkedIssues);
+      if (!approval.requestedByAgentId && primaryIssueId) {
+        lostReviewIssueIds.add(primaryIssueId);
+      }
       const primaryReviewPathContext = primaryIssueId && lostReviewIssueIds.has(primaryIssueId)
         ? approvalReviewPathContext(approval.id)
         : null;
